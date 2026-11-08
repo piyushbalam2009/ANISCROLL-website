@@ -1,0 +1,6 @@
+{
+  "name": "AniScroll",
+  "description": "Premium monochrome anime streaming platform with real-time search, AniList resolution, HLS playback, and AniSkip intro detection.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
