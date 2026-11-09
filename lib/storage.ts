@@ -51,25 +51,66 @@ export function isInWatchlist(hoshikaId: number): boolean {
   return list.some((item) => item.hoshikaId === hoshikaId);
 }
 
-export function toggleWatchlist(item: Omit<WatchlistEntry, 'addedAt'>): boolean {
+export function getWatchlistEntry(hoshikaId: number): WatchlistEntry | null {
+  const list = getWatchlist();
+  return list.find((item) => item.hoshikaId === hoshikaId) || null;
+}
+
+export function setWatchlistStatus(
+  item: Omit<WatchlistEntry, 'addedAt'>,
+  status: 'watching' | 'plan_to_watch' | 'completed' | 'on_hold' | 'dropped' | 'remove'
+): boolean {
   const list = getWatchlist();
   const existsIndex = list.findIndex((x) => x.hoshikaId === item.hoshikaId);
   let updated: WatchlistEntry[];
-  let isAdded: boolean;
 
-  if (existsIndex >= 0) {
+  if (status === 'remove') {
     updated = list.filter((x) => x.hoshikaId !== item.hoshikaId);
-    isAdded = false;
+  } else if (existsIndex >= 0) {
+    updated = list.map((x) => (x.hoshikaId === item.hoshikaId ? { ...x, status } : x));
   } else {
-    updated = [{ ...item, addedAt: Date.now() }, ...list];
-    isAdded = true;
+    updated = [{ ...item, status, addedAt: Date.now() }, ...list];
   }
 
   setStored(WATCHLIST_KEY, updated);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('aniscroll_watchlist_updated'));
   }
-  return isAdded;
+  return status !== 'remove';
+}
+
+export function toggleWatchlist(item: Omit<WatchlistEntry, 'addedAt'>): boolean {
+  const inList = isInWatchlist(item.hoshikaId);
+  return setWatchlistStatus(item, inList ? 'remove' : 'watching');
+}
+
+const SUBSCRIPTION_KEY = 'aniscroll_subscriptions';
+
+export function isSubscribed(hoshikaId: number): boolean {
+  const list = getStored<number[]>(SUBSCRIPTION_KEY, []);
+  return list.includes(hoshikaId);
+}
+
+export function toggleSubscription(hoshikaId: number): boolean {
+  const list = getStored<number[]>(SUBSCRIPTION_KEY, []);
+  let updated: number[];
+  let subscribed: boolean;
+  if (list.includes(hoshikaId)) {
+    updated = list.filter((id) => id !== hoshikaId);
+    subscribed = false;
+  } else {
+    updated = [...list, hoshikaId];
+    subscribed = true;
+  }
+  setStored(SUBSCRIPTION_KEY, updated);
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('aniscroll_subscriptions_updated', {
+        detail: { hoshikaId, subscribed },
+      })
+    );
+  }
+  return subscribed;
 }
 
 // Watch History

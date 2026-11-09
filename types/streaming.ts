@@ -65,6 +65,7 @@ export interface WatchlistEntry {
   format?: string;
   rating?: number;
   seasonYear?: number;
+  status?: 'watching' | 'plan_to_watch' | 'completed' | 'on_hold' | 'dropped';
   addedAt: number;
 }
 

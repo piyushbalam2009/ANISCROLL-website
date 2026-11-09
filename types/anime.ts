@@ -54,6 +54,7 @@ export interface HoshikaAnimeItem {
   status?: string | null;
   season?: string | null;
   seasonYear?: number | null;
+  source?: string | null;
   episodes?: number | null;
   episodeDuration?: number | null;
   averageScore?: number | null;

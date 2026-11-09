@@ -2,7 +2,8 @@ import React from 'react';
 import Link from 'next/link';
 import { ArrowRight, Flame, Sparkles, TrendingUp, Clock, Compass } from 'lucide-react';
 import { getHoshikaHome, getHoshikaBrowse } from '@/lib/hoshika';
-import { AnimeHero } from '@/components/anime/AnimeHero';
+import { resolveAnimeArtwork } from '@/lib/artwork-mapper';
+import { HomeHeroCarousel, HeroSlideItem } from '@/components/anime/HomeHeroCarousel';
 import { AnimeGrid } from '@/components/anime/AnimeGrid';
 import { ContinueWatchingRow } from '@/components/anime/ContinueWatchingRow';
 
@@ -15,19 +16,37 @@ export default async function HomePage() {
     getHoshikaBrowse('top', 'anime'),
   ]);
 
-  const featured = homeData.trending[0] || homeData.seasonal[0] || topAnime[0];
+  // Select 6 featured anime from trending & seasonal
+  const candidates = [
+    ...homeData.trending.slice(0, 4),
+    ...homeData.seasonal.slice(0, 3),
+    ...topAnime.slice(0, 2),
+  ].filter(
+    (item, index, self) =>
+      index === self.findIndex((t) => t.shortId === item.shortId)
+  ).slice(0, 6);
+
+  const heroSlides: HeroSlideItem[] = await Promise.all(
+    candidates.map(async (anime) => {
+      const artwork = await resolveAnimeArtwork(anime.shortId, anime);
+      return { anime, artwork };
+    })
+  );
+
   const seasonal = homeData.seasonal.slice(0, 12);
   const trending = homeData.trending.slice(0, 12);
   const recent = homeData.recentlyAdded.slice(0, 12);
   const popular = topAnime.slice(0, 12);
 
   return (
-    <div className="space-y-12 pb-16">
-      {/* Featured Anime Hero Banner */}
-      {featured && <AnimeHero anime={featured} />}
+    <div className="w-full">
+      {/* Edge-to-Edge Cinematic Featured Anime Hero Carousel */}
+      {heroSlides.length > 0 && <HomeHeroCarousel slides={heroSlides} />}
 
-      {/* Client-Side Continue Watching Row (from localStorage) */}
-      <ContinueWatchingRow />
+      {/* Content Below Hero: Constrained Padded Layout */}
+      <div className="w-full max-w-[1600px] mx-auto px-4 sm:px-6 md:px-10 lg:px-12 py-10 space-y-12 pb-24">
+        {/* Client-Side Continue Watching Row (from localStorage) */}
+        <ContinueWatchingRow />
 
       {/* Trending Anime Section */}
       <section className="space-y-4">
@@ -137,6 +156,7 @@ export default async function HomePage() {
           </Link>
         </div>
       </section>
+      </div>
     </div>
   );
 }
