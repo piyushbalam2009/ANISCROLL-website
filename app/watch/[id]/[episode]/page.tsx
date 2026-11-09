@@ -1,6 +1,6 @@
 import React from 'react';
 import { notFound } from 'next/navigation';
-import { getHoshikaAnime, getHoshikaEpisodes } from '@/lib/hoshika';
+import { getHoshikaAnime, getEpisodesForWatch } from '@/lib/hoshika';
 import { WatchPageClient } from '@/components/player/WatchPageClient';
 
 interface WatchPageProps {
@@ -19,7 +19,7 @@ export default async function WatchPage({ params }: WatchPageProps) {
 
   const [anime, episodeData] = await Promise.all([
     getHoshikaAnime(id, 'en'),
-    getHoshikaEpisodes(id, 'en'),
+    getEpisodesForWatch(id, episodeNumber, 'en'),
   ]);
 
   if (!anime) {

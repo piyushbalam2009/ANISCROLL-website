@@ -2,8 +2,8 @@ import React from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { getHoshikaAnime, getHoshikaEpisodes } from '@/lib/hoshika';
-import { EpisodeList } from '@/components/anime/EpisodeList';
+import { getHoshikaAnime, getAllHoshikaEpisodes } from '@/lib/hoshika';
+import { EpisodeSection } from '@/components/episodes/EpisodeSection';
 import { CharacterList } from '@/components/anime/CharacterList';
 import { AnimeDetailActions } from '@/components/anime/AnimeDetailActions';
 import { Star, Film, ChevronRight } from 'lucide-react';
@@ -18,7 +18,7 @@ export default async function AnimePage({ params }: AnimePageProps) {
   const { id } = await params;
   const [anime, episodeData] = await Promise.all([
     getHoshikaAnime(id, 'en'),
-    getHoshikaEpisodes(id, 'en'),
+    getAllHoshikaEpisodes(id, 'en'),
   ]);
 
   if (!anime) {
@@ -260,9 +260,9 @@ export default async function AnimePage({ params }: AnimePageProps) {
             </div>
           )}
 
-          {/* Episode List */}
-          <div className="p-6 rounded-2xl bg-[#0A0A0A] border border-[#292929]">
-            <EpisodeList
+          {/* Episode List Section */}
+          <div className="p-4 sm:p-6 rounded-2xl bg-[#0A0A0A] border border-[#292929]">
+            <EpisodeSection
               animeId={anime.shortId}
               episodes={episodeData.items}
               totalEpisodes={anime.episodes || episodeData.total}

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getHoshikaEpisodes } from '@/lib/hoshika';
+import { getHoshikaEpisodes, getAllHoshikaEpisodes } from '@/lib/hoshika';
 
 export async function GET(
   req: NextRequest,
@@ -8,14 +8,21 @@ export async function GET(
   const { id } = await params;
   const { searchParams } = new URL(req.url);
   const locale = searchParams.get('locale') || 'en';
-  const after = searchParams.get('after') ? parseInt(searchParams.get('after')!, 10) : undefined;
-  const limit = parseInt(searchParams.get('limit') || '100', 10);
+  const all = searchParams.get('all') === 'true';
+  const afterParam = searchParams.get('after');
+  const after = afterParam !== null && afterParam !== '' ? parseInt(afterParam, 10) : undefined;
+  const limit = parseInt(searchParams.get('limit') || '50', 10);
 
   if (!id) {
     return NextResponse.json({ ok: false, error: 'Anime ID is required' }, { status: 400 });
   }
 
   try {
+    if (all) {
+      const result = await getAllHoshikaEpisodes(id, locale);
+      return NextResponse.json({ ok: true, ...result, nextAfter: null });
+    }
+
     const result = await getHoshikaEpisodes(id, locale, after, limit);
     return NextResponse.json({ ok: true, ...result });
   } catch (err: any) {
@@ -25,3 +32,4 @@ export async function GET(
     );
   }
 }
+

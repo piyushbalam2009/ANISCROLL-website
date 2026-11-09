@@ -88,6 +88,98 @@ export async function getHoshikaEpisodes(
   };
 }
 
+export async function getAllHoshikaEpisodes(
+  shortId: string | number,
+  locale: string = 'en',
+  maxBatches: number = 25
+): Promise<{ items: HoshikaEpisodeItem[]; total: number }> {
+  const cacheKey = `hoshika:all_episodes:${shortId}:${locale}`;
+  const cached = appCache.get<{ items: HoshikaEpisodeItem[]; total: number }>(cacheKey);
+  if (cached && cached.items && cached.items.length > 0) {
+    return cached;
+  }
+
+  const allItems: HoshikaEpisodeItem[] = [];
+  let nextAfter: number | undefined = undefined;
+  let batchCount = 0;
+  let reportedTotal = 0;
+
+  while (batchCount < maxBatches) {
+    batchCount++;
+    const pageResult = await getHoshikaEpisodes(shortId, locale, nextAfter, 50);
+
+    if (pageResult.total > reportedTotal) {
+      reportedTotal = pageResult.total;
+    }
+
+    if (!pageResult.items || pageResult.items.length === 0) {
+      break;
+    }
+
+    // Append items without duplicates preserving all metadata
+    const existing = new Set(allItems.map((e) => e.number));
+    for (const ep of pageResult.items) {
+      if (!existing.has(ep.number)) {
+        allItems.push(ep);
+        existing.add(ep.number);
+      }
+    }
+
+    // If fewer than 50 items returned or nextAfter is null, we reached the end
+    if (pageResult.items.length < 50 || pageResult.nextAfter === null) {
+      break;
+    }
+
+    // Use the actual last episode number returned by the previous response for next after parameter
+    const lastItem = pageResult.items[pageResult.items.length - 1];
+    nextAfter = lastItem.number;
+  }
+
+  const result = {
+    items: allItems,
+    total: Math.max(reportedTotal, allItems.length),
+  };
+
+  if (allItems.length > 0) {
+    appCache.set(cacheKey, result, 600);
+  }
+
+  return result;
+}
+
+export async function getEpisodesForWatch(
+  shortId: string | number,
+  targetEpisode: number,
+  locale: string = 'en'
+): Promise<{ items: HoshikaEpisodeItem[]; total: number }> {
+  // If target episode is within 250, getAllHoshikaEpisodes fetches sequentially and caches all
+  if (targetEpisode <= 250) {
+    const batches = Math.max(3, Math.ceil(targetEpisode / 50) + 1);
+    return getAllHoshikaEpisodes(shortId, locale, batches);
+  }
+
+  // For ultra-long series where targetEpisode > 250, fetch initial batch and target batch
+  const [initialBatch, targetBatch] = await Promise.all([
+    getHoshikaEpisodes(shortId, locale, undefined, 50),
+    getHoshikaEpisodes(
+      shortId,
+      locale,
+      Math.floor((targetEpisode - 1) / 50) * 50,
+      50
+    ),
+  ]);
+
+  const itemsMap = new Map<number, HoshikaEpisodeItem>();
+  for (const ep of initialBatch.items) itemsMap.set(ep.number, ep);
+  for (const ep of targetBatch.items) itemsMap.set(ep.number, ep);
+
+  const combinedItems = Array.from(itemsMap.values()).sort((a, b) => a.number - b.number);
+  const total = Math.max(initialBatch.total, targetBatch.total, combinedItems.length);
+
+  return { items: combinedItems, total };
+}
+
+
 export async function getHoshikaHome(locale: string = 'en') {
   const data = await fetchFromHoshika<{
     ok: boolean;

@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { VideoPlayer } from './VideoPlayer';
-import { EpisodeList } from '@/components/anime/EpisodeList';
+import { EpisodeSection } from '@/components/episodes/EpisodeSection';
 import {
   HoshikaAnimeItem,
   HoshikaEpisodeItem,
@@ -12,6 +12,7 @@ import {
 } from '@/types/anime';
 import { AniScrollStreamResponse } from '@/types/streaming';
 import { getUserPreferences } from '@/lib/storage';
+import { cacheEpisodes, getCachedEpisode, fetchEpisodeBatch } from '@/lib/episode-store';
 import { ChevronRight, ArrowLeft, AlertCircle, Loader2 } from 'lucide-react';
 
 interface WatchPageClientProps {
@@ -36,6 +37,32 @@ export function WatchPageClient({
   const [isLoadingStream, setIsLoadingStream] = useState<boolean>(false);
   const [streamError, setStreamError] = useState<string | null>(null);
 
+  // Store server-passed episodes into cache on mount
+  useEffect(() => {
+    if (episodes && episodes.length > 0) {
+      cacheEpisodes(anime.shortId, episodes);
+    }
+  }, [anime.shortId, episodes]);
+
+  const [activeEpisodeItem, setActiveEpisodeItem] = useState<HoshikaEpisodeItem | null>(() => {
+    return episodes.find((e) => e.number === episodeNumber) || getCachedEpisode(anime.shortId, episodeNumber) || null;
+  });
+
+  useEffect(() => {
+    const found = episodes.find((e) => e.number === episodeNumber) || getCachedEpisode(anime.shortId, episodeNumber);
+    if (found) {
+      setActiveEpisodeItem(found);
+    } else {
+      const afterParam = episodeNumber > 50 ? Math.floor((episodeNumber - 1) / 50) * 50 : undefined;
+      fetchEpisodeBatch(anime.shortId, afterParam, 50).then((items) => {
+        const match = items.find((e) => e.number === episodeNumber);
+        if (match) {
+          setActiveEpisodeItem(match);
+        }
+      });
+    }
+  }, [anime.shortId, episodeNumber, episodes]);
+
   const title =
     anime.titleEnglish ||
     anime.titleRomaji ||
@@ -43,7 +70,7 @@ export function WatchPageClient({
     'Anime Episode';
 
   const currentEpItem = episodes.find((e) => e.number === episodeNumber);
-  const episodeTitle = currentEpItem?.title || `Episode ${episodeNumber}`;
+  const episodeTitle = activeEpisodeItem?.title || currentEpItem?.title || `Episode ${episodeNumber}`;
   const totalEpisodes = anime.episodes || episodes.length || 1;
 
   // Initialize preferred audio format (sub/dub)
@@ -250,13 +277,19 @@ export function WatchPageClient({
         </div>
       </div>
 
-      {/* Episode Selection Drawer / Grid */}
-      <div className="p-6 rounded-2xl bg-[#0A0A0A] border border-[#292929]">
-        <EpisodeList
+      {/* Episode Selection Section */}
+      <div className="p-4 sm:p-6 rounded-2xl bg-[#0A0A0A] border border-[#292929]">
+        <EpisodeSection
           animeId={anime.shortId}
           episodes={episodes}
           currentEpisode={episodeNumber}
           totalEpisodes={totalEpisodes}
+          activeType={activeType}
+          onChangeType={setActiveType}
+          onEpisodesLoaded={(loaded) => {
+            const match = loaded.find((e) => e.number === episodeNumber);
+            if (match) setActiveEpisodeItem(match);
+          }}
         />
       </div>
     </div>
