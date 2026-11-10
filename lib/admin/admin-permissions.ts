@@ -104,11 +104,23 @@ export const ROLE_LABELS: Record<AdminRole, { label: string; badge: string; desc
   },
 };
 
-export function isBootstrappedOwnerIdentity(uid?: string | null, email?: string | null): boolean {
-  if (uid && uid.trim() === BOOTSTRAPPED_OWNER_UID) {
+export function isBootstrappedOwnerIdentity(
+  uidOrObj?: string | { uid?: string | null; email?: string | null } | null,
+  emailArg?: string | null
+): boolean {
+  const uid =
+    typeof uidOrObj === 'object' && uidOrObj !== null
+      ? uidOrObj.uid
+      : uidOrObj;
+  const email =
+    typeof uidOrObj === 'object' && uidOrObj !== null
+      ? uidOrObj.email
+      : emailArg;
+
+  if (typeof uid === 'string' && uid.trim() === BOOTSTRAPPED_OWNER_UID) {
     return true;
   }
-  const normalizedEmail = (email || '').trim().toLowerCase();
+  const normalizedEmail = (typeof email === 'string' ? email : '').trim().toLowerCase();
   if (normalizedEmail === BOOTSTRAPPED_OWNER_EMAIL) {
     return true;
   }
@@ -117,7 +129,7 @@ export function isBootstrappedOwnerIdentity(uid?: string | null, email?: string 
     return true;
   }
   const envOwnerUid = (process.env.ADMIN_OWNER_UID || '').trim();
-  if (envOwnerUid && uid && uid === envOwnerUid) {
+  if (envOwnerUid && typeof uid === 'string' && uid === envOwnerUid) {
     return true;
   }
   return false;

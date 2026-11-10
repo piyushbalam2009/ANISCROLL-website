@@ -167,7 +167,6 @@ export function subscribeToUserCloudData(uid: string): () => void {
         const d = docSnap.data();
         items.push({
           hoshikaId: Number(d.hoshikaId),
-          anilistId: d.anilistId ?? null,
           title: String(d.title || 'Anime'),
           coverImage: d.coverImage || undefined,
           bannerImage: d.bannerImage || undefined,

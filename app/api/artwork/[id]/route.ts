@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getHoshikaAnime } from '@/lib/hoshika';
 import { resolveAnimeArtwork } from '@/lib/artwork-mapper';
+import { getCachedArtworkOverride } from '@/lib/artwork/artwork-cache';
 
 export async function GET(
   request: NextRequest,
@@ -10,7 +11,7 @@ export async function GET(
   const hoshikaId = parseInt(id, 10);
 
   if (!Number.isFinite(hoshikaId) || hoshikaId <= 0) {
-    return NextResponse.json({ error: 'Invalid anime ID' }, { status: 400 });
+    return NextResponse.json({ ok: false, error: 'Invalid anime ID' }, { status: 400 });
   }
 
   const searchParams = request.nextUrl.searchParams;
@@ -24,14 +25,26 @@ export async function GET(
 
   try {
     let title = queryTitle;
+    let titleRomaji: string | null = null;
     let anilistId = queryAnilistId ? parseInt(queryAnilistId, 10) : null;
     let malId = queryMalId ? parseInt(queryMalId, 10) : null;
+    let tvdbId: number | null = null;
+    let tmdbId: number | null = null;
     let format = queryFormat;
     let hoshikaBanner = queryBanner;
     let hoshikaCover = queryCover;
 
     if (!title || (!hoshikaBanner && !hoshikaCover)) {
       const anime = await getHoshikaAnime(hoshikaId, 'en');
+      const override = getCachedArtworkOverride(hoshikaId);
+
+      if (!anime && !override && !queryTitle && !queryBanner && !queryCover) {
+        return NextResponse.json(
+          { ok: false, error: 'Anime not found' },
+          { status: 404 }
+        );
+      }
+
       if (anime) {
         title =
           title ||
@@ -39,8 +52,11 @@ export async function GET(
           anime.titleRomaji ||
           anime.titleLocalized ||
           null;
+        titleRomaji = anime.titleRomaji || null;
         anilistId = anilistId || anime.anilistId || null;
         malId = malId || anime.malId || null;
+        tvdbId = anime.thetvdbId ? Number(anime.thetvdbId) : null;
+        tmdbId = anime.themoviedbId ? Number(anime.themoviedbId) : null;
         format = format || anime.format || null;
         hoshikaBanner = hoshikaBanner || anime.bannerImage || null;
         hoshikaCover = hoshikaCover || anime.coverImage || null;
@@ -51,7 +67,10 @@ export async function GET(
       hoshikaId,
       anilistId,
       malId,
+      tvdbId,
+      tmdbId,
       title,
+      titleRomaji,
       format,
       hoshikaBanner,
       hoshikaCover,
@@ -59,6 +78,7 @@ export async function GET(
     });
 
     return NextResponse.json(artwork, {
+      status: 200,
       headers: {
         'Cache-Control': bypassCache
           ? 'no-store, max-age=0'
@@ -69,15 +89,11 @@ export async function GET(
     console.error(`Failed to resolve artwork for ${hoshikaId}:`, error);
     return NextResponse.json(
       {
+        ok: false,
+        error: 'Failed to resolve anime artwork',
         hoshikaId,
-        backgroundUrl: queryBanner || queryCover || null,
-        logoUrl: null,
-        characterArtUrl: null,
-        posterUrl: queryCover || null,
-        source: 'hoshika',
-        fetchedAt: Date.now(),
       },
-      { status: 200 }
+      { status: 502 }
     );
   }
 }

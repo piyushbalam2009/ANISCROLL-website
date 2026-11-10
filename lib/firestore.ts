@@ -284,7 +284,6 @@ export async function getCloudContinueWatching(
       const d = docSnap.data();
       items.push({
         hoshikaId: Number(d.hoshikaId),
-        anilistId: d.anilistId ?? null,
         title: String(d.title || 'Anime'),
         coverImage: d.coverImage || undefined,
         bannerImage: d.bannerImage || undefined,
@@ -328,7 +327,6 @@ export async function saveCloudContinueWatchingItem(
   }
 
   const baseFields: Record<string, any> = {
-    anilistId: typeof entry.anilistId === 'number' ? entry.anilistId : null,
     title: sanitizeString(entry.title, 300, 'Unknown Anime'),
     episodeNumber: Math.max(1, Number(entry.episodeNumber || 1)),
     currentTime: safeCurrentTime,
@@ -390,7 +388,6 @@ export async function getCloudWatchHistory(
       const d = docSnap.data();
       items.push({
         hoshikaId: Number(d.hoshikaId),
-        anilistId: d.anilistId ?? null,
         title: String(d.title || 'Anime'),
         coverImage: d.coverImage || undefined,
         bannerImage: d.bannerImage || undefined,
@@ -423,7 +420,6 @@ export async function saveCloudWatchHistoryItem(
     (safeDuration > 0 && safeCurrentTime / safeDuration >= 0.9);
 
   const baseFields: Record<string, any> = {
-    anilistId: typeof entry.anilistId === 'number' ? entry.anilistId : null,
     title: sanitizeString(entry.title, 300, 'Unknown Anime'),
     coverImage: entry.coverImage ? sanitizeString(entry.coverImage, 1024) : null,
     bannerImage: entry.bannerImage ? sanitizeString(entry.bannerImage, 1024) : null,

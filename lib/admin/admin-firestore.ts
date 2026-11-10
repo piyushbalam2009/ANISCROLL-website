@@ -36,7 +36,6 @@ import {
 
 export interface AnimeArtworkFirestoreDoc {
   hoshikaId: number;
-  anilistId: number;
   tvdbId: number;
   tmdbId: number;
   title: string;
@@ -354,7 +353,6 @@ export async function saveAnimeArtworkOverride(
 
   const sanitized: Omit<AnimeArtworkFirestoreDoc, 'createdAt' | 'updatedAt'> = {
     hoshikaId: Math.max(1, Number(input.hoshikaId) || 1),
-    anilistId: Number(input.anilistId) || 0,
     tvdbId: Number(input.tvdbId) || 0,
     tmdbId: Number(input.tmdbId) || 0,
     title: cleanString(input.title, 300, `Anime #${input.hoshikaId}`),

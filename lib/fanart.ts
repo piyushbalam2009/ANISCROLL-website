@@ -374,7 +374,7 @@ export function selectBestFanartImage(images?: FanartImage[]): string | null {
  */
 export function extractAllFanartLogos(
   fanartData: FanartResponse | null | undefined,
-  proxyFn?: (url: string) => string,
+  proxyFn?: (url: string) => string | null,
   preferEnglish = true
 ): FanartLogoItem[] {
   if (!fanartData) return [];
@@ -401,7 +401,7 @@ export function extractAllFanartLogos(
       items.push({
         id: img.id ? `${category}_${img.id}` : `${category}_${items.length + 1}`,
         url: rawUrl,
-        proxyUrl: proxyFn ? proxyFn(rawUrl) : rawUrl,
+        proxyUrl: (proxyFn ? proxyFn(rawUrl) : rawUrl) || rawUrl,
         lang,
         likes,
         source,
@@ -412,7 +412,9 @@ export function extractAllFanartLogos(
   };
 
   addGroup(fanartData.hdtvlogo, 'fanart_hdtvlogo', 'hdtvlogo');
+  addGroup(fanartData.hdmovielogo, 'fanart_hdtvlogo', 'hdtvlogo');
   addGroup(fanartData.clearlogo, 'fanart_clearlogo', 'clearlogo');
+  addGroup(fanartData.movielogo, 'fanart_clearlogo', 'clearlogo');
 
   return sortLogosByPriority(items, preferEnglish);
 }
@@ -450,16 +452,30 @@ export function sortLogosByPriority(
   });
 }
 
-export async function fetchFanartArtwork(params: {
-  tvdbId?: number | null;
-  tmdbId?: number | null;
-  isMovie?: boolean;
-}): Promise<FanartResponse | null> {
-  const apiKey = process.env.FANART_API_KEY;
-  const { tvdbId, tmdbId, isMovie } = params;
+export async function fetchFanartArtwork(
+  paramsOrId:
+    | number
+    | string
+    | {
+        tvdbId?: number | null;
+        tmdbId?: number | null;
+        isMovie?: boolean;
+      },
+  typeArg: 'tv' | 'movies' = 'tv'
+): Promise<FanartResponse | null> {
+  const apiKey = process.env.FANART_API_KEY || process.env.FANART_TV_API_KEY;
 
-  const targetId = isMovie ? tmdbId || tvdbId : tvdbId || tmdbId;
-  const endpointType = isMovie && tmdbId ? 'movies' : 'tv';
+  let targetId: number | string | null | undefined;
+  let endpointType: 'tv' | 'movies' = typeArg;
+
+  if (typeof paramsOrId === 'object' && paramsOrId !== null) {
+    const { tvdbId, tmdbId, isMovie } = paramsOrId;
+    targetId = isMovie ? tmdbId || tvdbId : tvdbId || tmdbId;
+    endpointType = isMovie && tmdbId ? 'movies' : 'tv';
+  } else {
+    targetId = paramsOrId;
+    endpointType = typeArg;
+  }
 
   if (!targetId) {
     return null;
@@ -470,22 +486,37 @@ export async function fetchFanartArtwork(params: {
     CURATED_FANART_ARTWORK[String(targetId)];
 
   if (apiKey && apiKey !== 'MY_FANART_API_KEY' && apiKey.trim().length > 5) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
     try {
       const url = `https://webservice.fanart.tv/v3/${endpointType}/${targetId}?api_key=${encodeURIComponent(
         apiKey.trim()
       )}`;
       const res = await fetch(url, {
         next: { revalidate: 86400 },
+        signal: controller.signal,
         headers: {
           Accept: 'application/json',
         },
       });
       if (res.ok) {
         const data = (await res.json()) as FanartResponse;
-        return data;
+        if (
+          data &&
+          (data.hdtvlogo ||
+            data.showbackground ||
+            data.hdmovielogo ||
+            data.moviebackground ||
+            data.clearlogo ||
+            data.movielogo)
+        ) {
+          return data;
+        }
       }
     } catch {
       // Fall through to curated registry or null
+    } finally {
+      clearTimeout(timeout);
     }
   }
 

@@ -96,7 +96,7 @@ function evaluateRule(ctx: {
   if (collection === 'watchlist') {
     const valid =
       hasAllKeys(data, ['uid', 'hoshikaId', 'title', 'addedAt', 'createdAt', 'updatedAt']) &&
-      hasOnlyKeys(data, ['uid', 'hoshikaId', 'anilistId', 'title', 'coverImage', 'format', 'rating', 'seasonYear', 'status', 'addedAt', 'createdAt', 'updatedAt']) &&
+      hasOnlyKeys(data, ['uid', 'hoshikaId', 'title', 'coverImage', 'format', 'rating', 'seasonYear', 'status', 'addedAt', 'createdAt', 'updatedAt']) &&
       typeof data.uid === 'string' && data.uid === ctx.auth.uid &&
       typeof data.hoshikaId === 'number' && data.hoshikaId > 0 &&
       typeof data.title === 'string' && data.title.length >= 1 && data.title.length <= 300 &&
@@ -110,7 +110,7 @@ function evaluateRule(ctx: {
   if (collection === 'continueWatching') {
     const valid =
       hasAllKeys(data, ['uid', 'hoshikaId', 'title', 'episodeNumber', 'currentTime', 'duration', 'timestamp', 'createdAt', 'updatedAt']) &&
-      hasOnlyKeys(data, ['uid', 'hoshikaId', 'anilistId', 'title', 'episodeNumber', 'currentTime', 'duration', 'coverImage', 'bannerImage', 'episodeTitle', 'audioType', 'timestamp', 'createdAt', 'updatedAt']) &&
+      hasOnlyKeys(data, ['uid', 'hoshikaId', 'title', 'episodeNumber', 'currentTime', 'duration', 'coverImage', 'bannerImage', 'episodeTitle', 'audioType', 'timestamp', 'createdAt', 'updatedAt']) &&
       typeof data.uid === 'string' && data.uid === ctx.auth.uid &&
       typeof data.hoshikaId === 'number' && data.hoshikaId > 0 &&
       typeof data.title === 'string' && data.title.length >= 1 && data.title.length <= 300 &&

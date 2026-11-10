@@ -65,7 +65,6 @@ export default function AdminActivityAndAuditLogsPage() {
       const existing = await getAnimeArtworkOverride(entry.hoshikaId);
       await saveAnimeArtworkOverride({
         hoshikaId: entry.hoshikaId,
-        anilistId: existing?.anilistId || 0,
         tvdbId: existing?.tvdbId || 0,
         tmdbId: existing?.tmdbId || 0,
         title: entry.animeTitle,

@@ -45,6 +45,10 @@ export interface HoshikaAnimeItem {
   titleEnglish?: string | null;
   titleJapanese?: string | null;
   titleLocalized?: string | null;
+  nativeTitle?: string | null;
+  originalTitle?: string | null;
+  synonyms?: string[];
+  alternativeTitles?: string[];
   synopsis?: string | null;
   coverImage?: string | null;
   bannerImage?: string | null;
@@ -96,12 +100,42 @@ export interface ScheduleItem extends HoshikaAnimeItem {
   airingAt?: string;
 }
 
+export type AniListMatchType =
+  | 'english'
+  | 'romaji'
+  | 'native'
+  | 'synonym'
+  | 'fuzzy'
+  | 'none';
+
+export interface AniListCandidateSummary {
+  id: number;
+  malId?: number | null;
+  englishTitle: string | null;
+  romajiTitle: string | null;
+  nativeTitle: string | null;
+  synonyms: string[];
+  format: string | null;
+  seasonYear: number | null;
+  episodes: number | null;
+  status: string | null;
+  confidence: number;
+  matchType: AniListMatchType;
+  explanation: string;
+}
+
 export interface IdMappingResult {
   hoshikaId: string | number;
+  aniListId: number | null;
   anilistId: number | null;
   malId: number | null;
+  title?: string;
   mappingStatus: 'verified' | 'provisional' | 'failed';
-  matchedTitle?: string;
+  status?: 'verified' | 'provisional' | 'failed';
+  matchedTitle?: string | null;
+  matchType?: AniListMatchType;
+  explanation?: string;
   confidence?: number;
   cached?: boolean;
+  candidates?: AniListCandidateSummary[];
 }

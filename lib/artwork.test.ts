@@ -6,8 +6,24 @@ import {
   sortLogosByPriority,
   CURATED_FANART_ARTWORK,
 } from './fanart.ts';
-import { resolveAnimeArtwork } from './artwork-mapper.ts';
+import {
+  resolveAnimeArtwork,
+  toSafeArtworkUrl,
+  encodeBase64Url,
+  decodeBase64Url,
+  isAllowedArtworkUpstreamUrl,
+} from './artwork-mapper.ts';
 import { resolveAnimeLogoSelection } from './artwork/logo-selector.ts';
+import {
+  setCachedArtwork,
+  getCachedArtwork,
+  invalidateCachedArtwork,
+} from './artwork/artwork-cache.ts';
+import {
+  isBootstrappedOwnerIdentity,
+  BOOTSTRAPPED_OWNER_EMAIL,
+  BOOTSTRAPPED_OWNER_UID,
+} from './admin/admin-permissions.ts';
 import { HoshikaAnimeItem } from '../types/anime.ts';
 import { FanartImage, FanartLogoItem } from '../types/artwork.ts';
 
@@ -29,6 +45,22 @@ test('pickBestFanartImage handles empty and undefined lists safely', () => {
   assert.equal(pickBestFanartImage(undefined), null);
 });
 
+test('toSafeArtworkUrl generates /api/artwork-image/[encoded] base64url URLs and validates hosts', () => {
+  const fanartUrl = 'https://assets.fanart.tv/fanart/tv/267440/hdtvlogo/aot.png';
+  const proxied = toSafeArtworkUrl(fanartUrl);
+  assert.ok(proxied?.startsWith('/api/artwork-image/'), 'Must use /api/artwork-image/ route');
+  assert.ok(!proxied?.includes('/api/image-proxy'), 'Must never use broken /api/image-proxy route');
+
+  const encodedPart = proxied!.slice('/api/artwork-image/'.length);
+  assert.equal(decodeBase64Url(encodedPart), fanartUrl);
+  assert.equal(encodeBase64Url(fanartUrl), encodedPart);
+
+  // Rejects non-HTTPS or disallowed domains from being proxied
+  assert.equal(isAllowedArtworkUpstreamUrl('http://assets.fanart.tv/test.png'), false);
+  assert.equal(isAllowedArtworkUpstreamUrl('https://evil.example.com/test.png'), false);
+  assert.equal(isAllowedArtworkUpstreamUrl('https://artworks.thetvdb.com/banners/v4/1.jpg'), true);
+});
+
 test('CURATED_FANART_ARTWORK contains verified artwork for major series', () => {
   const aot = CURATED_FANART_ARTWORK['267440'];
   assert.ok(aot, 'Attack on Titan curated entry must exist');
@@ -46,7 +78,7 @@ test('CURATED_FANART_ARTWORK contains verified artwork for major series', () => 
   assert.ok(bc.showbackground && bc.showbackground.length > 0, 'Must have showbackground');
 });
 
-test('extractAllFanartLogos and sortLogosByPriority enforce strict 7-step priority hierarchy', () => {
+test('extractAllFanartLogos and sortLogosByPriority enforce strict priority hierarchy including movie logos', () => {
   const unsorted: FanartLogoItem[] = [
     {
       id: 'ja_clear',
@@ -101,10 +133,16 @@ test('extractAllFanartLogos and sortLogosByPriority enforce strict 7-step priori
     ['en_hd_high', 'en_hd_low', 'en_clear', 'ja_hd', 'ja_clear']
   );
 
-  const soloLeveling = extractAllFanartLogos(CURATED_FANART_ARTWORK['389597']);
-  assert.ok(soloLeveling.length >= 2, 'Solo Leveling should expose multiple logos');
-  assert.equal(soloLeveling[0].lang, 'en');
-  assert.equal(soloLeveling[0].category, 'hdtvlogo');
+  const movieFanart = extractAllFanartLogos(
+    {
+      hdmovielogo: [{ id: 'm1', url: 'https://assets.fanart.tv/m1.png', lang: 'en', likes: '12' }],
+      movielogo: [{ id: 'm2', url: 'https://assets.fanart.tv/m2.png', lang: 'ja', likes: '30' }],
+    },
+    toSafeArtworkUrl
+  );
+  assert.equal(movieFanart.length, 2);
+  assert.equal(movieFanart[0].lang, 'en');
+  assert.ok(movieFanart[0].proxyUrl.startsWith('/api/artwork-image/'));
 });
 
 test('resolveAnimeLogoSelection enforces manual admin lock over automatic Fanart.tv logos', () => {
@@ -134,6 +172,27 @@ test('resolveAnimeLogoSelection enforces manual admin lock over automatic Fanart
   );
   assert.equal(manualResult.selectedLogoSource, 'custom_upload');
   assert.equal(manualResult.logoStatus, 'custom_override');
+});
+
+test('artwork cache versioned invalidation immediately clears stale entries', () => {
+  setCachedArtwork(88888, {
+    hoshikaId: 88888,
+    backgroundUrl: 'https://cdn.test/bg.jpg',
+    logoUrl: null,
+    characterArtUrl: null,
+    posterUrl: null,
+    source: 'hoshika',
+    fetchedAt: Date.now(),
+  });
+  assert.ok(getCachedArtwork(88888));
+  invalidateCachedArtwork(88888);
+  assert.equal(getCachedArtwork(88888), null);
+});
+
+test('bootstrapped owner permission check verifies both email and UID consistently', () => {
+  assert.equal(isBootstrappedOwnerIdentity({ email: BOOTSTRAPPED_OWNER_EMAIL }), true);
+  assert.equal(isBootstrappedOwnerIdentity({ uid: BOOTSTRAPPED_OWNER_UID }), true);
+  assert.equal(isBootstrappedOwnerIdentity({ email: 'other@example.com', uid: 'user_123' }), false);
 });
 
 test('resolveAnimeArtwork respects artwork fallback priority hierarchy', async () => {

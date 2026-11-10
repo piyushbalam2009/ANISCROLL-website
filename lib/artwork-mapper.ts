@@ -1,130 +1,250 @@
+import { AnimeArtworkResult, FanartLogoItem } from '@/types/artwork';
 import { HoshikaAnimeItem } from '@/types/anime';
-import { AnimeArtworkResult, DEFAULT_LOGO_DISPLAY_SETTINGS } from '@/types/artwork';
 import {
-  extractAllFanartLogos,
   fetchFanartArtwork,
-  selectBestFanartImage,
-} from '@/lib/fanart';
-import { resolveAnimeLogoSelection } from '@/lib/artwork/logo-selector';
+  pickBestFanartImage,
+  extractAllFanartLogos,
+} from './fanart';
 import {
-  getCachedFirestoreOverride,
-  getCachedResolvedArtwork,
-  setCachedFirestoreOverride,
-  setCachedResolvedArtwork,
-} from '@/lib/artwork/artwork-cache';
-import { fetchFirestoreDocumentRest } from '@/lib/firebase-admin';
-import { AnimeArtworkFirestoreDoc } from '@/lib/admin/admin-firestore';
-import { getHoshikaAnime } from '@/lib/hoshika';
+  getCachedArtwork,
+  setCachedArtwork,
+  getCachedArtworkOverride,
+} from './artwork/artwork-cache';
+import { resolveAnimeLogoSelection } from './artwork/logo-selector';
+import { getHoshikaAnime } from './hoshika';
 
-const idMapCache = new Map<
-  number,
-  { tvdbId: number | null; tmdbId: number | null; backdropUrl: string | null }
->();
+// Allowed upstream artwork hosts for the secure image proxy
+export const ALLOWED_ARTWORK_PROXY_HOSTS = new Set([
+  'artworks.thetvdb.com',
+  'assets.fanart.tv',
+  'fanart.tv',
+  'images.fanart.tv',
+]);
 
 /**
- * Curated Hoshika shortId -> TVDB ID fast map for instant resolution of top series
+ * Universal base64url encoder that works in both Node.js and browser runtimes.
  */
-const HOSHIKA_TO_TVDB_FAST_MAP: Record<number, number> = {
-  20859: 79481, // Death Note
-  21: 81797, // One Piece
-  16498: 267440, // Attack on Titan
-  11061: 252322, // Hunter x Hunter
-  97940: 331753, // Black Clover
-  101922: 348545, // Demon Slayer
-  113415: 377543, // Jujutsu Kaisen
-  151807: 389597, // Solo Leveling
-  154587: 424536, // Frieren
-  127230: 393409, // Chainsaw Man
-  171018: 442531, // Dan Da Dan
-  153288: 423043, // Kaiju No. 8
-  269: 74796, // Bleach
-};
+export function encodeBase64Url(input: string): string {
+  if (typeof Buffer !== 'undefined') {
+    return Buffer.from(input, 'utf8').toString('base64url');
+  }
+  const utf8Bytes = new TextEncoder().encode(input);
+  let binary = '';
+  for (let i = 0; i < utf8Bytes.length; i++) {
+    binary += String.fromCharCode(utf8Bytes[i]);
+  }
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
 
-const TITLE_TO_TVDB_FAST_MAP: Array<{ match: RegExp; tvdbId: number }> = [
-  { match: /solo leveling/i, tvdbId: 389597 },
-  { match: /frieren/i, tvdbId: 424536 },
-  { match: /jujutsu kaisen/i, tvdbId: 377543 },
-  { match: /one piece/i, tvdbId: 81797 },
-  { match: /demon slayer|kimetsu no yaiba/i, tvdbId: 348545 },
-  { match: /attack on titan|shingeki no kyojin/i, tvdbId: 267440 },
-  { match: /hunter x hunter/i, tvdbId: 252322 },
-  { match: /bleach/i, tvdbId: 74796 },
-  { match: /chainsaw man/i, tvdbId: 393409 },
-  { match: /dan da dan|dandadan/i, tvdbId: 442531 },
-  { match: /kaiju no\.?\s*8/i, tvdbId: 423043 },
-  { match: /black clover/i, tvdbId: 331753 },
-  { match: /death note/i, tvdbId: 79481 },
-];
+/**
+ * Universal base64url decoder that works in both Node.js and browser runtimes.
+ */
+export function decodeBase64Url(encoded: string): string | null {
+  if (!encoded || typeof encoded !== 'string') return null;
+  try {
+    if (typeof Buffer !== 'undefined') {
+      return Buffer.from(encoded, 'base64url').toString('utf8');
+    }
+    const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
+    const pad = base64.length % 4 === 0 ? '' : '='.repeat(4 - (base64.length % 4));
+    const binary = atob(base64 + pad);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return new TextDecoder().decode(bytes);
+  } catch {
+    return null;
+  }
+}
 
+/**
+ * Validates whether an upstream URL is safe to proxy through /api/artwork-image/[encoded].
+ */
+export function isAllowedArtworkUpstreamUrl(rawUrl: string): boolean {
+  try {
+    const parsed = new URL(rawUrl);
+    if (parsed.protocol !== 'https:') return false;
+    return ALLOWED_ARTWORK_PROXY_HOSTS.has(parsed.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Rewrites external Fanart.tv and TheTVDB image URLs through our local
+ * base64url-encoded proxy route (/api/artwork-image/[encoded]) so hotlink
+ * protection and HTTP/2 header restrictions never break browser rendering.
+ */
 export function toSafeArtworkUrl(url: string | null | undefined): string | null {
-  if (!url || typeof url !== 'string') return null;
+  if (!url) return null;
   const trimmed = url.trim();
   if (!trimmed) return null;
 
-  if (
-    trimmed.startsWith('https://assets.fanart.tv/') ||
-    trimmed.startsWith('https://fanart.tv/') ||
-    trimmed.startsWith('https://artworks.thetvdb.com/')
-  ) {
-    return `/api/image-proxy?url=${encodeURIComponent(trimmed)}`;
+  // Already a local proxy route
+  if (trimmed.startsWith('/api/artwork-image/')) {
+    return trimmed;
+  }
+
+  // Upgrade legacy /api/image-proxy?url=... URLs if encountered
+  if (trimmed.startsWith('/api/image-proxy?url=')) {
+    try {
+      const legacyTarget = decodeURIComponent(
+        trimmed.slice('/api/image-proxy?url='.length)
+      );
+      if (isAllowedArtworkUpstreamUrl(legacyTarget)) {
+        return `/api/artwork-image/${encodeBase64Url(legacyTarget)}`;
+      }
+    } catch {
+      return null;
+    }
+  }
+
+  if (isAllowedArtworkUpstreamUrl(trimmed)) {
+    return `/api/artwork-image/${encodeBase64Url(trimmed)}`;
   }
 
   return trimmed;
 }
 
+// Known Hoshika shortId -> TVDB ID fast-lookup table for instant resolution
+const HOSHIKA_TO_TVDB_MAP: Record<number, number> = {
+  1780: 267440, // Attack on Titan
+  11240: 252322, // Hunter x Hunter (2011)
+  3847: 331753, // Black Clover
+  1706: 79824, // Death Note
+  11061: 252322, // Hunter x Hunter (AniList ID if passed)
+  16498: 267440, // Attack on Titan (AniList ID if passed)
+};
+
+// Normalized Title -> TVDB ID fast-lookup table for popular anime series
+const TITLE_TO_TVDB_MAP: Record<string, number> = {
+  'attack on titan': 267440,
+  'shingeki no kyojin': 267440,
+  'hunter x hunter': 252322,
+  'hunter x hunter 2011': 252322,
+  'black clover': 331753,
+  'jujutsu kaisen': 377543,
+  'demon slayer': 348545,
+  'kimetsu no yaiba': 348545,
+  'solo leveling': 389597,
+  'ore dake level up na ken': 389597,
+  'frieren': 424536,
+  'frieren beyond journeys end': 424536,
+  'sousou no frieren': 424536,
+  'one piece': 81797,
+  'bleach': 74796,
+  'bleach thousand year blood war': 74796,
+  'sennen kessen hen': 74796,
+  'chainsaw man': 391060,
+  'death note': 79824,
+  'naruto shippuden': 79824,
+  'blue lock': 408630,
+  'dandadan': 442256,
+  'kaiju no 8': 423045,
+  'kaijuu 8 gou': 423045,
+  'wind breaker': 433181,
+  'oshi no ko': 421069,
+  'vinland saga': 359274,
+  'cyberpunk edgerunners': 405920,
+  'apothecary diaries': 430552,
+  'kusuriya no hitorigoto': 430552,
+  'mashle': 421914,
+  'delicious in dungeon': 423175,
+  'dungeon meshi': 423175,
+  'spyxfamily': 387279,
+  'spy x family': 387279,
+  'my hero academia': 305074,
+  'boku no hero academia': 305074,
+};
+
+function normalizeLookupTitle(title: string): string {
+  return title
+    .toLowerCase()
+    .replace(/\b(season\s*\d+|part\s*\d+|\d+(st|nd|rd|th)\s*season|cour\s*\d+|the\s+final\s+season|spade\s+kingdom\s+raid)\b/gi, '')
+    .replace(/[^a-z0-9\s]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function matchTitleToTvdbId(title?: string | null): number | null {
+  if (!title) return null;
+  const clean = normalizeLookupTitle(title);
+  if (!clean) return null;
+
+  if (TITLE_TO_TVDB_MAP[clean]) {
+    return TITLE_TO_TVDB_MAP[clean];
+  }
+
+  for (const [key, tvdbId] of Object.entries(TITLE_TO_TVDB_MAP)) {
+    if (clean.includes(key) || key.includes(clean)) {
+      return tvdbId;
+    }
+  }
+
+  return null;
+}
+
+const idMapCache = new Map<
+  number,
+  { tvdbId: number | null; tmdbId: number | null; malId: number | null }
+>();
+
 /**
- * Resolves TVDB ID and TMDB ID from an AniList ID using api.ani.zip.
- * IMPORTANT: AniZip is strictly used for ID mapping, NEVER for logos under any circumstances.
+ * Resolves external IDs (thetvdb_id, themoviedb_id, mal_id) from AniList ID using ani.zip
+ * (Used strictly for external ID mapping, NEVER for logo images.)
  */
-export async function resolveExternalIdsFromAnilist(anilistId?: number | null): Promise<{
+export async function resolveExternalIdsFromAnilist(
+  anilistId?: number | null
+): Promise<{
   tvdbId: number | null;
   tmdbId: number | null;
-  backdropUrl: string | null;
+  malId: number | null;
 }> {
   if (!anilistId) {
-    return { tvdbId: null, tmdbId: null, backdropUrl: null };
+    return { tvdbId: null, tmdbId: null, malId: null };
   }
 
   const cached = idMapCache.get(anilistId);
   if (cached) return cached;
 
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4500);
+
   try {
     const res = await fetch(`https://api.ani.zip/mappings?anilist_id=${anilistId}`, {
-      next: { revalidate: 86400 },
       headers: { Accept: 'application/json' },
+      signal: controller.signal,
+      next: { revalidate: 86400 },
     });
 
     if (res.ok) {
       const data = await res.json();
-      const rawTvdb = data?.mappings?.thetvdb_id;
-      const rawTmdb = data?.mappings?.themoviedb_id;
-      const tvdbId = rawTvdb ? Number(rawTvdb) : null;
-      const tmdbId = rawTmdb ? Number(rawTmdb) : null;
-
-      let backdropUrl: string | null = null;
-      if (Array.isArray(data?.images)) {
-        const fanartImg = data.images.find(
-          (img: { coverType?: string; url?: string }) =>
-            img.coverType === 'Fanart' && img.url
-        );
-        backdropUrl = fanartImg?.url || null;
-      }
+      const mappings = data?.mappings || {};
+      const tvdbId = mappings.thetvdb_id ? Number(mappings.thetvdb_id) : null;
+      const tmdbId = mappings.themoviedb_id ? Number(mappings.themoviedb_id) : null;
+      const malId = mappings.mal_id ? Number(mappings.mal_id) : null;
 
       const result = {
         tvdbId: Number.isFinite(tvdbId) ? tvdbId : null,
         tmdbId: Number.isFinite(tmdbId) ? tmdbId : null,
-        backdropUrl,
+        malId: Number.isFinite(malId) ? malId : null,
       };
       idMapCache.set(anilistId, result);
       return result;
     }
   } catch {
-    // Graceful fallback
+    // Non-fatal fallback
+  } finally {
+    clearTimeout(timeout);
   }
 
-  return { tvdbId: null, tmdbId: null, backdropUrl: null };
+  return { tvdbId: null, tmdbId: null, malId: null };
 }
 
+/**
+ * Queries AniList GraphQL to resolve anilistId (from malId or title) and fetch bannerImage fallback.
+ */
 async function resolveAnilistMetadata(params: {
   anilistId?: number | null;
   malId?: number | null;
@@ -135,23 +255,23 @@ async function resolveAnilistMetadata(params: {
     return { anilistId: null, bannerImage: null };
   }
 
-  const query = `
-    query ($id: Int, $idMal: Int, $search: String) {
-      Media(id: $id, idMal: $idMal, search: $search, type: ANIME) {
-        id
-        bannerImage
-      }
-    }
-  `;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 4000);
 
   try {
-    const variables: Record<string, unknown> = {};
+    const query = `
+      query ($id: Int, $idMal: Int, $search: String) {
+        Media(id: $id, idMal: $idMal, search: $search, type: ANIME) {
+          id
+          bannerImage
+        }
+      }
+    `;
+
+    const variables: Record<string, any> = {};
     if (anilistId) variables.id = anilistId;
     else if (malId) variables.idMal = malId;
     else if (title) variables.search = title;
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 3500);
 
     const res = await fetch('https://graphql.anilist.co', {
       method: 'POST',
@@ -163,7 +283,6 @@ async function resolveAnilistMetadata(params: {
       signal: controller.signal,
       next: { revalidate: 86400 },
     });
-    clearTimeout(timer);
 
     if (res.ok) {
       const json = await res.json();
@@ -176,82 +295,73 @@ async function resolveAnilistMetadata(params: {
       }
     }
   } catch {
-    // Graceful fallback
+    // Ignore error and fall back
+  } finally {
+    clearTimeout(timeout);
   }
 
   return { anilistId: anilistId || null, bannerImage: null };
 }
 
-async function getServerAnimeArtworkOverride(
-  hoshikaId: number,
-  bypassCache = false
-): Promise<AnimeArtworkFirestoreDoc | null> {
-  if (!bypassCache) {
-    const cached = getCachedFirestoreOverride(hoshikaId);
-    if (cached.hit) {
-      return cached.doc;
-    }
-  }
-
-  const rawDoc = await fetchFirestoreDocumentRest('animeArtwork', String(hoshikaId));
-  const parsed =
-    rawDoc && typeof rawDoc.hoshikaId === 'number'
-      ? (rawDoc as unknown as AnimeArtworkFirestoreDoc)
-      : null;
-
-  setCachedFirestoreOverride(hoshikaId, parsed);
-  return parsed;
+function parseNumericId(val: string | number | null | undefined): number | null {
+  if (val === null || val === undefined) return null;
+  const num = Number(val);
+  return Number.isFinite(num) && num > 0 ? num : null;
 }
 
-export interface ResolveAnimeArtworkParams {
+export interface ResolveArtworkParams {
   hoshikaId: number;
   anilistId?: number | null;
   malId?: number | null;
   tvdbId?: number | null;
   tmdbId?: number | null;
   title?: string | null;
+  titleRomaji?: string | null;
   format?: string | null;
   hoshikaBanner?: string | null;
   hoshikaCover?: string | null;
+  preferEnglish?: boolean;
   bypassCache?: boolean;
 }
 
 /**
- * Supports both call signatures:
- * 1. resolveAnimeArtwork(idOrShortId, optionalHoshikaAnimeItem)
- * 2. resolveAnimeArtwork({ hoshikaId, anilistId, title, ... })
+ * Resolves anime artwork with strict priority order:
+ * 1. Admin-selected custom logo (Firebase Storage / manual override)
+ * 2. Admin-selected Fanart.tv logo (manual override)
+ * 3. Automatic Fanart.tv English HDTVLogo
+ * 4. Automatic Fanart.tv English ClearLogo
+ * 5. Automatic Fanart.tv Japanese HDTVLogo
+ * 6. Automatic Fanart.tv Japanese ClearLogo
+ * 7. Other suitable Fanart.tv logo (including Movie logos)
+ * 8. Hoshika title typography fallback (never uses AniZip for logos)
  */
 export async function resolveAnimeArtwork(
-  idOrParams: number | string | ResolveAnimeArtworkParams,
-  optionalAnime?: HoshikaAnimeItem | null
+  input: string | number | ResolveArtworkParams,
+  animeItem?: HoshikaAnimeItem | null
 ): Promise<AnimeArtworkResult> {
-  let params: ResolveAnimeArtworkParams;
-
-  if (typeof idOrParams === 'object' && idOrParams !== null) {
-    params = idOrParams;
-  } else {
-    const numericId = Number(idOrParams) || 0;
-    let animeItem = optionalAnime;
-    if (!animeItem && numericId > 0 && numericId !== 99999) {
-      animeItem = await getHoshikaAnime(numericId, 'en').catch(() => null);
+  let resolvedItem = animeItem;
+  if ((typeof input === 'number' || typeof input === 'string') && !resolvedItem) {
+    const numericId = Number(input);
+    if (Number.isFinite(numericId) && numericId > 0 && numericId !== 99999) {
+      resolvedItem = await getHoshikaAnime(numericId, 'en');
     }
-
-    params = {
-      hoshikaId: numericId,
-      anilistId: animeItem?.anilistId || null,
-      malId: animeItem?.malId || null,
-      tvdbId: animeItem?.thetvdbId ? Number(animeItem.thetvdbId) : null,
-      tmdbId: animeItem?.themoviedbId ? Number(animeItem.themoviedbId) : null,
-      title:
-        animeItem?.titleEnglish ||
-        animeItem?.titleRomaji ||
-        animeItem?.titleLocalized ||
-        null,
-      format: animeItem?.format || null,
-      hoshikaBanner: animeItem?.bannerImage || null,
-      hoshikaCover: animeItem?.coverImage || null,
-    };
   }
+
+  const params: ResolveArtworkParams =
+    typeof input === 'number' || typeof input === 'string'
+      ? {
+          hoshikaId: Number(input),
+          anilistId: resolvedItem?.anilistId || null,
+          malId: resolvedItem?.malId || null,
+          tvdbId: parseNumericId(resolvedItem?.thetvdbId),
+          tmdbId: parseNumericId(resolvedItem?.themoviedbId),
+          title: resolvedItem?.titleEnglish || resolvedItem?.titleRomaji || null,
+          titleRomaji: resolvedItem?.titleRomaji || null,
+          format: resolvedItem?.format || null,
+          hoshikaBanner: resolvedItem?.bannerImage || null,
+          hoshikaCover: resolvedItem?.coverImage || null,
+        }
+      : input;
 
   const {
     hoshikaId,
@@ -260,211 +370,202 @@ export async function resolveAnimeArtwork(
     tvdbId: initialTvdbId,
     tmdbId: initialTmdbId,
     title,
+    titleRomaji,
     format,
     hoshikaBanner,
     hoshikaCover,
+    preferEnglish = true,
     bypassCache = false,
   } = params;
 
   if (!bypassCache) {
-    const cached = getCachedResolvedArtwork(hoshikaId);
+    const cached = getCachedArtwork(hoshikaId);
     if (cached) {
       return cached;
     }
   }
 
+  const firestoreOverride = getCachedArtworkOverride(hoshikaId);
+
   let anilistId = initialAnilistId || null;
+  let tvdbId: number | null =
+    firestoreOverride?.tvdbId ||
+    initialTvdbId ||
+    HOSHIKA_TO_TVDB_MAP[hoshikaId] ||
+    (anilistId ? HOSHIKA_TO_TVDB_MAP[anilistId] : null) ||
+    matchTitleToTvdbId(title) ||
+    matchTitleToTvdbId(titleRomaji) ||
+    null;
+
+  let tmdbId: number | null = firestoreOverride?.tmdbId || initialTmdbId || null;
   let anilistBanner: string | null = null;
-  let tvdbId = initialTvdbId || HOSHIKA_TO_TVDB_FAST_MAP[hoshikaId] || null;
-  let tmdbId = initialTmdbId || null;
 
-  if (!tvdbId && title) {
-    for (const entry of TITLE_TO_TVDB_FAST_MAP) {
-      if (entry.match.test(title)) {
-        tvdbId = entry.tvdbId;
-        break;
-      }
-    }
-  }
-
-  // Only query AniList if we don't already have a TVDB ID or banner
+  // Step 1: Resolve AniList ID and AniList banner if needed (skip external network calls in unit test ID 99999)
   if (!tvdbId && (!anilistId || !hoshikaBanner) && hoshikaId !== 99999) {
     const anilistMeta = await resolveAnilistMetadata({ anilistId, malId, title });
     if (!anilistId && anilistMeta.anilistId) {
       anilistId = anilistMeta.anilistId;
+      if (!tvdbId && HOSHIKA_TO_TVDB_MAP[anilistId]) {
+        tvdbId = HOSHIKA_TO_TVDB_MAP[anilistId];
+      }
     }
     anilistBanner = anilistMeta.bannerImage;
   }
 
-  let externalIds: {
-    tvdbId: number | null;
-    tmdbId: number | null;
-    backdropUrl: string | null;
-  } | null = null;
-
-  if (!tvdbId && !tmdbId && anilistId) {
+  // Step 2: Resolve TVDB / TMDB IDs via ani.zip if we have an AniList ID
+  let externalIds = { tvdbId, tmdbId, malId: malId || null };
+  if (!tvdbId && !tmdbId && anilistId && hoshikaId !== 99999) {
     externalIds = await resolveExternalIdsFromAnilist(anilistId);
-    tvdbId = externalIds.tvdbId;
-    tmdbId = externalIds.tmdbId;
+    tvdbId = externalIds.tvdbId || tvdbId;
+    tmdbId = externalIds.tmdbId || tmdbId;
   }
 
-  const isMovie = format === 'MOVIE';
+  let backgroundUrl: string | null = null;
+  let backgroundSource: AnimeArtworkResult['backgroundSource'] = 'none';
+  let posterUrl: string | null = hoshikaCover || null;
+  let source: AnimeArtworkResult['source'] = 'hoshika';
 
-  const fanartData = await fetchFanartArtwork({
-    tvdbId,
-    tmdbId,
-    isMovie,
-  });
+  const isMovie = format === 'MOVIE' && !tvdbId && Boolean(tmdbId);
+  let fanartAvailableLogos: FanartLogoItem[] = [];
 
-  const fanartBackground =
-    selectBestFanartImage(fanartData?.showbackground) ||
-    selectBestFanartImage(fanartData?.moviebackground) ||
-    selectBestFanartImage(fanartData?.tvthumb) ||
-    selectBestFanartImage(fanartData?.moviethumb) ||
-    externalIds?.backdropUrl ||
-    null;
+  // Step 3: Fetch Fanart.tv artwork (Movies via TMDB ID or TV via TVDB ID)
+  if (isMovie && tmdbId) {
+    const fanartMovie = await fetchFanartArtwork(tmdbId, 'movies');
+    if (fanartMovie) {
+      fanartAvailableLogos = extractAllFanartLogos(
+        fanartMovie,
+        toSafeArtworkUrl,
+        preferEnglish
+      );
 
-  const fanartPoster =
-    selectBestFanartImage(fanartData?.tvposter) ||
-    selectBestFanartImage(fanartData?.movieposter) ||
-    null;
+      const bg =
+        pickBestFanartImage(fanartMovie.moviebackground, 'en') ||
+        pickBestFanartImage(fanartMovie.moviethumb, 'en');
+      const poster = pickBestFanartImage(fanartMovie.movieposter, 'en');
 
-  const safeFanartBg = toSafeArtworkUrl(fanartBackground);
-  const backgroundUrl =
-    safeFanartBg || hoshikaBanner || anilistBanner || hoshikaCover || null;
+      if (bg?.url) {
+        backgroundUrl = toSafeArtworkUrl(bg.url);
+        backgroundSource = 'fanart';
+        source = 'fanart';
+      }
+      if (poster?.url && !posterUrl) {
+        posterUrl = toSafeArtworkUrl(poster.url);
+      }
+    }
+  } else if (tvdbId) {
+    const fanartTv = await fetchFanartArtwork(tvdbId, 'tv');
+    if (fanartTv) {
+      fanartAvailableLogos = extractAllFanartLogos(
+        fanartTv,
+        toSafeArtworkUrl,
+        preferEnglish
+      );
 
-  const backgroundSource: AnimeArtworkResult['backgroundSource'] = safeFanartBg
-    ? 'fanart'
-    : anilistBanner && backgroundUrl === anilistBanner
-    ? 'anilist_banner'
-    : hoshikaBanner && backgroundUrl === hoshikaBanner
-    ? 'hoshika_banner'
-    : hoshikaCover
-    ? 'hoshika_cover'
-    : 'none';
+      const bg =
+        pickBestFanartImage(fanartTv.showbackground, 'en') ||
+        pickBestFanartImage(fanartTv.tvthumb, 'en');
+      const poster = pickBestFanartImage(fanartTv.tvposter, 'en');
 
-  // Character art cutouts must remain strictly null
-  const characterArtUrl = null;
-  const posterUrl = hoshikaCover || toSafeArtworkUrl(fanartPoster) || null;
-
-  if (isMovie) {
-    const movieLogo =
-      selectBestFanartImage(fanartData?.hdmovielogo) ||
-      selectBestFanartImage(fanartData?.movielogo) ||
-      selectBestFanartImage(fanartData?.hdtvlogo) ||
-      selectBestFanartImage(fanartData?.clearlogo) ||
-      null;
-    const safeMovieLogo = toSafeArtworkUrl(movieLogo);
-
-    const movieResult: AnimeArtworkResult = {
-      hoshikaId,
-      title: title || `Anime #${hoshikaId}`,
-      anilistId,
-      malId: malId || null,
-      tvdbId,
-      tmdbId,
-      backgroundUrl,
-      backgroundSource,
-      logoUrl: safeMovieLogo,
-      logoSource: safeMovieLogo ? 'fanart_hdtvlogo' : 'typography',
-      characterArtUrl: null,
-      posterUrl,
-      source: fanartBackground || safeMovieLogo ? 'fanart' : anilistBanner ? 'anilist' : 'hoshika',
-      fetchedAt: Date.now(),
-    };
-    setCachedResolvedArtwork(hoshikaId, movieResult);
-    return movieResult;
-  }
-
-  // Extract ALL Fanart.tv hdtvlogo & clearlogo options
-  const allFanartLogos = extractAllFanartLogos(
-    fanartData,
-    (rawUrl) => toSafeArtworkUrl(rawUrl) || rawUrl,
-    true
-  );
-
-  const firestoreOverride =
-    hoshikaId === 99999
-      ? null
-      : await getServerAnimeArtworkOverride(hoshikaId, bypassCache);
-
-  const mergedLogosMap = new Map<string, (typeof allFanartLogos)[number]>();
-  for (const l of allFanartLogos) {
-    mergedLogosMap.set(`${l.category}:${l.url}`, l);
-  }
-  if (Array.isArray(firestoreOverride?.availableLogos)) {
-    for (const savedLogo of firestoreOverride.availableLogos) {
-      if (savedLogo && savedLogo.url) {
-        const key = `${savedLogo.category}:${savedLogo.url}`;
-        if (!mergedLogosMap.has(key)) {
-          mergedLogosMap.set(key, {
-            ...savedLogo,
-            proxyUrl: toSafeArtworkUrl(savedLogo.url) || savedLogo.url,
-          });
-        }
+      if (bg?.url) {
+        backgroundUrl = toSafeArtworkUrl(bg.url);
+        backgroundSource = 'fanart';
+        source = 'fanart';
+      }
+      if (poster?.url && !posterUrl) {
+        posterUrl = toSafeArtworkUrl(poster.url);
       }
     }
   }
 
-  const selection = resolveAnimeLogoSelection({
-    availableLogos: Array.from(mergedLogosMap.values()),
+  // Merge Fanart.tv available logos with any previously cached Firestore availableLogos
+  const mergedAvailableLogos =
+    fanartAvailableLogos.length > 0
+      ? fanartAvailableLogos
+      : (firestoreOverride?.availableLogos || []).map((item) => ({
+          ...item,
+          proxyUrl: toSafeArtworkUrl(item.url) || item.proxyUrl || item.url,
+        }));
+
+  // Resolve final logo using the 8-step priority selector (respects manual overrides for both TV & Movie)
+  const logoResolution = resolveAnimeLogoSelection({
+    availableLogos: mergedAvailableLogos,
     customLogos: firestoreOverride?.customLogos || [],
     hiddenLogoIds: firestoreOverride?.hiddenLogoIds || [],
     selectionMode: firestoreOverride?.selectionMode || 'auto',
     manualLogoUrl: firestoreOverride?.selectedLogoUrl || null,
     manualLogoSource: firestoreOverride?.selectedLogoSource,
     manualLogoLanguage: firestoreOverride?.selectedLogoLanguage,
-    logoDisplay: firestoreOverride?.logoDisplay || DEFAULT_LOGO_DISPLAY_SETTINGS,
-    preferEnglish: true,
+    logoDisplay: firestoreOverride?.logoDisplay,
+    preferEnglish,
   });
 
-  const finalLogoUrl =
-    selection.selectedLogoSource === 'custom_upload'
-      ? selection.logoUrl
-      : toSafeArtworkUrl(selection.logoUrl);
+  const logoUrl = logoResolution.logoUrl
+    ? logoResolution.selectedLogoSource === 'custom_upload'
+      ? logoResolution.logoUrl
+      : toSafeArtworkUrl(logoResolution.logoUrl)
+    : null;
 
   const logoSource: AnimeArtworkResult['logoSource'] =
-    !finalLogoUrl || selection.selectedLogoSource === 'typography_fallback'
+    logoResolution.selectedLogoSource === 'typography_fallback'
       ? 'typography'
-      : selection.selectedLogoSource;
+      : logoResolution.selectedLogoSource;
 
-  const source: AnimeArtworkResult['source'] =
-    selection.selectionMode === 'manual' || selection.selectedLogoSource === 'custom_upload'
-      ? 'custom_override'
-      : fanartBackground || finalLogoUrl
-      ? 'fanart'
-      : anilistBanner
-      ? 'anilist'
-      : 'hoshika';
+  if (
+    logoResolution.selectionMode === 'manual' ||
+    logoResolution.selectedLogoSource === 'custom_upload'
+  ) {
+    source = 'custom_override';
+  } else if (logoUrl && source === 'hoshika') {
+    source = 'fanart';
+  }
 
-  const result: AnimeArtworkResult = {
+  // Step 4: Fallback chain for background image
+  if (!backgroundUrl) {
+    if (firestoreOverride?.backgroundUrl) {
+      backgroundUrl = toSafeArtworkUrl(firestoreOverride.backgroundUrl);
+      backgroundSource = 'fanart';
+    } else if (hoshikaBanner) {
+      backgroundUrl = hoshikaBanner;
+      backgroundSource = 'hoshika_banner';
+      if (source === 'hoshika') source = 'hoshika';
+    } else if (anilistBanner) {
+      backgroundUrl = anilistBanner;
+      backgroundSource = 'anilist_banner';
+      if (source === 'hoshika') source = 'anilist';
+    } else if (hoshikaCover) {
+      backgroundUrl = hoshikaCover;
+      backgroundSource = 'hoshika_cover';
+    }
+  }
+
+  const finalResult: AnimeArtworkResult = {
     hoshikaId,
-    title: firestoreOverride?.title || title || `Anime #${hoshikaId}`,
+    title: title || titleRomaji || firestoreOverride?.title || 'Unknown Anime',
     anilistId,
-    malId: malId || null,
+    malId: externalIds.malId || malId || null,
     tvdbId,
     tmdbId,
-    backgroundUrl: firestoreOverride?.backgroundUrl || backgroundUrl,
+    backgroundUrl,
     backgroundSource,
-    logoUrl: finalLogoUrl,
+    logoUrl,
     logoSource,
     characterArtUrl: null,
-    posterUrl: firestoreOverride?.posterUrl || posterUrl,
+    posterUrl,
     source,
     fetchedAt: Date.now(),
-    availableLogos: selection.availableLogos,
-    customLogos: selection.customLogos,
-    hiddenLogoIds: selection.hiddenLogoIds,
-    selectionMode: selection.selectionMode,
-    selectedLogoSource: selection.selectedLogoSource,
-    selectedLogoLanguage: selection.selectedLogoLanguage,
-    logoDisplay: selection.logoDisplay,
-    logoStatus: selection.logoStatus,
-    hasEnglishLogo: selection.hasEnglishLogo,
-    hasJapaneseLogo: selection.hasJapaneseLogo,
-    reviewed: Boolean(firestoreOverride?.reviewed),
+    availableLogos: logoResolution.availableLogos,
+    customLogos: logoResolution.customLogos,
+    hiddenLogoIds: logoResolution.hiddenLogoIds,
+    selectionMode: logoResolution.selectionMode,
+    selectedLogoSource: logoResolution.selectedLogoSource,
+    selectedLogoLanguage: logoResolution.selectedLogoLanguage,
+    logoDisplay: logoResolution.logoDisplay,
+    logoStatus: logoResolution.logoStatus,
+    hasEnglishLogo: logoResolution.hasEnglishLogo,
+    hasJapaneseLogo: logoResolution.hasJapaneseLogo,
+    reviewed: firestoreOverride?.reviewed ?? false,
   };
 
-  setCachedResolvedArtwork(hoshikaId, result);
-  return result;
+  setCachedArtwork(hoshikaId, finalResult);
+  return finalResult;
 }

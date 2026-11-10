@@ -24,7 +24,9 @@ export function useWatchlist() {
   }, []);
 
   const checkInWatchlist = useCallback(
-    (hoshikaId: number) => isInWatchlist(hoshikaId),
+    (hoshikaId: number) =>
+      watchlist.some((item) => item.hoshikaId === hoshikaId) ||
+      isInWatchlist(hoshikaId),
     [watchlist]
   );
 

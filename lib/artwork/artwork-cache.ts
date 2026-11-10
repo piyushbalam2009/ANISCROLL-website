@@ -1,88 +1,103 @@
 import { AnimeArtworkResult } from '@/types/artwork';
 import { AnimeArtworkFirestoreDoc } from '@/lib/admin/admin-firestore';
 
-const DEFAULT_TTL_MS = 1000 * 60 * 60; // 1 hour default
-
-interface CachedArtworkEntry {
-  data: AnimeArtworkResult;
+interface CacheEntry<T> {
+  value: T;
   expiresAt: number;
+  version: number;
 }
 
-interface CachedOverrideEntry {
-  data: AnimeArtworkFirestoreDoc | null;
-  expiresAt: number;
+const DEFAULT_ARTWORK_TTL_MS = 5 * 60 * 1000; // 5 minutes for resolved artwork
+const DEFAULT_OVERRIDE_TTL_MS = 60 * 1000; // 60 seconds for Firestore override snapshots
+
+const resolvedArtworkCache = new Map<number, CacheEntry<AnimeArtworkResult>>();
+const firestoreOverrideCache = new Map<
+  number,
+  CacheEntry<AnimeArtworkFirestoreDoc | null>
+>();
+const keyVersions = new Map<number, number>();
+
+function getKeyVersion(hoshikaId: number): number {
+  return keyVersions.get(hoshikaId) || 0;
 }
 
-const resolvedArtworkCache = new Map<number, CachedArtworkEntry>();
-const firestoreOverrideCache = new Map<number, CachedOverrideEntry>();
+function bumpKeyVersion(hoshikaId: number): number {
+  const next = getKeyVersion(hoshikaId) + 1;
+  keyVersions.set(hoshikaId, next);
+  return next;
+}
 
-export function getCachedResolvedArtwork(hoshikaId: number): AnimeArtworkResult | null {
+export function getCachedArtwork(hoshikaId: number): AnimeArtworkResult | null {
   const entry = resolvedArtworkCache.get(hoshikaId);
   if (!entry) return null;
-  if (Date.now() > entry.expiresAt) {
+  if (Date.now() > entry.expiresAt || entry.version !== getKeyVersion(hoshikaId)) {
     resolvedArtworkCache.delete(hoshikaId);
     return null;
   }
-  return entry.data;
+  return entry.value;
 }
 
-export function setCachedResolvedArtwork(
+export function setCachedArtwork(
   hoshikaId: number,
-  data: AnimeArtworkResult,
-  ttlMs = DEFAULT_TTL_MS
+  result: AnimeArtworkResult,
+  ttlMs: number = DEFAULT_ARTWORK_TTL_MS
 ): void {
   resolvedArtworkCache.set(hoshikaId, {
-    data,
+    value: result,
     expiresAt: Date.now() + ttlMs,
+    version: getKeyVersion(hoshikaId),
   });
 }
 
-export function getCachedFirestoreOverride(
+export function getCachedArtworkOverride(
   hoshikaId: number
-): { hit: boolean; doc: AnimeArtworkFirestoreDoc | null } {
+): AnimeArtworkFirestoreDoc | null | undefined {
   const entry = firestoreOverrideCache.get(hoshikaId);
-  if (!entry) return { hit: false, doc: null };
+  if (!entry) return undefined;
   if (Date.now() > entry.expiresAt) {
     firestoreOverrideCache.delete(hoshikaId);
-    return { hit: false, doc: null };
+    return undefined;
   }
-  return { hit: true, doc: entry.data };
+  return entry.value;
 }
 
-export function setCachedFirestoreOverride(
+export function setCachedArtworkOverride(
   hoshikaId: number,
   doc: AnimeArtworkFirestoreDoc | null,
-  ttlMs = 1000 * 60 * 5
+  ttlMs: number = DEFAULT_OVERRIDE_TTL_MS
 ): void {
+  bumpKeyVersion(hoshikaId);
   firestoreOverrideCache.set(hoshikaId, {
-    data: doc,
+    value: doc,
     expiresAt: Date.now() + ttlMs,
+    version: getKeyVersion(hoshikaId),
   });
+  // Also clear resolved artwork cache so next request re-evaluates with the new override
+  resolvedArtworkCache.delete(hoshikaId);
 }
 
-export function invalidateAnimeArtworkCache(
-  hoshikaId?: number,
-  updatedOverride?: AnimeArtworkFirestoreDoc | null
-): void {
-  if (typeof hoshikaId === 'number') {
+export function invalidateCachedArtwork(hoshikaId?: number): void {
+  if (typeof hoshikaId === 'number' && Number.isFinite(hoshikaId)) {
+    bumpKeyVersion(hoshikaId);
     resolvedArtworkCache.delete(hoshikaId);
-    if (updatedOverride !== undefined) {
-      setCachedFirestoreOverride(hoshikaId, updatedOverride, 1000 * 60 * 30);
-    } else {
-      firestoreOverrideCache.delete(hoshikaId);
-    }
+    firestoreOverrideCache.delete(hoshikaId);
   } else {
     resolvedArtworkCache.clear();
     firestoreOverrideCache.clear();
+    keyVersions.clear();
   }
 }
 
 export function getArtworkCacheStats(): {
-  resolvedEntries: number;
-  overrideEntries: number;
+  resolvedSize: number;
+  overrideSize: number;
 } {
   return {
-    resolvedEntries: resolvedArtworkCache.size,
-    overrideEntries: firestoreOverrideCache.size,
+    resolvedSize: resolvedArtworkCache.size,
+    overrideSize: firestoreOverrideCache.size,
   };
 }
+
+export const getCachedResolvedArtwork = getCachedArtwork;
+export const setCachedResolvedArtwork = setCachedArtwork;
+export const invalidateAnimeArtworkCache = invalidateCachedArtwork;

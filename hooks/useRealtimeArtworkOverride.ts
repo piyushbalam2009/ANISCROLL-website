@@ -25,7 +25,7 @@ export function useRealtimeArtworkOverride(
   }, [initialArtwork, hoshikaId]);
 
   useEffect(() => {
-    if (!hoshikaId || format === 'MOVIE') return;
+    if (!hoshikaId) return;
 
     const docRef = doc(db, 'animeArtwork', String(hoshikaId));
     const unsubscribe = onSnapshot(
@@ -53,7 +53,7 @@ export function useRealtimeArtworkOverride(
 
           return {
             hoshikaId,
-            anilistId: override.anilistId || prev?.anilistId || null,
+            anilistId: prev?.anilistId || null,
             tvdbId: override.tvdbId || prev?.tvdbId || null,
             tmdbId: override.tmdbId || prev?.tmdbId || null,
             backgroundUrl: override.backgroundUrl || prev?.backgroundUrl || null,

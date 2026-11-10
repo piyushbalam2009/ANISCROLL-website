@@ -8,10 +8,10 @@ async function fetchFromHoshika<T>(endpoint: string, cacheTtlSeconds: number = 3
   const cached = appCache.get<T>(cacheKey);
   if (cached) return cached;
 
-  try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 8000);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 8000);
 
+  try {
     const res = await fetch(`${BASE_URL}${endpoint}`, {
       headers: {
         'Accept': 'application/json',
@@ -20,24 +20,39 @@ async function fetchFromHoshika<T>(endpoint: string, cacheTtlSeconds: number = 3
       signal: controller.signal,
       next: { revalidate: cacheTtlSeconds },
     });
-    clearTimeout(timeout);
+
+    if (res.status === 429) {
+      console.warn(`Hoshika API rate limit (429) for ${endpoint}`);
+      return null;
+    }
 
     if (!res.ok) {
       console.error(`Hoshika API error: ${res.status} for ${endpoint}`);
       return null;
     }
 
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      return null;
+    }
+
     const data = await res.json();
-    if (data.ok === false) {
-      console.warn(`Hoshika reported !ok for ${endpoint}:`, data.code);
+    if (!data || typeof data !== 'object' || data.ok === false) {
+      if (data?.ok === false) {
+        console.warn(`Hoshika reported !ok for ${endpoint}:`, data.code);
+      }
       return null;
     }
 
     appCache.set(cacheKey, data, cacheTtlSeconds);
     return data as T;
   } catch (err: any) {
-    console.error(`Failed to fetch from Hoshika (${endpoint}):`, err.message || err);
+    if (err?.name !== 'AbortError') {
+      console.error(`Failed to fetch from Hoshika (${endpoint}):`, err.message || err);
+    }
     return null;
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
@@ -58,11 +73,29 @@ export async function searchHoshika(query: string, limit: number = 20, format?: 
 }
 
 export async function getHoshikaAnime(shortId: string | number, locale: string = 'en'): Promise<HoshikaAnimeItem | null> {
-  const data = await fetchFromHoshika<{ ok: boolean; anime?: HoshikaAnimeItem }>(
+  const data = await fetchFromHoshika<{ ok: boolean; anime?: any }>(
     `/anime/${shortId}?locale=${locale}`,
     600
   );
-  return data?.anime || null;
+  const anime = data?.anime;
+  if (!anime || typeof anime !== 'object') return null;
+
+  const extraSynonyms: string[] = [];
+  if (Array.isArray(anime.synonyms)) {
+    extraSynonyms.push(...anime.synonyms.filter((s: unknown) => typeof s === 'string'));
+  }
+  if (Array.isArray(anime.alternativeTitles)) {
+    extraSynonyms.push(...anime.alternativeTitles.filter((s: unknown) => typeof s === 'string'));
+  }
+  if (Array.isArray(anime.altTitles)) {
+    extraSynonyms.push(...anime.altTitles.filter((s: unknown) => typeof s === 'string'));
+  }
+
+  return {
+    ...anime,
+    synonyms: Array.from(new Set(extraSynonyms)),
+    alternativeTitles: Array.from(new Set(extraSynonyms)),
+  };
 }
 
 export async function getHoshikaEpisodes(

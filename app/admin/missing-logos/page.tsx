@@ -437,8 +437,8 @@ export default function AdminMissingLogosScannerPage() {
                     </td>
 
                     <td className="py-3.5 px-4 font-mono text-[11px] text-[#A0A0A0] tabular-nums">
-                      <div>AniList: {item.anilistId || '—'}</div>
                       <div>TVDB: {item.tvdbId || '—'}</div>
+                      <div>TMDB: {item.tmdbId || '—'}</div>
                     </td>
 
                     <td className="py-3.5 px-4">

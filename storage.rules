@@ -2,7 +2,7 @@ rules_version = '2';
 
 service firebase.storage {
   match /b/{bucket}/o {
-    // Default deny all paths
+    // Default deny all paths unless explicitly matched
     match /{allPaths=**} {
       allow read, write: if false;
     }
@@ -12,55 +12,66 @@ service firebase.storage {
     }
 
     function isBootstrappedOwner() {
-      return isSignedIn()
-        && request.auth.token.email == 'balampiyush2009@gmail.com'
-        && request.auth.token.email_verified == true;
+      return isSignedIn() && (
+        request.auth.uid == 'ClYKhPNBohZuDPPS3upXVyQvUEq2'
+        || request.auth.token.email == 'balampiyush2009@gmail.com'
+      );
     }
 
-    function isAuthorizedArtworkUploader() {
+    function hasAdminDoc() {
+      return isSignedIn() && firestore.exists(
+        /databases/ai-studio-aniscroll-0233812b-caf8-4532-8f0f-c2cc33bb9580/documents/admins/$(request.auth.uid)
+      );
+    }
+
+    function getAdminDoc() {
+      return firestore.get(
+        /databases/ai-studio-aniscroll-0233812b-caf8-4532-8f0f-c2cc33bb9580/documents/admins/$(request.auth.uid)
+      ).data;
+    }
+
+    function canUploadArtwork() {
       return isBootstrappedOwner()
         || (
-          isSignedIn()
-          && firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid))
-          && firestore.get(/databases/(default)/documents/admins/$(request.auth.uid)).data.status == 'active'
+          hasAdminDoc()
+          && getAdminDoc().status == 'active'
           && (
-            firestore.get(/databases/(default)/documents/admins/$(request.auth.uid)).data.role == 'owner'
-            || firestore.get(/databases/(default)/documents/admins/$(request.auth.uid)).data.permissions.uploadArtwork == true
+            getAdminDoc().role == 'owner'
+            || getAdminDoc().permissions.uploadLogos == true
+            || getAdminDoc().permissions.manageArtwork == true
           )
         );
     }
 
-    function isAuthorizedArtworkDeleter() {
+    function canDeleteArtwork() {
       return isBootstrappedOwner()
         || (
-          isSignedIn()
-          && firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid))
-          && firestore.get(/databases/(default)/documents/admins/$(request.auth.uid)).data.status == 'active'
+          hasAdminDoc()
+          && getAdminDoc().status == 'active'
           && (
-            firestore.get(/databases/(default)/documents/admins/$(request.auth.uid)).data.role == 'owner'
-            || firestore.get(/databases/(default)/documents/admins/$(request.auth.uid)).data.permissions.deleteArtwork == true
+            getAdminDoc().role == 'owner'
+            || getAdminDoc().permissions.deleteLogos == true
           )
         );
     }
 
-    // Custom anime logo uploads: /anime-logos/{animeId}/{fileName}
-    match /anime-logos/{animeId}/{fileName} {
-      // Public read for displaying transparent logos on the website
-      allow read: if true;
-
-      // Upload restricted to authorized admins, max 5 MB, transparent PNG or WebP only
-      allow create, update: if isAuthorizedArtworkUploader()
-        && animeId.size() >= 1 && animeId.size() <= 64
-        && fileName.size() >= 1 && fileName.size() <= 180
+    function isValidCustomLogoFile() {
+      return request.resource != null
         && request.resource.size > 0
         && request.resource.size <= 5 * 1024 * 1024
-        && (
-          request.resource.contentType == 'image/png'
-          || request.resource.contentType == 'image/webp'
-        );
+        && request.resource.contentType.matches('image/(png|webp)');
+    }
 
-      // Deletion restricted to Owner or admins with deleteArtwork permission
-      allow delete: if isAuthorizedArtworkDeleter();
+    // Custom Transparent Anime Logos: /anime-logos/{animeId}/{fileName}
+    match /anime-logos/{animeId}/{fileName} {
+      allow read: if request.time != null;
+      allow create, update: if canUploadArtwork()
+        && animeId.size() >= 1
+        && animeId.size() <= 64
+        && fileName.size() >= 1
+        && fileName.size() <= 180
+        && isValidCustomLogoFile();
+      allow delete: if canDeleteArtwork();
     }
   }
 }

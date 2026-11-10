@@ -77,8 +77,8 @@ export default function AdminArtworkCataloguePage() {
         if (res.ok) {
           const data = await res.json();
           setSearchResults(
-            (data.results || []).filter(
-              (item: HoshikaAnimeItem) => item.format !== 'MOVIE'
+            (data.results || []).filter((item: HoshikaAnimeItem) =>
+              Boolean(item?.shortId)
             )
           );
         }

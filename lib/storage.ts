@@ -194,8 +194,9 @@ export function getSavedProgress(hoshikaId: number, episodeNumber: number): numb
 
 export function saveWatchProgress(entry: Omit<WatchHistoryEntry, 'timestamp'>): void {
   const history = getWatchHistory();
+  const { anilistId: _omitAnilistId, ...cleanEntry } = entry;
   const fullEntry: WatchHistoryEntry = {
-    ...entry,
+    ...cleanEntry,
     timestamp: Date.now(),
   };
 
