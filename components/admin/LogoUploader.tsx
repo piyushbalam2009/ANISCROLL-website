@@ -183,7 +183,7 @@ export function LogoUploader({
       setError(
         err instanceof Error
           ? err.message
-          : 'Failed to upload custom logo to Firebase Storage'
+          : 'Failed to upload custom logo to Supabase Storage'
       );
     } finally {
       setIsUploading(false);
@@ -367,7 +367,7 @@ export function LogoUploader({
               {isUploading ? (
                 <>
                   <Loader2 size={14} className="animate-spin" />
-                  <span>Uploading to Firebase Storage...</span>
+                  <span>Uploading to Supabase Storage...</span>
                 </>
               ) : (
                 <>

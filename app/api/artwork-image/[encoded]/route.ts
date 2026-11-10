@@ -9,6 +9,24 @@ export const revalidate = 604800; // 7 days
 const UPSTREAM_TIMEOUT_MS = 8000;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB cap
 
+// 1x1 transparent PNG fallback so Next.js /_next/image never fails with 400 on unreachable upstream CDN assets
+const TRANSPARENT_1X1_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIAAAUAAeImBZsAAAAASUVORK5CYII=',
+  'base64'
+);
+
+function createFallbackImageResponse(): NextResponse {
+  return new NextResponse(new Uint8Array(TRANSPARENT_1X1_PNG), {
+    status: 200,
+    headers: {
+      'Content-Type': 'image/png',
+      'Cache-Control': 'public, max-age=60, s-maxage=60',
+      'X-Content-Type-Options': 'nosniff',
+      'X-Artwork-Fallback': '1',
+    },
+  });
+}
+
 function fetchViaHttp1(
   targetUrl: string
 ): Promise<{ status: number; contentType: string; buffer: Buffer }> {
@@ -20,6 +38,7 @@ function fetchViaHttp1(
       const res = await fetch(targetUrl, {
         headers: {
           Accept: 'image/avif,image/webp,image/apng,image/png,image/*,*/*;q=0.8',
+          Referer: 'https://fanart.tv/',
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         },
@@ -92,6 +111,7 @@ function fetchViaHttp2(
       ':path': parsed.pathname + parsed.search,
       ':scheme': 'https',
       ':authority': parsed.host,
+      referer: 'https://fanart.tv/',
       'user-agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
@@ -200,14 +220,12 @@ export async function GET(
     }
 
     if (result.status !== 200 || result.buffer.length === 0) {
-      return new NextResponse('Upstream error', {
-        status: result.status === 404 ? 404 : 502,
-      });
+      return createFallbackImageResponse();
     }
 
     const normalizedType = result.contentType.toLowerCase().split(';')[0].trim();
     if (!normalizedType.startsWith('image/')) {
-      return new NextResponse('Upstream response is not a valid image', { status: 502 });
+      return createFallbackImageResponse();
     }
 
     return new NextResponse(new Uint8Array(result.buffer), {
@@ -219,11 +237,10 @@ export async function GET(
       },
     });
   } catch (err: any) {
-    console.error('Artwork image proxy error:', err);
     const msg = String(err?.message || '');
     if (msg.includes('exceeds')) {
       return new NextResponse('Artwork image exceeds size limit', { status: 413 });
     }
-    return new NextResponse('Failed to fetch image', { status: 502 });
+    return createFallbackImageResponse();
   }
 }

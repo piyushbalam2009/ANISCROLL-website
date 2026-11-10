@@ -34,8 +34,11 @@ export async function GET(
     let hoshikaBanner = queryBanner;
     let hoshikaCover = queryCover;
 
-    if (!title || (!hoshikaBanner && !hoshikaCover)) {
+    let fetchedAnime = null;
+
+    if (!title || (!hoshikaBanner && !hoshikaCover) || !anilistId) {
       const anime = await getHoshikaAnime(hoshikaId, 'en');
+      fetchedAnime = anime;
       const override = getCachedArtworkOverride(hoshikaId);
 
       if (!anime && !override && !queryTitle && !queryBanner && !queryCover) {
@@ -63,19 +66,22 @@ export async function GET(
       }
     }
 
-    const artwork = await resolveAnimeArtwork({
-      hoshikaId,
-      anilistId,
-      malId,
-      tvdbId,
-      tmdbId,
-      title,
-      titleRomaji,
-      format,
-      hoshikaBanner,
-      hoshikaCover,
-      bypassCache,
-    });
+    const artwork = await resolveAnimeArtwork(
+      {
+        hoshikaId,
+        anilistId,
+        malId,
+        tvdbId,
+        tmdbId,
+        title,
+        titleRomaji,
+        format,
+        hoshikaBanner,
+        hoshikaCover,
+        bypassCache,
+      },
+      fetchedAnime
+    );
 
     return NextResponse.json(artwork, {
       status: 200,

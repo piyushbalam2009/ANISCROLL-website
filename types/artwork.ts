@@ -29,9 +29,12 @@ export interface FanartLogoItem {
   url: string;
   proxyUrl: string;
   lang: string;
+  language?: string;
   likes: number;
   source: 'fanart_hdtvlogo' | 'fanart_clearlogo' | 'custom_upload';
+  provider?: 'fanart' | 'supabase';
   category: 'hdtvlogo' | 'clearlogo' | 'custom';
+  type?: 'hdtvlogo' | 'clearlogo' | 'custom';
   label?: string;
   width?: number;
   height?: number;
@@ -39,6 +42,11 @@ export interface FanartLogoItem {
 
 export interface CustomLogoItem {
   id: string;
+  hoshikaId?: number;
+  source?: 'custom';
+  logoUrl?: string;
+  storageProvider?: 'supabase' | 'firebase';
+  storageBucket?: string;
   storagePath: string;
   url: string;
   proxyUrl: string;
@@ -48,9 +56,31 @@ export interface CustomLogoItem {
   height: number;
   mimeType: 'image/png' | 'image/webp';
   lang: string;
+  selected?: boolean;
   uploadedBy: string;
   uploadedByEmail: string;
   uploadedAt: string;
+  updatedAt?: string;
+}
+
+export interface SelectedLogoMetadata {
+  id?: string;
+  source: 'fanart' | 'custom' | 'typography';
+  logoSource:
+    | 'fanart_hdtvlogo'
+    | 'fanart_clearlogo'
+    | 'custom_upload'
+    | 'typography_fallback';
+  url: string;
+  proxyUrl: string;
+  type: 'hdtvlogo' | 'clearlogo' | 'custom' | 'typography';
+  language: string;
+  storageProvider?: 'supabase' | 'fanart' | 'none';
+  storageBucket?: string;
+  storagePath?: string;
+  selectedAt: string;
+  selectedBy?: string;
+  selectedByEmail?: string;
 }
 
 export interface LogoDisplaySettings {
@@ -101,8 +131,10 @@ export interface AnimeArtworkResult {
   posterUrl: string | null;
   source: 'fanart' | 'anilist' | 'hoshika' | 'custom_override';
   fetchedAt: number;
-  // Enhanced Artwork & Admin Override Metadata
+  // Standardized Fanart.tv + Admin Logo Candidates & Selected Logo Metadata
+  logos?: FanartLogoItem[];
   availableLogos?: FanartLogoItem[];
+  selectedLogo?: SelectedLogoMetadata | null;
   customLogos?: CustomLogoItem[];
   hiddenLogoIds?: string[];
   selectionMode?: 'auto' | 'manual';

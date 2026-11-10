@@ -34,10 +34,17 @@ export function useRealtimeArtworkOverride(
         if (!snap.exists()) return;
         const override = snap.data() as AnimeArtworkFirestoreDoc;
         setLiveArtwork((prev) => {
-          const baseAvailable =
-            override.availableLogos && override.availableLogos.length > 0
-              ? override.availableLogos
-              : prev?.availableLogos || [];
+          const prevLogos = prev?.availableLogos || [];
+          const overrideLogos = override.availableLogos || [];
+          const mergedMap = new Map<string, (typeof prevLogos)[number]>();
+          for (const logo of [...prevLogos, ...overrideLogos]) {
+            if (!logo?.url) continue;
+            const key = logo.id || logo.url;
+            if (!mergedMap.has(key)) {
+              mergedMap.set(key, logo);
+            }
+          }
+          const baseAvailable = Array.from(mergedMap.values());
 
           const resolved = resolveAnimeLogoSelection({
             availableLogos: baseAvailable,
@@ -66,7 +73,9 @@ export function useRealtimeArtworkOverride(
                 ? 'custom_override'
                 : prev?.source || 'fanart',
             fetchedAt: Date.now(),
+            logos: resolved.availableLogos,
             availableLogos: resolved.availableLogos,
+            selectedLogo: resolved.selectedLogo,
             customLogos: resolved.customLogos,
             hiddenLogoIds: resolved.hiddenLogoIds,
             selectionMode: resolved.selectionMode,

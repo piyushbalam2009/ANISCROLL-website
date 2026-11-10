@@ -98,6 +98,9 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
   const [overrideDoc, setOverrideDoc] = useState<AnimeArtworkFirestoreDoc | null>(
     null
   );
+  const [previewCanvasBg, setPreviewCanvasBg] = useState<'dark' | 'checkerboard'>(
+    'checkerboard'
+  );
 
   // In-memory AniList ID Resolution & Verification Tool state (NEVER persisted to Firebase)
   const [idResolutionInfo, setIdResolutionInfo] = useState<{
@@ -146,6 +149,7 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
 
         // AniList ID comes strictly from live in-memory resolution (never from Firestore)
         const resolvedAnilistId =
+          apiRes?.anilistId ||
           apiIdRes?.aniListId ||
           apiIdRes?.anilistId ||
           apiArtwork?.anilistId ||
@@ -203,30 +207,67 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
           }
         }
 
-        const mergedFanartLogos: FanartLogoItem[] =
-          apiArtwork?.availableLogos && apiArtwork.availableLogos.length > 0
-            ? apiArtwork.availableLogos
-            : firestoreDoc?.availableLogos || [];
+        // Merge Fanart.tv logos from live API resolution and Firestore override so no logos are ever lost
+        const liveLogos: FanartLogoItem[] = Array.isArray(apiRes?.logos)
+          ? apiRes.logos
+          : Array.isArray(apiArtwork?.availableLogos)
+          ? apiArtwork.availableLogos
+          : [];
+        const docLogos: FanartLogoItem[] = Array.isArray(
+          firestoreDoc?.availableLogos
+        )
+          ? firestoreDoc.availableLogos
+          : [];
 
-        const docCustomLogos = firestoreDoc?.customLogos || [];
-        const docHiddenIds = firestoreDoc?.hiddenLogoIds || [];
-        const docMode = firestoreDoc?.selectionMode || 'auto';
+        const logoMap = new Map<string, FanartLogoItem>();
+        for (const logo of [...liveLogos, ...docLogos]) {
+          if (!logo?.url) continue;
+          const key = logo.id || logo.url;
+          if (!logoMap.has(key)) {
+            logoMap.set(key, {
+              ...logo,
+              language: logo.language || logo.lang || 'en',
+              type: logo.type || logo.category,
+              provider: 'fanart',
+            });
+          }
+        }
+        const mergedFanartLogos = Array.from(logoMap.values());
+
+        const docCustomLogos =
+          firestoreDoc?.customLogos && firestoreDoc.customLogos.length > 0
+            ? firestoreDoc.customLogos
+            : apiArtwork?.customLogos || [];
+        const docHiddenIds =
+          firestoreDoc?.hiddenLogoIds || apiArtwork?.hiddenLogoIds || [];
+        const docMode =
+          firestoreDoc?.selectionMode || apiArtwork?.selectionMode || 'auto';
         const docDisplay =
-          firestoreDoc?.logoDisplay || DEFAULT_LOGO_DISPLAY_SETTINGS;
+          firestoreDoc?.logoDisplay ||
+          apiArtwork?.logoDisplay ||
+          DEFAULT_LOGO_DISPLAY_SETTINGS;
+        const manualUrl =
+          firestoreDoc?.selectedLogoUrl ||
+          (apiArtwork?.selectionMode === 'manual' ? apiArtwork?.logoUrl : null) ||
+          null;
+        const manualSource =
+          firestoreDoc?.selectedLogoSource || apiArtwork?.selectedLogoSource;
+        const manualLang =
+          firestoreDoc?.selectedLogoLanguage || apiArtwork?.selectedLogoLanguage;
 
         const resolved = resolveAnimeLogoSelection({
           availableLogos: mergedFanartLogos,
           customLogos: docCustomLogos,
           hiddenLogoIds: docHiddenIds,
           selectionMode: docMode,
-          manualLogoUrl: firestoreDoc?.selectedLogoUrl || null,
-          manualLogoSource: firestoreDoc?.selectedLogoSource,
-          manualLogoLanguage: firestoreDoc?.selectedLogoLanguage,
+          manualLogoUrl: manualUrl,
+          manualLogoSource: manualSource,
+          manualLogoLanguage: manualLang,
           logoDisplay: docDisplay,
           preferEnglish: true,
         });
 
-        setAvailableLogos(mergedFanartLogos);
+        setAvailableLogos(resolved.availableLogos);
         setCustomLogos(docCustomLogos);
         setHiddenLogoIds(docHiddenIds);
         setSelectionMode(resolved.selectionMode);
@@ -379,9 +420,16 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
     const prevLogoUrl = selectedLogoUrl;
     const prevSource = selectedLogoSource;
 
+    const updatedCustomLogos = params.nextCustomLogos.map((c) => ({
+      ...c,
+      selected:
+        params.nextSource === 'custom_upload' &&
+        (c.url === params.nextLogoUrl || c.proxyUrl === params.nextLogoUrl),
+    }));
+
     const resolved = resolveAnimeLogoSelection({
       availableLogos,
-      customLogos: params.nextCustomLogos,
+      customLogos: updatedCustomLogos,
       hiddenLogoIds: params.nextHiddenIds,
       selectionMode: params.nextMode,
       manualLogoUrl: params.nextLogoUrl || null,
@@ -401,8 +449,8 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
       selectedLogoSource: resolved.selectedLogoSource,
       selectedLogoLanguage: resolved.selectedLogoLanguage,
       selectionMode: resolved.selectionMode,
-      availableLogos,
-      customLogos: params.nextCustomLogos,
+      availableLogos: resolved.availableLogos,
+      customLogos: updatedCustomLogos,
       hiddenLogoIds: params.nextHiddenIds,
       logoDisplay: params.nextDisplay,
       logoStatus: resolved.logoStatus as AnimeLogoStatus,
@@ -437,7 +485,7 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
     setSelectedLogoUrl(resolved.logoUrl || '');
     setSelectedLogoSource(resolved.selectedLogoSource);
     setSelectedLogoLanguage(resolved.selectedLogoLanguage);
-    setCustomLogos(params.nextCustomLogos);
+    setCustomLogos(updatedCustomLogos);
     setHiddenLogoIds(params.nextHiddenIds);
     setLogoDisplay(params.nextDisplay);
     setReviewed(params.nextReviewed);
@@ -458,7 +506,7 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
         auditAction: 'select_logo',
         activityDescription: `Manually locked ${logo.category.toUpperCase()} (${logo.lang.toUpperCase()})`,
       });
-      showToast('Artwork configuration saved & synced to live hero banner.');
+      showToast('Fanart.tv logo selected & synced to live hero banner.');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to save logo');
     } finally {
@@ -499,20 +547,27 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
       throw new Error('You do not have permission to upload custom logos');
     }
 
-    // Step 1: Upload to Firebase Storage
-    const uploaded = await uploadCustomAnimeLogoFile({
-      hoshikaId,
-      file: payload.blob,
-      fileName: payload.fileName,
-      mimeType: payload.mimeType,
-      width: payload.width,
-      height: payload.height,
-    });
-
-    const nextCustomList = [uploaded, ...customLogos];
-
-    // Step 2: Persist metadata in Firestore; if Firestore fails, roll back the Storage file!
+    setSaving(true);
     try {
+      // Upload via secure server route to Supabase Storage ("aniscroll-artwork")
+      // with automatic Firestore metadata persistence and rollback protection
+      const { customLogo: uploaded } = await uploadCustomAnimeLogoFile({
+        hoshikaId,
+        anilistId: animeMeta.anilistId || undefined,
+        file: payload.blob,
+        fileName: payload.fileName,
+        mimeType: payload.mimeType,
+        width: payload.width,
+        height: payload.height,
+      });
+
+      const nextCustomList = [
+        { ...uploaded, selected: true },
+        ...customLogos
+          .filter((c) => c.id !== uploaded.id)
+          .map((c) => ({ ...c, selected: false })),
+      ];
+
       await persistArtworkState({
         nextMode: 'manual',
         nextLogoUrl: uploaded.url,
@@ -523,13 +578,11 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
         nextDisplay: logoDisplay,
         nextReviewed: true,
         auditAction: 'upload_logo',
-        activityDescription: `Uploaded & locked custom transparent logo (${uploaded.fileName})`,
+        activityDescription: `Uploaded & locked custom transparent logo to Supabase Storage (${uploaded.fileName})`,
       });
-      showToast('Custom logo uploaded and synced to live hero banner.');
-    } catch (firestoreErr) {
-      // Automatic transactional rollback of orphaned Firebase Storage object
-      await deleteCustomLogoFromStorage(uploaded.storagePath);
-      throw firestoreErr;
+      showToast(
+        'Custom logo uploaded to Supabase Storage and synced to live hero banner.'
+      );
     } finally {
       setSaving(false);
     }
@@ -539,9 +592,14 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
     if (!canDeleteLogos) return;
     setSaving(true);
     try {
-      await deleteCustomLogoFromStorage(logo.storagePath);
+      await deleteCustomLogoFromStorage(logo.storagePath, {
+        hoshikaId,
+        anilistId: animeMeta.anilistId || undefined,
+        logoId: logo.id,
+      });
       const nextCustomList = customLogos.filter((c) => c.id !== logo.id);
-      const wasActive = selectedLogoUrl === logo.url;
+      const wasActive =
+        selectedLogoUrl === logo.url || selectedLogoUrl === logo.proxyUrl;
 
       await persistArtworkState({
         nextMode: wasActive ? 'auto' : selectionMode,
@@ -553,9 +611,9 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
         nextDisplay: logoDisplay,
         nextReviewed: reviewed,
         auditAction: 'delete_logo',
-        activityDescription: `Deleted custom logo (${logo.fileName})`,
+        activityDescription: `Deleted custom logo from Supabase Storage (${logo.fileName})`,
       });
-      showToast('Custom logo deleted.');
+      showToast('Custom logo deleted from Supabase Storage.');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to delete custom logo');
     } finally {
@@ -593,20 +651,37 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
   };
 
   const handleResetToAuto = async () => {
+    setSaving(true);
     try {
+      const token = await auth.currentUser?.getIdToken();
+      if (token) {
+        await fetch('/api/admin/artwork', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({
+            action: 'reset_to_automatic',
+            hoshikaId,
+          }),
+        }).catch(() => {});
+      }
+
       await persistArtworkState({
         nextMode: 'auto',
         nextLogoUrl: '',
         nextSource: 'typography_fallback',
         nextLang: 'en',
-        nextCustomLogos: customLogos,
+        nextCustomLogos: customLogos.map((c) => ({ ...c, selected: false })),
         nextHiddenIds: hiddenLogoIds,
         nextDisplay: DEFAULT_LOGO_DISPLAY_SETTINGS,
         nextReviewed: true,
         auditAction: 'reset_auto',
-        activityDescription: 'Reset logo selection to Automatic English HDTV priority',
+        activityDescription:
+          'Reset logo selection to Automatic Fanart.tv priority',
       });
-      showToast('Reset to automatic English HDTV logo selection.');
+      showToast('Reset to automatic Fanart.tv logo selection.');
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to reset to auto');
     } finally {
@@ -1086,39 +1161,78 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
       {/* Custom Uploaded Logos Gallery */}
       {customLogos.length > 0 && (
         <div className="bg-[#0A0A0A] border border-[#292929] rounded-xl p-5 space-y-4">
-          <h3 className="text-sm font-bold text-white">
-            Custom Uploaded Logos ({customLogos.length})
-          </h3>
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+                <span>Custom Uploaded Logos ({customLogos.length})</span>
+                <span className="px-2 py-0.5 rounded bg-[#141414] border border-[#292929] text-[10px] font-mono text-[#A0A0A0]">
+                  SUPABASE STORAGE • aniscroll-artwork
+                </span>
+              </h3>
+              <p className="text-xs text-[#A0A0A0] mt-0.5">
+                Custom transparent PNG/WebP logos uploaded to Supabase Storage and referenced in Cloud Firestore.
+              </p>
+            </div>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
             {customLogos.map((custom) => {
               const isSelected =
                 selectedLogoSource === 'custom_upload' &&
-                selectedLogoUrl === custom.url;
+                (selectedLogoUrl === custom.url ||
+                  selectedLogoUrl === custom.proxyUrl ||
+                  Boolean(custom.selected));
               return (
                 <div
                   key={custom.id}
                   className={`rounded-xl border p-4 flex flex-col justify-between gap-3 transition-all ${
                     isSelected
-                      ? 'border-white bg-white/[0.06]'
-                      : 'border-[#292929] bg-[#141414]/60'
+                      ? 'border-white bg-white/[0.06] ring-1 ring-white/40'
+                      : 'border-[#292929] bg-[#141414]/60 hover:border-[#707070]'
                   }`}
                 >
-                  <div className="h-28 rounded-lg bg-[#050505] border border-[#292929] flex items-center justify-center p-4">
+                  <div className="flex items-center justify-between gap-2 text-[10px] font-mono">
+                    <div className="flex items-center gap-1.5">
+                      <span className="px-2 py-0.5 rounded bg-white text-black font-bold uppercase">
+                        CUSTOM UPLOAD
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-[#0A0A0A] border border-[#292929] text-[#A0A0A0] uppercase">
+                        {(custom.storageProvider || 'supabase').toUpperCase()}
+                      </span>
+                    </div>
+                    <span className="text-[#A0A0A0]">
+                      {custom.width}×{custom.height}px •{' '}
+                      {Math.max(1, Math.round((custom.fileSize || 1024) / 1024))}KB
+                    </span>
+                  </div>
+
+                  <div
+                    className={`h-28 rounded-lg border border-[#292929] flex items-center justify-center p-4 relative overflow-hidden ${
+                      previewCanvasBg === 'checkerboard'
+                        ? 'bg-[radial-gradient(#262626_1px,transparent_1px)] [background-size:12px_12px] bg-[#0B0B0B]'
+                        : 'bg-[#050505]'
+                    }`}
+                  >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={custom.url}
                       alt={custom.fileName}
-                      className="max-h-20 max-w-full object-contain"
+                      className="max-h-20 max-w-full object-contain drop-shadow-[0_4px_12px_rgba(0,0,0,0.85)]"
                     />
                   </div>
 
-                  <div className="flex items-center justify-between text-[11px] font-mono text-[#A0A0A0]">
-                    <span className="truncate max-w-[160px] text-white">
-                      {custom.fileName}
-                    </span>
-                    <span>
-                      {custom.width}×{custom.height}px
-                    </span>
+                  <div className="space-y-1 text-[11px] font-mono text-[#A0A0A0]">
+                    <div className="flex items-center justify-between">
+                      <span className="truncate max-w-[180px] text-white font-semibold">
+                        {custom.fileName}
+                      </span>
+                      <span className="uppercase">{custom.mimeType.replace('image/', '')}</span>
+                    </div>
+                    {custom.storagePath && (
+                      <div className="text-[10px] text-[#707070] truncate" title={custom.storagePath}>
+                        {custom.storagePath}
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -1133,7 +1247,7 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
                       }`}
                     >
                       <Check size={13} />
-                      <span>{isSelected ? 'Active Logo' : 'Use This Logo'}</span>
+                      <span>{isSelected ? 'Selected Custom Logo' : 'Use This Logo'}</span>
                     </button>
 
                     {canDeleteLogos && (
@@ -1142,7 +1256,7 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
                         disabled={saving}
                         onClick={() => handleDeleteCustomLogo(custom)}
                         className="p-2 rounded-lg bg-[#141414] border border-[#292929] text-[#A0A0A0] hover:text-white hover:border-white cursor-pointer"
-                        title="Delete from Firebase Storage"
+                        title="Delete from Supabase Storage"
                       >
                         <Trash2 size={14} />
                       </button>
@@ -1157,32 +1271,62 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
 
       {/* Fanart.tv Available Logos Grid */}
       <div className="bg-[#0A0A0A] border border-[#292929] rounded-xl p-5 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
-            <h3 className="text-sm font-bold text-white">
-              Available Fanart.tv Logos ({availableLogos.length})
+            <h3 className="text-sm font-bold text-white flex items-center gap-2">
+              <span>Available Fanart.tv Logos ({availableLogos.length})</span>
+              <span className="px-2 py-0.5 rounded bg-[#141414] border border-[#292929] text-[10px] font-mono text-[#A0A0A0]">
+                SHARED RESOLVER PIPELINE
+              </span>
             </h3>
             <p className="text-xs text-[#A0A0A0] mt-0.5">
-              Sorted by priority: English HDTVLogo → English ClearLogo → Japanese HDTVLogo → Japanese ClearLogo.
+              Sorted by priority: English HDTVLogo → English ClearLogo → Japanese HDTVLogo → Japanese ClearLogo → Other Languages.
             </p>
           </div>
 
-          {canManageArtwork && (
-            <button
-              type="button"
-              disabled={saving}
-              onClick={handleForceTypographyFallback}
-              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border cursor-pointer ${
-                selectedLogoSource === 'typography_fallback' &&
-                selectionMode === 'manual'
-                  ? 'bg-white text-black border-white'
-                  : 'bg-[#141414] border-[#292929] text-[#A0A0A0] hover:text-white'
-              }`}
-            >
-              <Type size={13} />
-              <span>Use Typography Title Fallback</span>
-            </button>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="inline-flex items-center rounded-lg bg-[#141414] border border-[#292929] p-0.5 text-[11px] font-mono">
+              <button
+                type="button"
+                onClick={() => setPreviewCanvasBg('checkerboard')}
+                className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                  previewCanvasBg === 'checkerboard'
+                    ? 'bg-white text-black font-bold'
+                    : 'text-[#A0A0A0] hover:text-white'
+                }`}
+              >
+                Checkerboard
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewCanvasBg('dark')}
+                className={`px-2.5 py-1 rounded-md transition-colors cursor-pointer ${
+                  previewCanvasBg === 'dark'
+                    ? 'bg-white text-black font-bold'
+                    : 'text-[#A0A0A0] hover:text-white'
+                }`}
+              >
+                Dark Canvas
+              </button>
+            </div>
+
+            {canManageArtwork && (
+              <button
+                type="button"
+                disabled={saving}
+                onClick={handleForceTypographyFallback}
+                className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border cursor-pointer ${
+                  selectedLogoSource === 'typography_fallback' &&
+                  selectionMode === 'manual'
+                    ? 'bg-white text-black border-white'
+                    : 'bg-[#141414] border-[#292929] text-[#A0A0A0] hover:text-white'
+                }`}
+              >
+                <Type size={13} />
+                <span>Use Typography Title Fallback</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {availableLogos.length === 0 ? (
@@ -1197,42 +1341,72 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
           </div>
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-            {availableLogos.map((logo) => {
+            {availableLogos.map((logo, idx) => {
               const targetUrl = logo.proxyUrl || logo.url;
               const isSelected =
-                selectedLogoUrl === targetUrl || selectedLogoUrl === logo.url;
+                selectedLogoSource !== 'custom_upload' &&
+                selectedLogoSource !== 'typography_fallback' &&
+                (selectedLogoUrl === targetUrl || selectedLogoUrl === logo.url);
               const isHidden = hiddenLogoIds.includes(logo.id);
+              const langCode = (logo.language || logo.lang || 'en').toUpperCase();
+              const logoType = logo.type || logo.category || 'hdtvlogo';
 
               return (
                 <div
                   key={logo.id}
+                  data-testid={`fanart-logo-card-${logo.id}`}
                   className={`rounded-xl border p-4 flex flex-col justify-between gap-3 transition-all ${
                     isSelected
-                      ? 'border-white bg-white/[0.06]'
+                      ? 'border-white bg-white/[0.06] ring-1 ring-white/40'
                       : isHidden
                       ? 'border-[#292929]/50 bg-[#0A0A0A] opacity-50'
                       : 'border-[#292929] bg-[#141414]/50 hover:border-[#707070]'
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-2 text-[11px] font-mono">
-                    <div className="flex items-center gap-1.5">
+                  <div className="flex items-center justify-between gap-2 text-[10px] font-mono">
+                    <div className="flex flex-wrap items-center gap-1.5">
                       <span className="px-2 py-0.5 rounded bg-white text-black font-bold uppercase">
-                        {logo.lang || 'EN'}
+                        {langCode}
                       </span>
                       <span className="px-2 py-0.5 rounded bg-[#0A0A0A] border border-[#292929] text-white uppercase">
-                        {logo.category}
+                        {logoType}
                       </span>
+                      <span className="px-2 py-0.5 rounded bg-[#141414] border border-[#292929] text-[#A0A0A0] uppercase">
+                        Fanart.tv
+                      </span>
+                      {idx === 0 && !isHidden && (
+                        <span className="px-1.5 py-0.5 rounded bg-white/15 text-white font-bold">
+                          #1 AUTO
+                        </span>
+                      )}
                     </div>
-                    <span className="text-[#A0A0A0]">{logo.likes} likes</span>
+                    <span className="text-[#A0A0A0] shrink-0">{logo.likes} likes</span>
                   </div>
 
-                  <div className="h-28 rounded-lg bg-[#050505] border border-[#292929] flex items-center justify-center p-4">
+                  <div
+                    className={`h-28 rounded-lg border border-[#292929] flex items-center justify-center p-4 relative overflow-hidden ${
+                      previewCanvasBg === 'checkerboard'
+                        ? 'bg-[radial-gradient(#262626_1px,transparent_1px)] [background-size:12px_12px] bg-[#0B0B0B]'
+                        : 'bg-[#050505]'
+                    }`}
+                  >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
                       src={targetUrl}
                       alt={logo.label || logo.id}
-                      className="max-h-20 max-w-full object-contain"
+                      className="max-h-20 max-w-full object-contain drop-shadow-[0_4px_12px_rgba(0,0,0,0.85)]"
                     />
+                  </div>
+
+                  <div className="flex items-center justify-between text-[11px] font-mono text-[#A0A0A0]">
+                    <span className="truncate">{logo.label || `${langCode} ${logoType}`}</span>
+                    <span className="text-white font-semibold">
+                      {isSelected
+                        ? selectionMode === 'manual'
+                          ? 'Selected (Manual)'
+                          : 'Selected (Auto)'
+                        : 'Available'}
+                    </span>
                   </div>
 
                   <div className="flex items-center gap-2">
@@ -1250,9 +1424,9 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
                       <span>
                         {isSelected
                           ? selectionMode === 'manual'
-                            ? 'Locked Manual'
-                            : 'Active (Auto)'
-                          : 'Select & Lock'}
+                            ? 'Selected & Locked'
+                            : 'Active (Auto) — Lock'
+                          : 'Select Logo'}
                       </span>
                     </button>
 

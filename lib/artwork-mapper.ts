@@ -9,9 +9,13 @@ import {
   getCachedArtwork,
   setCachedArtwork,
   getCachedArtworkOverride,
+  setCachedArtworkOverride,
 } from './artwork/artwork-cache';
 import { resolveAnimeLogoSelection } from './artwork/logo-selector';
 import { getHoshikaAnime } from './hoshika';
+import { resolveAnimeIds } from './id-mapper';
+import { AnimeArtworkFirestoreDoc } from './admin/admin-firestore';
+import firebaseAppletConfig from '../firebase-applet-config.json';
 
 // Allowed upstream artwork hosts for the secure image proxy
 export const ALLOWED_ARTWORK_PROXY_HOSTS = new Set([
@@ -385,7 +389,16 @@ export async function resolveAnimeArtwork(
     }
   }
 
-  const firestoreOverride = getCachedArtworkOverride(hoshikaId);
+  let firestoreOverride = bypassCache
+    ? undefined
+    : getCachedArtworkOverride(hoshikaId);
+
+  if (firestoreOverride === undefined && hoshikaId !== 99999) {
+    firestoreOverride = await fetchPublicArtworkOverrideRest(hoshikaId);
+    if (firestoreOverride !== undefined) {
+      setCachedArtworkOverride(hoshikaId, firestoreOverride);
+    }
+  }
 
   let anilistId = initialAnilistId || null;
   let tvdbId: number | null =
@@ -400,7 +413,21 @@ export async function resolveAnimeArtwork(
   let tmdbId: number | null = firestoreOverride?.tmdbId || initialTmdbId || null;
   let anilistBanner: string | null = null;
 
-  // Step 1: Resolve AniList ID and AniList banner if needed (skip external network calls in unit test ID 99999)
+  // Step 1: Resolve AniList ID via multi-title resolver + AniList banner if needed (skip external network calls in unit test ID 99999)
+  if (!tvdbId && !anilistId && hoshikaId !== 99999) {
+    try {
+      const idRes = await resolveAnimeIds(hoshikaId, resolvedItem);
+      if (idRes?.aniListId) {
+        anilistId = idRes.aniListId;
+        if (!tvdbId && HOSHIKA_TO_TVDB_MAP[anilistId]) {
+          tvdbId = HOSHIKA_TO_TVDB_MAP[anilistId];
+        }
+      }
+    } catch {
+      // Non-fatal fallback to resolveAnilistMetadata
+    }
+  }
+
   if (!tvdbId && (!anilistId || !hoshikaBanner) && hoshikaId !== 99999) {
     const anilistMeta = await resolveAnilistMetadata({ anilistId, malId, title });
     if (!anilistId && anilistMeta.anilistId) {
@@ -477,14 +504,33 @@ export async function resolveAnimeArtwork(
     }
   }
 
-  // Merge Fanart.tv available logos with any previously cached Firestore availableLogos
-  const mergedAvailableLogos =
-    fanartAvailableLogos.length > 0
-      ? fanartAvailableLogos
-      : (firestoreOverride?.availableLogos || []).map((item) => ({
-          ...item,
-          proxyUrl: toSafeArtworkUrl(item.url) || item.proxyUrl || item.url,
-        }));
+  // Merge Fanart.tv available logos with any previously stored Firestore availableLogos without dropping variants
+  const storedLogos: FanartLogoItem[] = (
+    firestoreOverride?.availableLogos || []
+  ).map((item) => {
+    const lang = (item.lang || item.language || 'en').toLowerCase();
+    const category =
+      item.category || (item.source === 'fanart_clearlogo' ? 'clearlogo' : 'hdtvlogo');
+    return {
+      ...item,
+      lang,
+      language: lang,
+      category,
+      type: category,
+      provider: 'fanart',
+      proxyUrl: toSafeArtworkUrl(item.url) || item.proxyUrl || item.url,
+    };
+  });
+
+  const combinedLogosMap = new Map<string, FanartLogoItem>();
+  for (const logo of [...fanartAvailableLogos, ...storedLogos]) {
+    if (!logo || !logo.url) continue;
+    const key = `${logo.category}:${logo.id || logo.url}:${logo.lang || 'en'}`;
+    if (!combinedLogosMap.has(key)) {
+      combinedLogosMap.set(key, logo);
+    }
+  }
+  const mergedAvailableLogos = Array.from(combinedLogosMap.values());
 
   // Resolve final logo using the 8-step priority selector (respects manual overrides for both TV & Movie)
   const logoResolution = resolveAnimeLogoSelection({
@@ -492,9 +538,11 @@ export async function resolveAnimeArtwork(
     customLogos: firestoreOverride?.customLogos || [],
     hiddenLogoIds: firestoreOverride?.hiddenLogoIds || [],
     selectionMode: firestoreOverride?.selectionMode || 'auto',
+    manualLogoId: firestoreOverride?.selectedLogo?.id || null,
     manualLogoUrl: firestoreOverride?.selectedLogoUrl || null,
     manualLogoSource: firestoreOverride?.selectedLogoSource,
     manualLogoLanguage: firestoreOverride?.selectedLogoLanguage,
+    selectedLogo: firestoreOverride?.selectedLogo || null,
     logoDisplay: firestoreOverride?.logoDisplay,
     preferEnglish,
   });
@@ -553,7 +601,9 @@ export async function resolveAnimeArtwork(
     posterUrl,
     source,
     fetchedAt: Date.now(),
+    logos: logoResolution.availableLogos,
     availableLogos: logoResolution.availableLogos,
+    selectedLogo: logoResolution.selectedLogo,
     customLogos: logoResolution.customLogos,
     hiddenLogoIds: logoResolution.hiddenLogoIds,
     selectionMode: logoResolution.selectionMode,
@@ -568,4 +618,78 @@ export async function resolveAnimeArtwork(
 
   setCachedArtwork(hoshikaId, finalResult);
   return finalResult;
+}
+
+function parseRestValue(valObj: Record<string, any>): any {
+  if (!valObj || typeof valObj !== 'object') return null;
+  if ('stringValue' in valObj) return valObj.stringValue;
+  if ('integerValue' in valObj) return Number(valObj.integerValue);
+  if ('doubleValue' in valObj) return Number(valObj.doubleValue);
+  if ('booleanValue' in valObj) return Boolean(valObj.booleanValue);
+  if ('nullValue' in valObj) return null;
+  if ('timestampValue' in valObj) return valObj.timestampValue;
+  if ('mapValue' in valObj) {
+    return parseRestFields(valObj.mapValue?.fields || {});
+  }
+  if ('arrayValue' in valObj) {
+    const values = valObj.arrayValue?.values || [];
+    return values.map((v: Record<string, any>) => parseRestValue(v));
+  }
+  return null;
+}
+
+function parseRestFields(
+  fields: Record<string, Record<string, any>>
+): Record<string, any> {
+  const result: Record<string, any> = {};
+  for (const [key, valObj] of Object.entries(fields)) {
+    result[key] = parseRestValue(valObj);
+  }
+  return result;
+}
+
+async function fetchPublicArtworkOverrideRest(
+  hoshikaId: number
+): Promise<AnimeArtworkFirestoreDoc | null | undefined> {
+  const projectId =
+    process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
+    firebaseAppletConfig.projectId;
+  const databaseId =
+    process.env.NEXT_PUBLIC_FIREBASE_DATABASE_ID ||
+    firebaseAppletConfig.firestoreDatabaseId ||
+    '(default)';
+
+  if (!projectId) return undefined;
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 3000);
+  try {
+    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      projectId
+    )}/databases/${encodeURIComponent(
+      databaseId
+    )}/documents/animeArtwork/${encodeURIComponent(String(hoshikaId))}`;
+
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: { Accept: 'application/json' },
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+
+    if (res.status === 404) {
+      return null;
+    }
+    if (!res.ok) {
+      return undefined;
+    }
+
+    const rawDoc = await res.json();
+    if (!rawDoc?.fields) return null;
+    return parseRestFields(rawDoc.fields) as AnimeArtworkFirestoreDoc;
+  } catch {
+    return undefined;
+  } finally {
+    clearTimeout(timeout);
+  }
 }

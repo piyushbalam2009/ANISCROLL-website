@@ -66,7 +66,7 @@ export function LogoSelector({
                 <span>Custom Uploaded Transparent Logos ({customLogos.length})</span>
               </h3>
               <p className="text-xs text-[#A0A0A0] mt-0.5">
-                Stored in Firebase Cloud Storage under /anime-logos/
+                Stored in Supabase Storage (aniscroll-artwork) under anime-logos/
               </p>
             </div>
           </div>

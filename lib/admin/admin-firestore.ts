@@ -13,8 +13,7 @@ import {
   limit,
   serverTimestamp,
 } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL, deleteObject } from 'firebase/storage';
-import { db, storage, auth } from '../firebase';
+import { db, auth } from '../firebase';
 import { OperationType, handleFirestoreError } from '../firestore';
 import {
   AdminRecord,
@@ -28,6 +27,7 @@ import {
   LogoDisplaySettings,
   DEFAULT_LOGO_DISPLAY_SETTINGS,
   AnimeLogoStatus,
+  SelectedLogoMetadata,
 } from '@/types/artwork';
 
 // ============================================================================
@@ -43,6 +43,7 @@ export interface AnimeArtworkFirestoreDoc {
   selectedLogoSource: 'fanart_hdtvlogo' | 'fanart_clearlogo' | 'custom_upload' | 'typography_fallback';
   selectedLogoLanguage: string;
   selectionMode: 'auto' | 'manual';
+  selectedLogo?: SelectedLogoMetadata | null;
   availableLogos: FanartLogoItem[];
   customLogos: CustomLogoItem[];
   hiddenLogoIds: string[];
@@ -360,6 +361,7 @@ export async function saveAnimeArtworkOverride(
     selectedLogoSource: input.selectedLogoSource || 'typography_fallback',
     selectedLogoLanguage: cleanString(input.selectedLogoLanguage, 16, 'en'),
     selectionMode: input.selectionMode || 'auto',
+    selectedLogo: input.selectedLogo || null,
     availableLogos: (input.availableLogos || []).slice(0, 60),
     customLogos: (input.customLogos || []).slice(0, 30),
     hiddenLogoIds: (input.hiddenLogoIds || []).slice(0, 100),
@@ -427,67 +429,99 @@ export async function saveAnimeArtworkOverride(
 }
 
 // ============================================================================
-// 3. FIREBASE STORAGE CUSTOM LOGO UPLOAD & DELETE
+// 3. SUPABASE STORAGE CUSTOM LOGO UPLOAD & DELETE (VIA SECURE NEXT.JS API)
 // ============================================================================
 
 export async function uploadCustomAnimeLogoFile(params: {
   hoshikaId: number;
+  anilistId?: number;
   file: Blob;
   fileName: string;
   mimeType: 'image/png' | 'image/webp';
   width: number;
   height: number;
-}): Promise<CustomLogoItem> {
+  selectImmediately?: boolean;
+}): Promise<{
+  customLogo: CustomLogoItem;
+  artworkDoc?: AnimeArtworkFirestoreDoc;
+}> {
   const user = auth.currentUser;
   if (!user) {
     throw new Error('Authentication required to upload custom logos');
   }
 
-  const safeName = params.fileName.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 80);
-  const ext = params.mimeType === 'image/webp' ? 'webp' : 'png';
-  const finalName = safeName.endsWith(`.${ext}`) ? safeName : `${safeName}.${ext}`;
-  const storagePath = `anime-logos/${params.hoshikaId}/${Date.now()}_${finalName}`;
-  const storageRef = ref(storage, storagePath);
+  const token = await user.getIdToken();
+  const formData = new FormData();
+  formData.append('file', params.file, params.fileName);
+  formData.append('hoshikaId', String(params.hoshikaId));
+  if (params.anilistId && params.anilistId > 0) {
+    formData.append('anilistId', String(params.anilistId));
+  }
+  formData.append('fileName', params.fileName);
+  formData.append('mimeType', params.mimeType);
+  formData.append('width', String(params.width));
+  formData.append('height', String(params.height));
+  formData.append(
+    'selectImmediately',
+    params.selectImmediately !== false ? 'true' : 'false'
+  );
 
-  await uploadBytes(storageRef, params.file, {
-    contentType: params.mimeType,
-    customMetadata: {
-      hoshikaId: String(params.hoshikaId),
-      uploadedBy: user.uid,
-      uploadedByEmail: user.email || '',
-      width: String(params.width),
-      height: String(params.height),
+  const res = await fetch('/api/admin/artwork/upload', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
     },
+    body: formData,
   });
 
-  const downloadUrl = await getDownloadURL(storageRef);
-  const nowIso = new Date().toISOString();
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok || !data?.customLogo) {
+    throw new Error(
+      data?.error || `Failed to upload custom logo (${res.status})`
+    );
+  }
 
   return {
-    id: `custom_${Date.now()}`,
-    storagePath,
-    url: downloadUrl,
-    proxyUrl: downloadUrl,
-    fileName: finalName,
-    fileSize: params.file.size,
-    width: params.width,
-    height: params.height,
-    mimeType: params.mimeType,
-    lang: 'en',
-    uploadedBy: user.uid,
-    uploadedByEmail: user.email || 'admin@aniscroll.app',
-    uploadedAt: nowIso,
+    customLogo: data.customLogo as CustomLogoItem,
+    artworkDoc: data.artworkDoc as AnimeArtworkFirestoreDoc | undefined,
   };
 }
 
-export async function deleteCustomLogoFromStorage(storagePath: string): Promise<void> {
-  if (!storagePath) return;
-  try {
-    const storageRef = ref(storage, storagePath);
-    await deleteObject(storageRef);
-  } catch (error) {
-    console.warn('Storage object deletion warning (may already be deleted):', error);
+export async function deleteCustomLogoFromStorage(
+  storagePath: string,
+  options?: { hoshikaId?: number; anilistId?: number; logoId?: string }
+): Promise<{ artworkDoc?: AnimeArtworkFirestoreDoc }> {
+  if (!storagePath) return {};
+  const user = auth.currentUser;
+  if (!user) {
+    throw new Error('Authentication required to delete custom logos');
   }
+
+  const token = await user.getIdToken();
+  const res = await fetch('/api/admin/artwork/delete', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify({
+      storagePath,
+      hoshikaId: options?.hoshikaId,
+      anilistId: options?.anilistId,
+      logoId: options?.logoId,
+    }),
+  });
+
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data?.ok) {
+    throw new Error(
+      data?.error || `Failed to delete custom logo (${res.status})`
+    );
+  }
+
+  return {
+    artworkDoc: data.artworkDoc as AnimeArtworkFirestoreDoc | undefined,
+  };
 }
 
 // ============================================================================

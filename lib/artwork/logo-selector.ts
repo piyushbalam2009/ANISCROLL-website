@@ -4,6 +4,7 @@ import {
   DEFAULT_LOGO_DISPLAY_SETTINGS,
   FanartLogoItem,
   LogoDisplaySettings,
+  SelectedLogoMetadata,
 } from '@/types/artwork';
 import { sortLogosByPriority } from '@/lib/fanart';
 
@@ -12,6 +13,7 @@ export interface LogoSelectionInput {
   customLogos?: CustomLogoItem[];
   hiddenLogoIds?: string[];
   selectionMode?: 'auto' | 'manual';
+  manualLogoId?: string | null;
   manualLogoUrl?: string | null;
   manualLogoSource?:
     | 'fanart_hdtvlogo'
@@ -19,12 +21,14 @@ export interface LogoSelectionInput {
     | 'custom_upload'
     | 'typography_fallback';
   manualLogoLanguage?: string;
+  selectedLogo?: SelectedLogoMetadata | null;
   logoDisplay?: LogoDisplaySettings;
   preferEnglish?: boolean;
 }
 
 export interface LogoSelectionResult {
   logoUrl: string | null;
+  selectedLogo: SelectedLogoMetadata | null;
   selectedLogoSource:
     | 'fanart_hdtvlogo'
     | 'fanart_clearlogo'
@@ -42,32 +46,48 @@ export interface LogoSelectionResult {
 }
 
 /**
- * Pure, deterministic logo selector enforcing the exact priority rules:
- * 1. Admin-selected logo (selectionMode === 'manual') -> NEVER overridden by automatic selection
- * 2. Fanart.tv English hdtvlogo
- * 3. Fanart.tv English clearlogo
- * 4. Fanart.tv Japanese hdtvlogo
- * 5. Fanart.tv Japanese clearlogo
- * 6. Other available Fanart.tv logos
- * 7. Hoshika title typography fallback (logoUrl: null)
+ * Pure, deterministic logo selector enforcing the exact 8-step priority rules:
+ * 1. Administrator-selected custom logo (selectionMode === 'manual', source === 'custom_upload')
+ * 2. Administrator-selected Fanart.tv logo (selectionMode === 'manual')
+ * 3. Automatic English Fanart.tv HDTV logo
+ * 4. Automatic English Fanart.tv clear logo
+ * 5. Automatic Japanese Fanart.tv HDTV logo
+ * 6. Automatic Japanese Fanart.tv clear logo
+ * 7. Other available Fanart.tv logos
+ * 8. Hoshika typography fallback (logoUrl: null)
  *
- * NOTE: AniZip logos are NEVER accepted or used anywhere in this selector.
+ * NOTE:
+ * - AniZip logos are NEVER accepted or used anywhere in this selector.
+ * - All valid Fanart.tv logos are preserved in `availableLogos` so the Admin Panel
+ *   always displays every single logo variant retrieved for the anime.
  */
-export function resolveAnimeLogoSelection(input: LogoSelectionInput): LogoSelectionResult {
+export function resolveAnimeLogoSelection(
+  input: LogoSelectionInput
+): LogoSelectionResult {
   const hiddenSet = new Set(input.hiddenLogoIds || []);
   const customLogos = input.customLogos || [];
   const preferEnglish = input.preferEnglish !== false;
 
-  // Filter out hidden Fanart logos and sort by priority
-  const visibleFanartLogos = sortLogosByPriority(
-    (input.availableLogos || []).filter((logo) => !hiddenSet.has(logo.id)),
+  // All valid Fanart logos sorted by priority (always returned in full for the Admin Panel)
+  const allSortedFanartLogos = sortLogosByPriority(
+    input.availableLogos || [],
     preferEnglish
   );
 
+  // Visible (non-hidden) Fanart logos used for automatic selection
+  const visibleFanartLogos = allSortedFanartLogos.filter(
+    (logo) => !hiddenSet.has(logo.id)
+  );
+
   const hasEnglishLogo =
-    visibleFanartLogos.some((l) => l.lang === 'en' || l.lang === '00' || l.lang === '') ||
-    customLogos.some((c) => c.lang === 'en');
-  const hasJapaneseLogo = visibleFanartLogos.some((l) => l.lang === 'ja');
+    visibleFanartLogos.some((l) => {
+      const lang = (l.lang || l.language || 'en').toLowerCase();
+      return lang === 'en' || lang === '00' || lang === '';
+    }) || customLogos.some((c) => (c.lang || 'en').toLowerCase() === 'en');
+
+  const hasJapaneseLogo = visibleFanartLogos.some(
+    (l) => (l.lang || l.language || '').toLowerCase() === 'ja'
+  );
 
   const logoDisplay: LogoDisplaySettings = {
     width: input.logoDisplay?.width || DEFAULT_LOGO_DISPLAY_SETTINGS.width,
@@ -80,19 +100,39 @@ export function resolveAnimeLogoSelection(input: LogoSelectionInput): LogoSelect
       DEFAULT_LOGO_DISPLAY_SETTINGS.verticalPosition,
   };
 
-  // 1. Admin-selected manual override ALWAYS takes top priority and is never overridden
+  // 1 & 2. Administrator-selected manual override ALWAYS takes top priority and is never overridden
   if (input.selectionMode === 'manual') {
+    const manualUrl = (
+      input.manualLogoUrl ||
+      input.selectedLogo?.proxyUrl ||
+      input.selectedLogo?.url ||
+      ''
+    ).trim();
+    const manualId = input.manualLogoId || input.selectedLogo?.id || null;
+
     if (
       input.manualLogoSource === 'typography_fallback' ||
-      !input.manualLogoUrl ||
-      !input.manualLogoUrl.trim()
+      input.selectedLogo?.source === 'typography' ||
+      (!manualUrl && !manualId)
     ) {
       return {
         logoUrl: null,
+        selectedLogo: {
+          source: 'typography',
+          logoSource: 'typography_fallback',
+          url: '',
+          proxyUrl: '',
+          type: 'typography',
+          language: input.manualLogoLanguage || 'en',
+          storageProvider: 'none',
+          selectedAt: input.selectedLogo?.selectedAt || new Date().toISOString(),
+          selectedBy: input.selectedLogo?.selectedBy,
+          selectedByEmail: input.selectedLogo?.selectedByEmail,
+        },
         selectedLogoSource: 'typography_fallback',
         selectedLogoLanguage: input.manualLogoLanguage || 'en',
         selectionMode: 'manual',
-        availableLogos: visibleFanartLogos,
+        availableLogos: allSortedFanartLogos,
         customLogos,
         hiddenLogoIds: Array.from(hiddenSet),
         logoDisplay,
@@ -102,31 +142,109 @@ export function resolveAnimeLogoSelection(input: LogoSelectionInput): LogoSelect
       };
     }
 
-    const manualUrl = input.manualLogoUrl.trim();
-    const isCustom =
-      input.manualLogoSource === 'custom_upload' ||
-      customLogos.some((c) => c.url === manualUrl || c.proxyUrl === manualUrl);
+    // Check if the manual selection matches one of the custom uploaded logos
+    const matchedCustom = customLogos.find(
+      (c) =>
+        (manualId && c.id === manualId) ||
+        (manualUrl &&
+          (c.url === manualUrl ||
+            c.proxyUrl === manualUrl ||
+            c.logoUrl === manualUrl))
+    );
+
+    if (matchedCustom || input.manualLogoSource === 'custom_upload') {
+      const effectiveUrl =
+        matchedCustom?.url || matchedCustom?.proxyUrl || manualUrl;
+      const effectiveLang =
+        matchedCustom?.lang || input.manualLogoLanguage || 'en';
+      return {
+        logoUrl: effectiveUrl,
+        selectedLogo: {
+          id: matchedCustom?.id || manualId || undefined,
+          source: 'custom',
+          logoSource: 'custom_upload',
+          url: matchedCustom?.url || effectiveUrl,
+          proxyUrl: matchedCustom?.proxyUrl || effectiveUrl,
+          type: 'custom',
+          language: effectiveLang,
+          storageProvider: matchedCustom?.storageProvider === 'supabase' ? 'supabase' : 'supabase',
+          storageBucket: matchedCustom?.storageBucket,
+          storagePath: matchedCustom?.storagePath,
+          selectedAt:
+            input.selectedLogo?.selectedAt ||
+            matchedCustom?.updatedAt ||
+            matchedCustom?.uploadedAt ||
+            new Date().toISOString(),
+          selectedBy: input.selectedLogo?.selectedBy || matchedCustom?.uploadedBy,
+          selectedByEmail:
+            input.selectedLogo?.selectedByEmail || matchedCustom?.uploadedByEmail,
+        },
+        selectedLogoSource: 'custom_upload',
+        selectedLogoLanguage: effectiveLang,
+        selectionMode: 'manual',
+        availableLogos: allSortedFanartLogos,
+        customLogos,
+        hiddenLogoIds: Array.from(hiddenSet),
+        logoDisplay,
+        logoStatus: 'custom_override',
+        hasEnglishLogo,
+        hasJapaneseLogo,
+      };
+    }
+
+    // Check if the manual selection matches one of the Fanart.tv logo candidates
+    const matchedFanart = allSortedFanartLogos.find(
+      (l) =>
+        (manualId && l.id === manualId) ||
+        (manualUrl && (l.url === manualUrl || l.proxyUrl === manualUrl))
+    );
+
+    const effectiveLogoUrl = matchedFanart
+      ? matchedFanart.proxyUrl || matchedFanart.url
+      : manualUrl;
+    const effectiveRawUrl = matchedFanart ? matchedFanart.url : manualUrl;
+    const effectiveSource =
+      matchedFanart?.source || input.manualLogoSource || 'fanart_hdtvlogo';
+    const effectiveLang =
+      matchedFanart?.lang ||
+      matchedFanart?.language ||
+      input.manualLogoLanguage ||
+      'en';
+    const effectiveCategory =
+      matchedFanart?.category ||
+      (effectiveSource === 'fanart_clearlogo' ? 'clearlogo' : 'hdtvlogo');
 
     return {
-      logoUrl: manualUrl,
-      selectedLogoSource: isCustom
-        ? 'custom_upload'
-        : input.manualLogoSource || 'fanart_hdtvlogo',
-      selectedLogoLanguage: input.manualLogoLanguage || 'en',
+      logoUrl: effectiveLogoUrl,
+      selectedLogo: {
+        id: matchedFanart?.id || manualId || undefined,
+        source: 'fanart',
+        logoSource: effectiveSource,
+        url: effectiveRawUrl,
+        proxyUrl: effectiveLogoUrl,
+        type: effectiveCategory === 'clearlogo' ? 'clearlogo' : 'hdtvlogo',
+        language: effectiveLang,
+        storageProvider: 'fanart',
+        selectedAt: input.selectedLogo?.selectedAt || new Date().toISOString(),
+        selectedBy: input.selectedLogo?.selectedBy,
+        selectedByEmail: input.selectedLogo?.selectedByEmail,
+      },
+      selectedLogoSource: effectiveSource,
+      selectedLogoLanguage: effectiveLang,
       selectionMode: 'manual',
-      availableLogos: visibleFanartLogos,
+      availableLogos: allSortedFanartLogos,
       customLogos,
       hiddenLogoIds: Array.from(hiddenSet),
       logoDisplay,
-      logoStatus: isCustom ? 'custom_override' : 'valid',
+      logoStatus: 'valid',
       hasEnglishLogo,
       hasJapaneseLogo,
     };
   }
 
-  // 2. Automatic priority selection from Fanart.tv candidates
+  // 3–7. Automatic priority selection from Fanart.tv candidates
   if (visibleFanartLogos.length > 0) {
-    const topLogo = visibleFanartLogos[0];
+    const topLogo = visibleFanartLogos[0]!;
     let logoStatus: AnimeLogoStatus = 'valid';
     if (!hasEnglishLogo && hasJapaneseLogo) {
       logoStatus = 'japanese_only';
@@ -134,12 +252,26 @@ export function resolveAnimeLogoSelection(input: LogoSelectionInput): LogoSelect
       logoStatus = 'no_english';
     }
 
+    const effectiveUrl = topLogo.proxyUrl || topLogo.url;
+    const effectiveLang = topLogo.lang || topLogo.language || 'en';
+
     return {
-      logoUrl: topLogo.proxyUrl || topLogo.url,
+      logoUrl: effectiveUrl,
+      selectedLogo: {
+        id: topLogo.id,
+        source: 'fanart',
+        logoSource: topLogo.source,
+        url: topLogo.url,
+        proxyUrl: effectiveUrl,
+        type: topLogo.category === 'clearlogo' ? 'clearlogo' : 'hdtvlogo',
+        language: effectiveLang,
+        storageProvider: 'fanart',
+        selectedAt: new Date().toISOString(),
+      },
       selectedLogoSource: topLogo.source,
-      selectedLogoLanguage: topLogo.lang || 'en',
+      selectedLogoLanguage: effectiveLang,
       selectionMode: 'auto',
-      availableLogos: visibleFanartLogos,
+      availableLogos: allSortedFanartLogos,
       customLogos,
       hiddenLogoIds: Array.from(hiddenSet),
       logoDisplay,
@@ -149,15 +281,31 @@ export function resolveAnimeLogoSelection(input: LogoSelectionInput): LogoSelect
     };
   }
 
-  // 3. If no Fanart.tv logo exists, check if a custom uploaded logo exists
-  if (customLogos.length > 0) {
-    const latestCustom = customLogos[customLogos.length - 1];
+  // Fallback if no Fanart.tv logo exists but a custom uploaded logo is explicitly marked selected
+  const selectedCustom = customLogos.find((c) => c.selected);
+  if (selectedCustom) {
+    const effectiveUrl = selectedCustom.proxyUrl || selectedCustom.url;
     return {
-      logoUrl: latestCustom.proxyUrl || latestCustom.url,
+      logoUrl: effectiveUrl,
+      selectedLogo: {
+        id: selectedCustom.id,
+        source: 'custom',
+        logoSource: 'custom_upload',
+        url: selectedCustom.url,
+        proxyUrl: effectiveUrl,
+        type: 'custom',
+        language: selectedCustom.lang || 'en',
+        storageProvider: 'supabase',
+        storageBucket: selectedCustom.storageBucket,
+        storagePath: selectedCustom.storagePath,
+        selectedAt: selectedCustom.updatedAt || selectedCustom.uploadedAt,
+        selectedBy: selectedCustom.uploadedBy,
+        selectedByEmail: selectedCustom.uploadedByEmail,
+      },
       selectedLogoSource: 'custom_upload',
-      selectedLogoLanguage: latestCustom.lang || 'en',
+      selectedLogoLanguage: selectedCustom.lang || 'en',
       selectionMode: 'auto',
-      availableLogos: visibleFanartLogos,
+      availableLogos: allSortedFanartLogos,
       customLogos,
       hiddenLogoIds: Array.from(hiddenSet),
       logoDisplay,
@@ -167,13 +315,14 @@ export function resolveAnimeLogoSelection(input: LogoSelectionInput): LogoSelect
     };
   }
 
-  // 4. Hoshika title typography fallback
+  // 8. Hoshika title typography fallback
   return {
     logoUrl: null,
+    selectedLogo: null,
     selectedLogoSource: 'typography_fallback',
     selectedLogoLanguage: 'en',
     selectionMode: 'auto',
-    availableLogos: [],
+    availableLogos: allSortedFanartLogos,
     customLogos,
     hiddenLogoIds: Array.from(hiddenSet),
     logoDisplay,
@@ -233,4 +382,3 @@ export function getLogoDisplayTailwindClasses(
 
   return `${widthClass} ${scaleClass} ${translateXClass} ${translateYClass}`.trim();
 }
-

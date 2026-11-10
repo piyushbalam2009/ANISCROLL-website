@@ -12,7 +12,6 @@ import {
   doc,
   getDocFromServer,
 } from 'firebase/firestore';
-import { getStorage, FirebaseStorage } from 'firebase/storage';
 import firebaseAppletConfig from '../firebase-applet-config.json';
 
 const firebaseConfig = {
@@ -43,8 +42,6 @@ export const db: Firestore = getFirestore(
 );
 
 export const auth: Auth = getAuth(app);
-
-export const storage: FirebaseStorage = getStorage(app);
 
 export const googleProvider = new GoogleAuthProvider();
 googleProvider.setCustomParameters({ prompt: 'select_account' });
