@@ -72,6 +72,10 @@ export interface HoshikaAnimeItem {
   relations?: HoshikaRelation[];
   nextEpisodeNumber?: number | null;
   nextEpisodeAiringAt?: string | null;
+  anilistId?: number | null;
+  malId?: number | null;
+  thetvdbId?: string | number | null;
+  themoviedbId?: string | number | null;
 }
 
 export interface HoshikaEpisodeItem {

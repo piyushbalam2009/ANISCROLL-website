@@ -7,6 +7,8 @@ import { Play, Info, Bookmark, Star, Tv } from 'lucide-react';
 import { HoshikaAnimeItem } from '@/types/anime';
 import { AnimeArtworkResult } from '@/types/artwork';
 import { isInWatchlist, toggleWatchlist } from '@/lib/storage';
+import { useRealtimeArtworkOverride } from '@/hooks/useRealtimeArtworkOverride';
+import { getLogoDisplayTailwindClasses } from '@/lib/artwork/logo-selector';
 
 interface CinematicHeroBannerProps {
   anime: HoshikaAnimeItem;
@@ -18,7 +20,7 @@ interface CinematicHeroBannerProps {
 
 export function CinematicHeroBanner({
   anime,
-  artwork,
+  artwork: initialArtwork,
   mode = 'home',
   priority = true,
   children,
@@ -26,6 +28,12 @@ export function CinematicHeroBanner({
   const [inWatchlist, setInWatchlist] = useState(false);
   const [logoError, setLogoError] = useState(false);
   const [bgError, setBgError] = useState(false);
+
+  const artwork = useRealtimeArtworkOverride(anime.shortId, initialArtwork, anime.format);
+
+  useEffect(() => {
+    setLogoError(false);
+  }, [artwork?.logoUrl]);
 
   const title =
     anime.titleEnglish ||
@@ -57,8 +65,9 @@ export function CinematicHeroBanner({
     ? artwork?.backgroundUrl || anime.bannerImage || anime.coverImage
     : anime.bannerImage || anime.coverImage;
 
-  // Logo: Fanart.tv hdtvlogo / clearlogo -> Typography fallback
+  // Logo: Fanart.tv hdtvlogo / clearlogo / custom override -> Typography fallback
   const hasLogo = !logoError && Boolean(artwork?.logoUrl);
+  const logoSizingClasses = getLogoDisplayTailwindClasses(artwork?.logoDisplay, 'home');
 
   const scoreDisplay = anime.averageScore
     ? anime.averageScore >= 10
@@ -98,7 +107,7 @@ export function CinematicHeroBanner({
         {/* Transparent Fanart.tv Title Logo */}
         <div className="mb-1">
           {hasLogo ? (
-            <div className="relative w-full max-w-[340px] sm:max-w-[440px] md:max-w-[520px] h-20 sm:h-24 md:h-28 lg:h-32 filter drop-shadow-[0_4px_24px_rgba(0,0,0,0.95)]">
+            <div className={`relative w-full ${logoSizingClasses} filter drop-shadow-[0_4px_24px_rgba(0,0,0,0.95)] transition-transform duration-300`}>
               <Image
                 src={artwork!.logoUrl!}
                 alt={title}
@@ -151,11 +160,11 @@ export function CinematicHeroBanner({
           </div>
         </div>
 
-        {/* Action Buttons: View Details (Purple pill from screenshot) + Watch Episode 1 */}
+        {/* Action Buttons: View Details (Monochrome White Pill) + Watch Episode 1 */}
         <div className="flex flex-wrap items-center gap-3 pt-3">
           <Link
             href={`/anime/${anime.shortId}`}
-            className="inline-flex items-center gap-2.5 px-6 sm:px-7 py-3 sm:py-3.5 rounded-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white font-semibold text-xs sm:text-sm transition-all shadow-xl shadow-purple-950/40 active:scale-95"
+            className="inline-flex items-center gap-2.5 px-6 sm:px-7 py-3 sm:py-3.5 rounded-full bg-white hover:bg-neutral-200 text-black font-bold text-xs sm:text-sm transition-all shadow-xl shadow-black/50 active:scale-95"
           >
             <Play size={16} fill="currentColor" />
             <span>View Details</span>

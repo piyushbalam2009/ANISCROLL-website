@@ -1,0 +1,449 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Authenticated user profile details stored under /users/{uid}/profile/details",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the account owner"
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "User display name"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 256,
+          "description": "User email address"
+        },
+        "photoURL": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "User profile avatar URL"
+        },
+        "provider": {
+          "type": "string",
+          "enum": ["password", "google"],
+          "maxLength": 32,
+          "description": "Authentication provider used"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "disabled", "banned"],
+          "maxLength": 32,
+          "description": "Account moderation status"
+        },
+        "accountStatus": {
+          "type": "string",
+          "enum": ["active", "disabled", "banned"],
+          "maxLength": 32,
+          "description": "Account moderation status alias"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["user", "admin", "owner"],
+          "maxLength": 32,
+          "description": "Display role label"
+        },
+        "migrationCompleted": {
+          "type": "boolean",
+          "description": "Whether initial localStorage to Firestore migration has completed"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of profile creation"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp of last profile update"
+        }
+      },
+      "required": ["uid", "displayName", "email", "photoURL", "provider", "createdAt", "updatedAt"]
+    },
+    "WatchlistItem": {
+      "title": "WatchlistItem",
+      "description": "Saved anime entry in a user's personal watchlist",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "hoshikaId": { "type": "number" },
+        "anilistId": { "type": "number" },
+        "title": { "type": "string", "maxLength": 300 },
+        "coverImage": { "type": "string", "maxLength": 1024 },
+        "format": { "type": "string", "maxLength": 40 },
+        "rating": { "type": "number" },
+        "seasonYear": { "type": "number" },
+        "status": {
+          "type": "string",
+          "enum": ["watching", "plan_to_watch", "completed", "on_hold", "dropped"],
+          "maxLength": 40
+        },
+        "addedAt": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "hoshikaId", "title", "addedAt", "createdAt", "updatedAt"]
+    },
+    "ContinueWatchingItem": {
+      "title": "ContinueWatchingItem",
+      "description": "Active playback position for resuming an anime episode",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "hoshikaId": { "type": "number" },
+        "anilistId": { "type": "number" },
+        "title": { "type": "string", "maxLength": 300 },
+        "episodeNumber": { "type": "number" },
+        "currentTime": { "type": "number" },
+        "duration": { "type": "number" },
+        "coverImage": { "type": "string", "maxLength": 1024 },
+        "bannerImage": { "type": "string", "maxLength": 1024 },
+        "episodeTitle": { "type": "string", "maxLength": 300 },
+        "audioType": { "type": "string", "enum": ["sub", "dub"], "maxLength": 20 },
+        "timestamp": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "hoshikaId", "title", "episodeNumber", "currentTime", "duration", "timestamp", "createdAt", "updatedAt"]
+    },
+    "WatchHistoryItem": {
+      "title": "WatchHistoryItem",
+      "description": "Historical record of a watched anime episode",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "hoshikaId": { "type": "number" },
+        "anilistId": { "type": "number" },
+        "title": { "type": "string", "maxLength": 300 },
+        "coverImage": { "type": "string", "maxLength": 1024 },
+        "bannerImage": { "type": "string", "maxLength": 1024 },
+        "episodeNumber": { "type": "number" },
+        "episodeTitle": { "type": "string", "maxLength": 300 },
+        "currentTime": { "type": "number" },
+        "duration": { "type": "number" },
+        "status": { "type": "string", "enum": ["watching", "completed"], "maxLength": 40 },
+        "timestamp": { "type": "number" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "hoshikaId", "title", "episodeNumber", "currentTime", "duration", "status", "timestamp", "createdAt", "updatedAt"]
+    },
+    "UserPreferencesDoc": {
+      "title": "UserPreferencesDoc",
+      "description": "User playback and interface preferences",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "theme": { "type": "string", "enum": ["monochrome"], "maxLength": 40 },
+        "defaultAudio": { "type": "string", "enum": ["sub", "dub"], "maxLength": 20 },
+        "defaultQuality": { "type": "string", "enum": ["auto", "1080p", "720p", "480p"], "maxLength": 20 },
+        "autoPlayNext": { "type": "boolean" },
+        "autoSkipIntro": { "type": "boolean" },
+        "autoSkipOutro": { "type": "boolean" },
+        "sidebarCollapsed": { "type": "boolean" },
+        "compactCards": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "theme", "defaultAudio", "defaultQuality", "autoPlayNext", "autoSkipIntro", "autoSkipOutro", "sidebarCollapsed", "compactCards", "createdAt", "updatedAt"]
+    },
+    "AdminRecord": {
+      "title": "AdminRecord",
+      "description": "Administrator role and granular permissions stored under /admins/{uid}",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "email": { "type": "string", "maxLength": 256 },
+        "displayName": { "type": "string", "maxLength": 120 },
+        "role": {
+          "type": "string",
+          "enum": ["owner", "administrator", "editor", "analyst"],
+          "maxLength": 32
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "invited", "revoked"],
+          "maxLength": 32
+        },
+        "permissions": { "type": "object" },
+        "addedBy": { "type": "string", "maxLength": 256 },
+        "addedAt": { "type": "string", "maxLength": 64 },
+        "lastLogin": { "type": "string", "maxLength": 64 },
+        "invitedBy": { "type": "string", "maxLength": 256 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "displayName", "role", "status", "permissions", "createdAt", "updatedAt"]
+    },
+    "AnimeArtworkDoc": {
+      "title": "AnimeArtworkDoc",
+      "description": "Anime logo selection, custom logo metadata, and presentation settings stored under /animeArtwork/{animeId}",
+      "type": "object",
+      "properties": {
+        "hoshikaId": { "type": "number" },
+        "anilistId": { "type": "number" },
+        "tvdbId": { "type": "number" },
+        "tmdbId": { "type": "number" },
+        "title": { "type": "string", "maxLength": 300 },
+        "selectedLogoUrl": { "type": "string", "maxLength": 2048 },
+        "selectedLogoSource": {
+          "type": "string",
+          "enum": ["fanart_hdtvlogo", "fanart_clearlogo", "custom_upload", "typography_fallback"],
+          "maxLength": 64
+        },
+        "selectedLogoLanguage": { "type": "string", "maxLength": 16 },
+        "selectionMode": { "type": "string", "enum": ["manual", "auto"], "maxLength": 20 },
+        "availableLogos": { "type": "array" },
+        "customLogos": { "type": "array" },
+        "hiddenLogoIds": { "type": "array" },
+        "logoDisplay": { "type": "object" },
+        "logoStatus": {
+          "type": "string",
+          "enum": [
+            "valid",
+            "missing",
+            "japanese_only",
+            "no_english",
+            "low_resolution",
+            "broken",
+            "typography_fallback",
+            "custom_override"
+          ],
+          "maxLength": 40
+        },
+        "backgroundUrl": { "type": "string", "maxLength": 2048 },
+        "posterUrl": { "type": "string", "maxLength": 2048 },
+        "hasEnglishLogo": { "type": "boolean" },
+        "hasJapaneseLogo": { "type": "boolean" },
+        "reviewed": { "type": "boolean" },
+        "updatedBy": { "type": "string", "maxLength": 128 },
+        "updatedByEmail": { "type": "string", "maxLength": 256 },
+        "lastChecked": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["hoshikaId", "title", "selectionMode", "logoStatus", "updatedBy", "createdAt", "updatedAt"]
+    },
+    "ArtworkAuditLog": {
+      "title": "ArtworkAuditLog",
+      "description": "Immutable audit log entry for anime logo changes under /artworkAuditLogs/{logId}",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "hoshikaId": { "type": "number" },
+        "animeTitle": { "type": "string", "maxLength": 300 },
+        "previousLogoUrl": { "type": "string", "maxLength": 2048 },
+        "newLogoUrl": { "type": "string", "maxLength": 2048 },
+        "previousSource": { "type": "string", "maxLength": 64 },
+        "newSource": { "type": "string", "maxLength": 64 },
+        "selectionMode": { "type": "string", "enum": ["auto", "manual"], "maxLength": 20 },
+        "action": {
+          "type": "string",
+          "enum": [
+            "select_logo",
+            "upload_logo",
+            "delete_logo",
+            "reset_auto",
+            "restore_previous",
+            "update_display",
+            "hide_logo",
+            "mark_reviewed"
+          ],
+          "maxLength": 40
+        },
+        "changedByUid": { "type": "string", "maxLength": 128 },
+        "changedByEmail": { "type": "string", "maxLength": 256 },
+        "timestamp": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "hoshikaId", "animeTitle", "action", "changedByUid", "changedByEmail", "timestamp", "createdAt"]
+    },
+    "AdminActivityLog": {
+      "title": "AdminActivityLog",
+      "description": "Immutable system-wide administrator activity log under /adminActivityLogs/{logId}",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "adminUid": { "type": "string", "maxLength": 128 },
+        "adminEmail": { "type": "string", "maxLength": 256 },
+        "category": {
+          "type": "string",
+          "enum": ["artwork", "users", "anime", "announcements", "admins", "settings", "security", "scanner"],
+          "maxLength": 40
+        },
+        "action": { "type": "string", "maxLength": 120 },
+        "targetId": { "type": "string", "maxLength": 128 },
+        "targetName": { "type": "string", "maxLength": 300 },
+        "details": { "type": "string", "maxLength": 2000 },
+        "timestamp": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "adminUid", "adminEmail", "category", "action", "targetId", "targetName", "timestamp", "createdAt"]
+    },
+    "AnnouncementDoc": {
+      "title": "AnnouncementDoc",
+      "description": "Website announcements and maintenance notices stored under /announcements/{announcementId}",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 200 },
+        "message": { "type": "string", "maxLength": 2000 },
+        "type": {
+          "type": "string",
+          "enum": ["feature", "maintenance", "notice", "alert"],
+          "maxLength": 32
+        },
+        "status": {
+          "type": "string",
+          "enum": ["draft", "published", "scheduled"],
+          "maxLength": 32
+        },
+        "dismissible": { "type": "boolean" },
+        "ctaText": { "type": "string", "maxLength": 80 },
+        "ctaLink": { "type": "string", "maxLength": 512 },
+        "startsAt": { "type": "string", "maxLength": 64 },
+        "expiresAt": { "type": "string", "maxLength": 64 },
+        "createdByUid": { "type": "string", "maxLength": 128 },
+        "createdByEmail": { "type": "string", "maxLength": 256 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "title", "message", "type", "status", "createdByUid", "createdByEmail", "createdAt", "updatedAt"]
+    },
+    "AnimeManagementDoc": {
+      "title": "AnimeManagementDoc",
+      "description": "Curated homepage featured anime, collections, and promotional banners under /animeManagement/{docId}",
+      "type": "object",
+      "properties": {
+        "configId": { "type": "string", "maxLength": 128 },
+        "featuredAnimeIds": { "type": "array" },
+        "featuredAnime": { "type": "array" },
+        "pinnedSeasonalIds": { "type": "array" },
+        "pinnedSeasonal": { "type": "array" },
+        "collections": { "type": "array" },
+        "promoBanner": { "type": "object" },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "updatedByEmail": { "type": "string", "maxLength": 256 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["configId", "featuredAnimeIds", "pinnedSeasonalIds", "collections", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "SiteConfigDoc": {
+      "title": "SiteConfigDoc",
+      "description": "Global site, artwork defaults, and scanner status configuration under /siteConfig/{docId}",
+      "type": "object",
+      "properties": {
+        "configId": { "type": "string", "maxLength": 128 },
+        "siteName": { "type": "string", "maxLength": 120 },
+        "siteDescription": { "type": "string", "maxLength": 500 },
+        "preferEnglishLogos": { "type": "boolean" },
+        "autoArtworkScan": { "type": "boolean" },
+        "artworkCacheTtlMinutes": { "type": "number" },
+        "maintenanceMode": { "type": "boolean" },
+        "require2FAForAdmins": { "type": "boolean" },
+        "sessionTimeoutMinutes": { "type": "number" },
+        "updatedByUid": { "type": "string", "maxLength": 128 },
+        "updatedByEmail": { "type": "string", "maxLength": 256 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["configId", "siteName", "preferEnglishLogos", "autoArtworkScan", "artworkCacheTtlMinutes", "maintenanceMode", "updatedByUid", "createdAt", "updatedAt"]
+    },
+    "StreamingMonitorLog": {
+      "title": "StreamingMonitorLog",
+      "description": "Real streaming probe and playback error events under /streamingLogs/{logId}",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "provider": { "type": "string", "maxLength": 64 },
+        "endpoint": { "type": "string", "maxLength": 512 },
+        "status": { "type": "string", "enum": ["operational", "degraded", "outage"], "maxLength": 32 },
+        "responseTimeMs": { "type": "number" },
+        "statusCode": { "type": "number" },
+        "errorMessage": { "type": "string", "maxLength": 1024 },
+        "checkedAt": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "provider", "endpoint", "status", "responseTimeMs", "statusCode", "checkedAt", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}/profile/{docId}": {
+      "schema": "UserProfile",
+      "description": "Stores user profile details under docId = details"
+    },
+    "/users/{uid}/watchlist/{animeId}": {
+      "schema": "WatchlistItem",
+      "description": "Stores user watchlist entries keyed by animeId"
+    },
+    "/users/{uid}/continueWatching/{animeId}": {
+      "schema": "ContinueWatchingItem",
+      "description": "Stores in-progress episode playback positions keyed by animeId"
+    },
+    "/users/{uid}/watchHistory/{historyId}": {
+      "schema": "WatchHistoryItem",
+      "description": "Stores episode watch history entries keyed by animeId_episodeNumber"
+    },
+    "/users/{uid}/preferences/{docId}": {
+      "schema": "UserPreferencesDoc",
+      "description": "Stores user playback and interface preferences under docId = settings"
+    },
+    "/admins/{uid}": {
+      "schema": "AdminRecord",
+      "description": "Stores administrator roles and granular permissions keyed by Firebase UID"
+    },
+    "/animeArtwork/{animeId}": {
+      "schema": "AnimeArtworkDoc",
+      "description": "Stores anime logo overrides, custom logos, and presentation settings keyed by Hoshika shortId"
+    },
+    "/artworkAuditLogs/{logId}": {
+      "schema": "ArtworkAuditLog",
+      "description": "Immutable audit log for anime logo actions"
+    },
+    "/adminActivityLogs/{logId}": {
+      "schema": "AdminActivityLog",
+      "description": "Immutable audit log for all administrator actions"
+    },
+    "/announcements/{announcementId}": {
+      "schema": "AnnouncementDoc",
+      "description": "Website announcements and maintenance banners"
+    },
+    "/animeManagement/{docId}": {
+      "schema": "AnimeManagementDoc",
+      "description": "Curated homepage featured anime, collections, and promotional banners"
+    },
+    "/siteConfig/{docId}": {
+      "schema": "SiteConfigDoc",
+      "description": "Global site, artwork defaults, and scanner status configuration"
+    },
+    "/streamingLogs/{logId}": {
+      "schema": "StreamingMonitorLog",
+      "description": "Real streaming health check and error logs"
+    }
+  }
+}

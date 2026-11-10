@@ -1,0 +1,66 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Default deny all paths
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isBootstrappedOwner() {
+      return isSignedIn()
+        && request.auth.token.email == 'balampiyush2009@gmail.com'
+        && request.auth.token.email_verified == true;
+    }
+
+    function isAuthorizedArtworkUploader() {
+      return isBootstrappedOwner()
+        || (
+          isSignedIn()
+          && firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid))
+          && firestore.get(/databases/(default)/documents/admins/$(request.auth.uid)).data.status == 'active'
+          && (
+            firestore.get(/databases/(default)/documents/admins/$(request.auth.uid)).data.role == 'owner'
+            || firestore.get(/databases/(default)/documents/admins/$(request.auth.uid)).data.permissions.uploadArtwork == true
+          )
+        );
+    }
+
+    function isAuthorizedArtworkDeleter() {
+      return isBootstrappedOwner()
+        || (
+          isSignedIn()
+          && firestore.exists(/databases/(default)/documents/admins/$(request.auth.uid))
+          && firestore.get(/databases/(default)/documents/admins/$(request.auth.uid)).data.status == 'active'
+          && (
+            firestore.get(/databases/(default)/documents/admins/$(request.auth.uid)).data.role == 'owner'
+            || firestore.get(/databases/(default)/documents/admins/$(request.auth.uid)).data.permissions.deleteArtwork == true
+          )
+        );
+    }
+
+    // Custom anime logo uploads: /anime-logos/{animeId}/{fileName}
+    match /anime-logos/{animeId}/{fileName} {
+      // Public read for displaying transparent logos on the website
+      allow read: if true;
+
+      // Upload restricted to authorized admins, max 5 MB, transparent PNG or WebP only
+      allow create, update: if isAuthorizedArtworkUploader()
+        && animeId.size() >= 1 && animeId.size() <= 64
+        && fileName.size() >= 1 && fileName.size() <= 180
+        && request.resource.size > 0
+        && request.resource.size <= 5 * 1024 * 1024
+        && (
+          request.resource.contentType == 'image/png'
+          || request.resource.contentType == 'image/webp'
+        );
+
+      // Deletion restricted to Owner or admins with deleteArtwork permission
+      allow delete: if isAuthorizedArtworkDeleter();
+    }
+  }
+}

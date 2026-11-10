@@ -25,6 +25,8 @@ import {
   isSubscribed,
   toggleSubscription,
 } from '@/lib/storage';
+import { useRealtimeArtworkOverride } from '@/hooks/useRealtimeArtworkOverride';
+import { getLogoDisplayTailwindClasses } from '@/lib/artwork/logo-selector';
 
 interface AnimeDetailsHeroProps {
   anime: HoshikaAnimeItem;
@@ -42,7 +44,7 @@ const WATCHLIST_STATUS_LABELS: Record<string, string> = {
 
 export function AnimeDetailsHero({
   anime,
-  artwork,
+  artwork: initialArtwork,
   priority = true,
 }: AnimeDetailsHeroProps) {
   const [inWatchlist, setInWatchlist] = useState(false);
@@ -52,6 +54,12 @@ export function AnimeDetailsHero({
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [logoError, setLogoError] = useState(false);
   const [bgError, setBgError] = useState(false);
+
+  const artwork = useRealtimeArtworkOverride(anime.shortId, initialArtwork, anime.format);
+
+  useEffect(() => {
+    setLogoError(false);
+  }, [artwork?.logoUrl]);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -143,8 +151,9 @@ export function AnimeDetailsHero({
     ? artwork?.backgroundUrl || anime.bannerImage || anime.coverImage
     : anime.bannerImage || anime.coverImage;
 
-  // 2. Transparent Anime Title Logo: Fanart.tv hdtvlogo/clearlogo
+  // 2. Transparent Anime Title Logo: Fanart.tv hdtvlogo/clearlogo/custom override
   const hasLogo = !logoError && Boolean(artwork?.logoUrl);
+  const logoSizingClasses = getLogoDisplayTailwindClasses(artwork?.logoDisplay, 'details');
 
   // Metadata formatting
   // Rating: In screenshot: "★ 89.0"
@@ -245,7 +254,7 @@ export function AnimeDetailsHero({
           {/* 2. Transparent Fanart.tv Anime Title Logo (Max width ~580px) */}
           <div className="py-1">
             {hasLogo ? (
-              <div className="relative w-full max-w-[320px] sm:max-w-[420px] md:max-w-[500px] lg:max-w-[580px] h-20 sm:h-24 md:h-28 lg:h-32 filter drop-shadow-[0_4px_24px_rgba(0,0,0,0.95)]">
+              <div className={`relative w-full ${logoSizingClasses} filter drop-shadow-[0_4px_24px_rgba(0,0,0,0.95)] transition-transform duration-300`}>
                 <Image
                   src={artwork!.logoUrl!}
                   alt={title}

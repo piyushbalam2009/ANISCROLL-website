@@ -16,9 +16,15 @@ import {
   Check,
   Bookmark,
   History,
+  PlayCircle,
   Settings,
+  LogIn,
+  LogOut,
+  UserPlus,
+  Shield,
 } from 'lucide-react';
 import { HoshikaAnimeItem } from '@/types/anime';
+import { useAuth } from '@/hooks/useAuth';
 
 interface FloatingHeaderProps {
   collapsed: boolean;
@@ -30,6 +36,7 @@ export function FloatingHeader({
   onOpenMobile,
 }: FloatingHeaderProps) {
   const router = useRouter();
+  const { user, profile, isAdmin, signOutUser } = useAuth();
 
   // Search State
   const [query, setQuery] = useState('');
@@ -121,7 +128,6 @@ export function FloatingHeader({
     setErrorMessage(null);
 
     debounceTimerRef.current = setTimeout(async () => {
-      // Abort preceding in-flight request
       if (abortControllerRef.current) {
         abortControllerRef.current.abort();
       }
@@ -202,13 +208,28 @@ export function FloatingHeader({
     router.push(`/search?q=${encodeURIComponent(query.trim())}`);
   };
 
+  const handleSignOut = async () => {
+    setIsProfileOpen(false);
+    await signOutUser();
+    router.push('/');
+  };
+
+  const displayName =
+    profile?.displayName ||
+    user?.displayName ||
+    user?.email?.split('@')[0] ||
+    'AniScroll Member';
+  const email = profile?.email || user?.email || '';
+  const photoURL = profile?.photoURL || user?.photoURL || '';
+  const initials = displayName.slice(0, 2).toUpperCase();
+
   return (
     <div
       className={`fixed top-5 md:top-6 left-0 right-0 z-40 pointer-events-none transition-all duration-200 ease-in-out px-4 sm:px-6 md:px-8 ${
         collapsed ? 'md:left-[76px]' : 'md:left-[240px]'
       }`}
     >
-      <div className="relative w-full flex items-center justify-between">
+      <div className="relative w-full flex items-center justify-between gap-3">
         {/* Mobile Sidebar Hamburger Toggle */}
         <div className="pointer-events-auto md:hidden flex items-center">
           <button
@@ -315,7 +336,6 @@ export function FloatingHeader({
                           isSelected ? 'bg-white/10' : 'hover:bg-white/5'
                         }`}
                       >
-                        {/* Poster Thumbnail */}
                         <div className="relative w-10 h-14 bg-[#141414] rounded-lg overflow-hidden shrink-0 border border-white/10 shadow-sm">
                           {anime.coverImage ? (
                             <Image
@@ -333,7 +353,6 @@ export function FloatingHeader({
                           )}
                         </div>
 
-                        {/* Metadata Details */}
                         <div className="flex-1 min-w-0">
                           <div className="font-semibold text-xs sm:text-sm text-white truncate">
                             {title}
@@ -367,7 +386,6 @@ export function FloatingHeader({
                 </div>
               )}
 
-              {/* View All Results Footer */}
               {query.trim() && (
                 <button
                   type="button"
@@ -386,8 +404,18 @@ export function FloatingHeader({
           )}
         </div>
 
-        {/* Top-Right: Floating Circular Action Controls */}
-        <div className="pointer-events-auto flex items-center gap-3">
+        {/* Top-Right: Floating Monochrome Action Controls */}
+        <div className="pointer-events-auto flex items-center gap-2.5 sm:gap-3">
+          {!user && (
+            <Link
+              href="/login"
+              className="hidden sm:inline-flex items-center gap-1.5 h-10 px-4 rounded-full bg-white hover:bg-neutral-200 text-black font-semibold text-xs transition-all shadow-2xl active:scale-95"
+            >
+              <LogIn size={14} />
+              <span>Sign In</span>
+            </Link>
+          )}
+
           {/* 1. Floating Circular Notification Bell Button */}
           <div className="relative" ref={notifContainerRef}>
             <button
@@ -398,10 +426,9 @@ export function FloatingHeader({
               title="Notifications"
             >
               <Bell size={18} className="text-white/90" />
-              <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-purple-500 animate-pulse" />
+              <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-white animate-pulse" />
             </button>
 
-            {/* Notifications Popover */}
             {isNotificationsOpen && (
               <div className="absolute right-0 top-full mt-2 w-72 sm:w-80 rounded-2xl bg-[#0D0D0D]/95 backdrop-blur-2xl border border-[#292929] shadow-2xl p-4 z-50 text-xs animate-in fade-in zoom-in-95 duration-150">
                 <div className="flex items-center justify-between pb-3 border-b border-[#222222]">
@@ -423,52 +450,143 @@ export function FloatingHeader({
             )}
           </div>
 
-          {/* 2. Floating Circular User Profile Avatar Button */}
+          {/* 2. Floating Circular User Profile Avatar Button (Monochrome) */}
           <div className="relative" ref={profileContainerRef}>
             <button
               type="button"
               onClick={() => setIsProfileOpen((prev) => !prev)}
-              className="w-10 h-10 rounded-full bg-purple-700/80 hover:bg-purple-600 backdrop-blur-xl border border-white/20 hover:border-white/40 text-white flex items-center justify-center font-bold text-sm transition-all shadow-2xl active:scale-95"
+              className="w-10 h-10 rounded-full bg-white hover:bg-neutral-200 text-black border border-white/40 flex items-center justify-center font-bold text-xs transition-all shadow-2xl active:scale-95 overflow-hidden relative"
               aria-label="User profile and settings"
               title="Account"
             >
-              <User size={18} className="text-white" />
+              {user && photoURL ? (
+                <Image
+                  src={photoURL}
+                  alt={displayName}
+                  fill
+                  sizes="40px"
+                  className="object-cover"
+                  referrerPolicy="no-referrer"
+                />
+              ) : user ? (
+                <span>{initials}</span>
+              ) : (
+                <User size={18} className="text-black" />
+              )}
             </button>
 
             {/* Profile Quick Menu */}
             {isProfileOpen && (
-              <div className="absolute right-0 top-full mt-2 w-52 rounded-2xl bg-[#0D0D0D]/95 backdrop-blur-2xl border border-[#292929] shadow-2xl py-2 z-50 text-xs animate-in fade-in zoom-in-95 duration-150 divide-y divide-[#202020]">
-                <div className="px-4 py-2.5">
-                  <div className="font-semibold text-white">AniScroll Member</div>
-                  <div className="text-[10px] text-[#707070]">Local Session</div>
-                </div>
+              <div className="absolute right-0 top-full mt-2 w-60 rounded-2xl bg-[#0D0D0D]/95 backdrop-blur-2xl border border-[#292929] shadow-2xl py-2 z-50 text-xs animate-in fade-in zoom-in-95 duration-150 divide-y divide-[#202020]">
+                {user ? (
+                  <>
+                    <div className="px-4 py-3">
+                      <div className="font-semibold text-white truncate">
+                        {displayName}
+                      </div>
+                      {email && (
+                        <div className="text-[11px] text-[#707070] truncate mt-0.5">
+                          {email}
+                        </div>
+                      )}
+                      <div className="inline-block mt-1.5 text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-white/10 text-white/90">
+                        Cloud Synced
+                      </div>
+                    </div>
 
-                <div className="py-1">
-                  <Link
-                    href="/watchlist"
-                    onClick={() => setIsProfileOpen(false)}
-                    className="flex items-center gap-2.5 px-4 py-2 text-white/80 hover:text-white hover:bg-white/10 transition-colors"
-                  >
-                    <Bookmark size={15} />
-                    <span>My Watchlist</span>
-                  </Link>
-                  <Link
-                    href="/history"
-                    onClick={() => setIsProfileOpen(false)}
-                    className="flex items-center gap-2.5 px-4 py-2 text-white/80 hover:text-white hover:bg-white/10 transition-colors"
-                  >
-                    <History size={15} />
-                    <span>Watch History</span>
-                  </Link>
-                  <Link
-                    href="/settings"
-                    onClick={() => setIsProfileOpen(false)}
-                    className="flex items-center gap-2.5 px-4 py-2 text-white/80 hover:text-white hover:bg-white/10 transition-colors"
-                  >
-                    <Settings size={15} />
-                    <span>Playback Settings</span>
-                  </Link>
-                </div>
+                    <div className="py-1">
+                      {isAdmin && (
+                        <Link
+                          href="/admin"
+                          onClick={() => setIsProfileOpen(false)}
+                          className="flex items-center gap-2.5 px-4 py-2 text-white font-semibold bg-white/5 hover:bg-white/15 transition-colors"
+                        >
+                          <Shield size={15} />
+                          <span>Admin Console</span>
+                        </Link>
+                      )}
+                      <Link
+                        href="/profile"
+                        onClick={() => setIsProfileOpen(false)}
+                        className="flex items-center gap-2.5 px-4 py-2 text-white/80 hover:text-white hover:bg-white/10 transition-colors"
+                      >
+                        <User size={15} />
+                        <span>Account Profile</span>
+                      </Link>
+                      <Link
+                        href="/watchlist"
+                        onClick={() => setIsProfileOpen(false)}
+                        className="flex items-center gap-2.5 px-4 py-2 text-white/80 hover:text-white hover:bg-white/10 transition-colors"
+                      >
+                        <Bookmark size={15} />
+                        <span>My Watchlist</span>
+                      </Link>
+                      <Link
+                        href="/continue-watching"
+                        onClick={() => setIsProfileOpen(false)}
+                        className="flex items-center gap-2.5 px-4 py-2 text-white/80 hover:text-white hover:bg-white/10 transition-colors"
+                      >
+                        <PlayCircle size={15} />
+                        <span>Continue Watching</span>
+                      </Link>
+                      <Link
+                        href="/history"
+                        onClick={() => setIsProfileOpen(false)}
+                        className="flex items-center gap-2.5 px-4 py-2 text-white/80 hover:text-white hover:bg-white/10 transition-colors"
+                      >
+                        <History size={15} />
+                        <span>Watch History</span>
+                      </Link>
+                      <Link
+                        href="/settings"
+                        onClick={() => setIsProfileOpen(false)}
+                        className="flex items-center gap-2.5 px-4 py-2 text-white/80 hover:text-white hover:bg-white/10 transition-colors"
+                      >
+                        <Settings size={15} />
+                        <span>Settings</span>
+                      </Link>
+                    </div>
+
+                    <div className="py-1">
+                      <button
+                        type="button"
+                        onClick={handleSignOut}
+                        className="w-full flex items-center gap-2.5 px-4 py-2 text-white/80 hover:text-white hover:bg-white/10 transition-colors text-left"
+                      >
+                        <LogOut size={15} />
+                        <span>Sign Out</span>
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <div className="px-4 py-2.5">
+                      <div className="font-semibold text-white">Guest Session</div>
+                      <div className="text-[11px] text-[#707070]">
+                        Sign in to sync across devices
+                      </div>
+                    </div>
+
+                    <div className="py-1">
+                      <Link
+                        href="/login"
+                        onClick={() => setIsProfileOpen(false)}
+                        className="flex items-center gap-2.5 px-4 py-2 text-white font-medium hover:bg-white/10 transition-colors"
+                      >
+                        <LogIn size={15} />
+                        <span>Sign In</span>
+                      </Link>
+                      <Link
+                        href="/register"
+                        onClick={() => setIsProfileOpen(false)}
+                        className="flex items-center gap-2.5 px-4 py-2 text-white/80 hover:text-white hover:bg-white/10 transition-colors"
+                      >
+                        <UserPlus size={15} />
+                        <span>Create Account</span>
+                      </Link>
+                    </div>
+                  </>
+                )}
               </div>
             )}
           </div>

@@ -1,0 +1,611 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Safety Net: Default-deny all paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Global Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return isSignedIn() && request.auth.uid == uid;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Admin & Owner RBAC Primitives (Bootstrapped Owner UID/Email + Database RBAC Lookup)
+    function isBootstrappedOwner() {
+      return isSignedIn() && (
+        request.auth.uid == 'ClYKhPNBohZuDPPS3upXVyQvUEq2'
+        || request.auth.token.email == 'balampiyush2009@gmail.com'
+      );
+    }
+
+    function hasAdminDoc() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function getAdminDoc() {
+      return get(/databases/$(database)/documents/admins/$(request.auth.uid)).data;
+    }
+
+    function isActiveAdmin() {
+      return isBootstrappedOwner() || (hasAdminDoc() && getAdminDoc().status == 'active');
+    }
+
+    function isOwnerRole() {
+      return isBootstrappedOwner() || (hasAdminDoc() && getAdminDoc().status == 'active' && getAdminDoc().role == 'owner');
+    }
+
+    function canManageUsers() {
+      return isOwnerRole() || (hasAdminDoc() && getAdminDoc().status == 'active' && getAdminDoc().permissions.manageUsers == true);
+    }
+
+    function canManageArtwork() {
+      return isOwnerRole() || (hasAdminDoc() && getAdminDoc().status == 'active' && getAdminDoc().permissions.manageArtwork == true);
+    }
+
+    function canManageAnime() {
+      return isOwnerRole() || (hasAdminDoc() && getAdminDoc().status == 'active' && getAdminDoc().permissions.manageAnime == true);
+    }
+
+    function canManageAnnouncements() {
+      return isOwnerRole() || (hasAdminDoc() && getAdminDoc().status == 'active' && getAdminDoc().permissions.manageAnnouncements == true);
+    }
+
+    function canManageSettings() {
+      return isOwnerRole() || (hasAdminDoc() && getAdminDoc().status == 'active' && getAdminDoc().permissions.manageSettings == true);
+    }
+
+    // Entity Blueprint 1: UserProfile (/users/{uid}/profile/{docId})
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'displayName', 'email', 'photoURL', 'provider', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'displayName', 'email', 'photoURL', 'provider', 'status', 'accountStatus', 'role', 'migrationCompleted', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 256
+        && data.photoURL is string && data.photoURL.size() <= 1024
+        && data.provider is string && (data.provider == 'password' || data.provider == 'google')
+        && (!('status' in data) || (data.status is string && data.status in ['active', 'disabled', 'banned']))
+        && (!('accountStatus' in data) || (data.accountStatus is string && data.accountStatus in ['active', 'disabled', 'banned']))
+        && (!('role' in data) || (data.role is string && data.role in ['user', 'admin', 'owner']))
+        && (!('migrationCompleted' in data) || data.migrationCompleted is bool)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Entity Blueprint 2: WatchlistItem (/users/{uid}/watchlist/{animeId})
+    function isValidWatchlistItem(data) {
+      return data.keys().hasAll(['uid', 'hoshikaId', 'title', 'addedAt', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'hoshikaId', 'anilistId', 'title', 'coverImage', 'format', 'rating', 'seasonYear', 'status', 'addedAt', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid == request.auth.uid
+        && data.hoshikaId is number && data.hoshikaId > 0
+        && (!('anilistId' in data) || data.anilistId == null || data.anilistId is number)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && (!('coverImage' in data) || data.coverImage == null || (data.coverImage is string && data.coverImage.size() <= 1024))
+        && (!('format' in data) || data.format == null || (data.format is string && data.format.size() <= 40))
+        && (!('rating' in data) || data.rating == null || data.rating is number)
+        && (!('seasonYear' in data) || data.seasonYear == null || data.seasonYear is number)
+        && (!('status' in data) || data.status == null || (data.status is string && data.status in ['watching', 'plan_to_watch', 'completed', 'on_hold', 'dropped']))
+        && data.addedAt is number && data.addedAt > 0
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Entity Blueprint 3: ContinueWatchingItem (/users/{uid}/continueWatching/{animeId})
+    function isValidContinueWatchingItem(data) {
+      return data.keys().hasAll(['uid', 'hoshikaId', 'title', 'episodeNumber', 'currentTime', 'duration', 'timestamp', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'hoshikaId', 'anilistId', 'title', 'episodeNumber', 'currentTime', 'duration', 'coverImage', 'bannerImage', 'episodeTitle', 'audioType', 'timestamp', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid == request.auth.uid
+        && data.hoshikaId is number && data.hoshikaId > 0
+        && (!('anilistId' in data) || data.anilistId == null || data.anilistId is number)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && data.episodeNumber is number && data.episodeNumber >= 1
+        && data.currentTime is number && data.currentTime >= 0
+        && data.duration is number && data.duration > 0
+        && (!('coverImage' in data) || data.coverImage == null || (data.coverImage is string && data.coverImage.size() <= 1024))
+        && (!('bannerImage' in data) || data.bannerImage == null || (data.bannerImage is string && data.bannerImage.size() <= 1024))
+        && (!('episodeTitle' in data) || data.episodeTitle == null || (data.episodeTitle is string && data.episodeTitle.size() <= 300))
+        && (!('audioType' in data) || data.audioType == null || (data.audioType is string && data.audioType in ['sub', 'dub']))
+        && data.timestamp is number && data.timestamp > 0
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Entity Blueprint 4: WatchHistoryItem (/users/{uid}/watchHistory/{historyId})
+    function isValidWatchHistoryItem(data) {
+      return data.keys().hasAll(['uid', 'hoshikaId', 'title', 'episodeNumber', 'currentTime', 'duration', 'status', 'timestamp', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'hoshikaId', 'anilistId', 'title', 'coverImage', 'bannerImage', 'episodeNumber', 'episodeTitle', 'currentTime', 'duration', 'status', 'timestamp', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid == request.auth.uid
+        && data.hoshikaId is number && data.hoshikaId > 0
+        && (!('anilistId' in data) || data.anilistId == null || data.anilistId is number)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && (!('coverImage' in data) || data.coverImage == null || (data.coverImage is string && data.coverImage.size() <= 1024))
+        && (!('bannerImage' in data) || data.bannerImage == null || (data.bannerImage is string && data.bannerImage.size() <= 1024))
+        && data.episodeNumber is number && data.episodeNumber >= 1
+        && (!('episodeTitle' in data) || data.episodeTitle == null || (data.episodeTitle is string && data.episodeTitle.size() <= 300))
+        && data.currentTime is number && data.currentTime >= 0
+        && data.duration is number && data.duration >= 0
+        && data.status is string && data.status in ['watching', 'completed']
+        && data.timestamp is number && data.timestamp > 0
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Entity Blueprint 5: UserPreferencesDoc (/users/{uid}/preferences/{docId})
+    function isValidUserPreferencesDoc(data) {
+      return data.keys().hasAll(['uid', 'theme', 'defaultAudio', 'defaultQuality', 'autoPlayNext', 'autoSkipIntro', 'autoSkipOutro', 'sidebarCollapsed', 'compactCards', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'theme', 'defaultAudio', 'defaultQuality', 'autoPlayNext', 'autoSkipIntro', 'autoSkipOutro', 'sidebarCollapsed', 'compactCards', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid == request.auth.uid
+        && data.theme is string && data.theme == 'monochrome'
+        && data.defaultAudio is string && data.defaultAudio in ['sub', 'dub']
+        && data.defaultQuality is string && data.defaultQuality in ['auto', '1080p', '720p', '480p']
+        && data.autoPlayNext is bool
+        && data.autoSkipIntro is bool
+        && data.autoSkipOutro is bool
+        && data.sidebarCollapsed is bool
+        && data.compactCards is bool
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Entity Blueprint 6: AdminRecord (/admins/{adminUid})
+    function isValidAdminRecord(data) {
+      return data.keys().hasAll(['uid', 'email', 'displayName', 'role', 'status', 'permissions', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'email', 'displayName', 'role', 'status', 'permissions', 'addedBy', 'addedAt', 'lastLogin', 'invitedBy', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 256
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && data.role is string && data.role in ['owner', 'administrator', 'editor', 'analyst']
+        && data.status is string && data.status in ['active', 'invited', 'revoked']
+        && data.permissions is map
+        && (!('addedBy' in data) || (data.addedBy is string && data.addedBy.size() <= 256))
+        && (!('addedAt' in data) || (data.addedAt is string && data.addedAt.size() <= 64))
+        && (!('lastLogin' in data) || (data.lastLogin is string && data.lastLogin.size() <= 64))
+        && (!('invitedBy' in data) || (data.invitedBy is string && data.invitedBy.size() <= 256))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Entity Blueprint 7: AnimeArtworkDoc (/animeArtwork/{animeId})
+    function isValidAnimeArtworkDoc(data) {
+      return data.keys().hasAll(['hoshikaId', 'title', 'selectionMode', 'logoStatus', 'updatedBy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'animeId', 'hoshikaId', 'anilistId', 'tvdbId', 'tmdbId', 'title',
+          'selectedLogoUrl', 'selectedLogoSource', 'selectedLogoLanguage',
+          'selectionMode', 'selectedLogo', 'previousLogo', 'availableLogos', 'customLogos', 'hiddenLogoIds',
+          'logoDisplay', 'hasLogo', 'logoStatus', 'fanartLogoCount',
+          'backgroundUrl', 'posterUrl', 'hasEnglishLogo', 'hasJapaneseLogo', 'reviewed',
+          'lastChecked', 'lastCheckedAt', 'updatedBy', 'updatedByEmail', 'createdAt', 'updatedAt'
+        ])
+        && data.hoshikaId is number && data.hoshikaId > 0
+        && (!('animeId' in data) || (data.animeId is string && data.animeId.size() <= 128))
+        && (!('anilistId' in data) || data.anilistId == null || data.anilistId is number)
+        && (!('tvdbId' in data) || data.tvdbId == null || data.tvdbId is number)
+        && (!('tmdbId' in data) || data.tmdbId == null || data.tmdbId is number)
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && (!('selectedLogoUrl' in data) || data.selectedLogoUrl == null || (data.selectedLogoUrl is string && data.selectedLogoUrl.size() <= 2048))
+        && (!('selectedLogoSource' in data) || (data.selectedLogoSource is string && data.selectedLogoSource.size() <= 64))
+        && (!('selectedLogoLanguage' in data) || (data.selectedLogoLanguage is string && data.selectedLogoLanguage.size() <= 16))
+        && data.selectionMode is string && data.selectionMode in ['manual', 'auto']
+        && (!('selectedLogo' in data) || data.selectedLogo == null || data.selectedLogo is map)
+        && (!('previousLogo' in data) || data.previousLogo == null || data.previousLogo is map)
+        && (!('availableLogos' in data) || (data.availableLogos is list && data.availableLogos.size() <= 60))
+        && (!('customLogos' in data) || (data.customLogos is list && data.customLogos.size() <= 30))
+        && (!('hiddenLogoIds' in data) || (data.hiddenLogoIds is list && data.hiddenLogoIds.size() <= 100))
+        && (!('logoDisplay' in data) || data.logoDisplay == null || data.logoDisplay is map)
+        && (!('hasLogo' in data) || data.hasLogo is bool)
+        && data.logoStatus is string && data.logoStatus in [
+          'valid', 'missing', 'japanese_only', 'no_english', 'low_resolution', 'broken', 'typography_fallback', 'custom_override',
+          'custom_logo', 'fanart_logo', 'missing_logo', 'broken_logo', 'no_english_logo', 'reviewed'
+        ]
+        && (!('fanartLogoCount' in data) || data.fanartLogoCount is number)
+        && (!('posterUrl' in data) || data.posterUrl == null || (data.posterUrl is string && data.posterUrl.size() <= 2048))
+        && (!('backgroundUrl' in data) || data.backgroundUrl == null || (data.backgroundUrl is string && data.backgroundUrl.size() <= 2048))
+        && (!('hasEnglishLogo' in data) || data.hasEnglishLogo is bool)
+        && (!('hasJapaneseLogo' in data) || data.hasJapaneseLogo is bool)
+        && (!('reviewed' in data) || data.reviewed is bool)
+        && (!('lastChecked' in data) || (data.lastChecked is string && data.lastChecked.size() <= 64))
+        && (!('lastCheckedAt' in data) || data.lastCheckedAt is number)
+        && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128 && data.updatedBy == request.auth.uid
+        && (!('updatedByEmail' in data) || (data.updatedByEmail is string && data.updatedByEmail.size() <= 256))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Entity Blueprint 8: ArtworkAuditLog (/artworkAuditLogs/{logId})
+    function isValidArtworkAuditLog(data) {
+      return data.keys().hasAll(['id', 'hoshikaId', 'animeTitle', 'action', 'changedByUid', 'changedByEmail', 'timestamp', 'createdAt'])
+        && data.keys().hasOnly([
+          'id', 'animeId', 'hoshikaId', 'anilistId', 'animeTitle', 'action', 'selectionMode',
+          'previousLogoUrl', 'newLogoUrl', 'previousSource', 'newSource',
+          'changedByUid', 'changedByEmail', 'adminUid', 'adminEmail', 'adminName', 'timestamp', 'createdAt'
+        ])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 128
+        && data.hoshikaId is number && data.hoshikaId > 0
+        && data.animeTitle is string && data.animeTitle.size() >= 1 && data.animeTitle.size() <= 300
+        && data.action is string && data.action in [
+          'select_logo', 'replace_logo', 'upload_logo', 'delete_logo',
+          'reset_auto', 'enable_auto', 'restore_previous', 'restore_logo',
+          'update_display', 'hide_logo', 'mark_reviewed'
+        ]
+        && (!('selectionMode' in data) || (data.selectionMode is string && data.selectionMode in ['auto', 'manual']))
+        && (!('previousLogoUrl' in data) || data.previousLogoUrl == null || (data.previousLogoUrl is string && data.previousLogoUrl.size() <= 2048))
+        && (!('newLogoUrl' in data) || data.newLogoUrl == null || (data.newLogoUrl is string && data.newLogoUrl.size() <= 2048))
+        && (!('previousSource' in data) || data.previousSource == null || (data.previousSource is string && data.previousSource.size() <= 64))
+        && (!('newSource' in data) || data.newSource == null || (data.newSource is string && data.newSource is string && data.newSource.size() <= 64))
+        && data.changedByUid is string && data.changedByUid.size() >= 1 && data.changedByUid.size() <= 128 && data.changedByUid == request.auth.uid
+        && data.changedByEmail is string && data.changedByEmail.size() >= 3 && data.changedByEmail.size() <= 256
+        && data.timestamp is string && data.timestamp.size() >= 1 && data.timestamp.size() <= 64
+        && data.createdAt is timestamp;
+    }
+
+    // Entity Blueprint 9: AdminActivityLog (/adminActivityLogs/{logId})
+    function isValidAdminActivityLog(data) {
+      return data.keys().hasAll(['id', 'adminUid', 'adminEmail', 'category', 'action', 'targetId', 'targetName', 'timestamp', 'createdAt'])
+        && data.keys().hasOnly(['id', 'adminUid', 'adminEmail', 'category', 'action', 'targetId', 'targetName', 'targetLabel', 'details', 'timestamp', 'createdAt'])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 128
+        && data.adminUid is string && data.adminUid.size() >= 1 && data.adminUid.size() <= 128 && data.adminUid == request.auth.uid
+        && data.adminEmail is string && data.adminEmail.size() >= 3 && data.adminEmail.size() <= 256
+        && data.category is string && data.category in ['artwork', 'users', 'anime', 'announcements', 'admins', 'settings', 'security', 'scanner']
+        && data.action is string && data.action.size() >= 1 && data.action.size() <= 120
+        && data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128
+        && data.targetName is string && data.targetName.size() >= 1 && data.targetName.size() <= 300
+        && (!('details' in data) || (data.details is string && data.details.size() <= 2000))
+        && data.timestamp is string && data.timestamp.size() >= 1 && data.timestamp.size() <= 64
+        && data.createdAt is timestamp;
+    }
+
+    // Entity Blueprint 10: AnnouncementDoc (/announcements/{announcementId})
+    function isValidAnnouncementDoc(data) {
+      return data.keys().hasAll(['id', 'title', 'message', 'type', 'status', 'createdByUid', 'createdByEmail', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'title', 'message', 'type', 'status', 'dismissible',
+          'ctaText', 'ctaLink', 'startsAt', 'expiresAt',
+          'createdByUid', 'createdByEmail', 'createdAt', 'updatedAt'
+        ])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 128
+        && data.title is string && data.title.size() >= 1 && data.title.size() <= 200
+        && data.message is string && data.message.size() <= 2000
+        && data.type is string && data.type in ['feature', 'maintenance', 'notice', 'alert']
+        && data.status is string && data.status in ['draft', 'published', 'scheduled', 'archived']
+        && (!('dismissible' in data) || data.dismissible is bool)
+        && (!('ctaText' in data) || (data.ctaText is string && data.ctaText.size() <= 80))
+        && (!('ctaLink' in data) || (data.ctaLink is string && data.ctaLink.size() <= 512))
+        && (!('startsAt' in data) || (data.startsAt is string && data.startsAt.size() <= 64))
+        && (!('expiresAt' in data) || (data.expiresAt is string && data.expiresAt.size() <= 64))
+        && data.createdByUid is string && data.createdByUid.size() >= 1 && data.createdByUid.size() <= 128
+        && data.createdByEmail is string && data.createdByEmail.size() >= 3 && data.createdByEmail.size() <= 256
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Entity Blueprint 11: AnimeManagementDoc (/animeManagement/{docId})
+    function isValidAnimeManagementDoc(data) {
+      return data.keys().hasAll(['configId', 'featuredAnimeIds', 'pinnedSeasonalIds', 'collections', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'configId', 'featuredAnimeIds', 'featuredAnime', 'pinnedSeasonalIds', 'pinnedSeasonal',
+          'collections', 'promoBanner', 'updatedByUid', 'updatedByEmail', 'createdAt', 'updatedAt'
+        ])
+        && data.configId is string && data.configId.size() >= 1 && data.configId.size() <= 128
+        && data.featuredAnimeIds is list && data.featuredAnimeIds.size() <= 30
+        && (!('featuredAnime' in data) || (data.featuredAnime is list && data.featuredAnime.size() <= 30))
+        && data.pinnedSeasonalIds is list && data.pinnedSeasonalIds.size() <= 30
+        && (!('pinnedSeasonal' in data) || (data.pinnedSeasonal is list && data.pinnedSeasonal.size() <= 30))
+        && data.collections is list && data.collections.size() <= 30
+        && (!('promoBanner' in data) || data.promoBanner == null || data.promoBanner is map)
+        && data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 && data.updatedByUid == request.auth.uid
+        && (!('updatedByEmail' in data) || (data.updatedByEmail is string && data.updatedByEmail.size() <= 256))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Entity Blueprint 12: SiteConfigDoc (/siteConfig/{docId})
+    function isValidSiteConfigDoc(data) {
+      return data.keys().hasAll(['configId', 'siteName', 'preferEnglishLogos', 'autoArtworkScan', 'artworkCacheTtlMinutes', 'maintenanceMode', 'updatedByUid', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'configId', 'siteName', 'siteDescription', 'preferEnglishLogos', 'autoArtworkScan',
+          'artworkCacheTtlMinutes', 'maintenanceMode', 'require2FAForAdmins', 'sessionTimeoutMinutes',
+          'updatedByUid', 'updatedByEmail', 'createdAt', 'updatedAt'
+        ])
+        && data.configId is string && data.configId.size() >= 1 && data.configId.size() <= 128
+        && data.siteName is string && data.siteName.size() >= 1 && data.siteName.size() <= 120
+        && (!('siteDescription' in data) || (data.siteDescription is string && data.siteDescription.size() <= 500))
+        && data.preferEnglishLogos is bool
+        && data.autoArtworkScan is bool
+        && data.artworkCacheTtlMinutes is number && data.artworkCacheTtlMinutes >= 1 && data.artworkCacheTtlMinutes <= 10080
+        && data.maintenanceMode is bool
+        && (!('require2FAForAdmins' in data) || data.require2FAForAdmins is bool)
+        && (!('sessionTimeoutMinutes' in data) || (data.sessionTimeoutMinutes is number && data.sessionTimeoutMinutes >= 5 && data.sessionTimeoutMinutes <= 10080))
+        && data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 && data.updatedByUid == request.auth.uid
+        && (!('updatedByEmail' in data) || (data.updatedByEmail is string && data.updatedByEmail.size() <= 256))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Entity Blueprint 13: StreamingMonitorLog (/streamingLogs/{logId})
+    function isValidStreamingMonitorLog(data) {
+      return data.keys().hasAll(['id', 'provider', 'endpoint', 'status', 'responseTimeMs', 'statusCode', 'checkedAt', 'createdAt'])
+        && data.keys().hasOnly(['id', 'provider', 'endpoint', 'status', 'responseTimeMs', 'statusCode', 'errorMessage', 'checkedAt', 'createdAt'])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 128
+        && data.provider is string && data.provider.size() >= 1 && data.provider.size() <= 64
+        && data.endpoint is string && data.endpoint.size() >= 1 && data.endpoint.size() <= 512
+        && data.status is string && data.status in ['operational', 'degraded', 'outage', 'ok', 'error']
+        && data.responseTimeMs is number && data.responseTimeMs >= 0
+        && data.statusCode is number && data.statusCode >= 0
+        && (!('errorMessage' in data) || data.errorMessage == null || (data.errorMessage is string && data.errorMessage.size() <= 1024))
+        && data.checkedAt is string && data.checkedAt.size() >= 1 && data.checkedAt.size() <= 64
+        && data.createdAt is timestamp;
+    }
+
+    // Collection 1: User Profile (/users/{uid}/profile/{docId})
+    match /users/{uid}/profile/{docId} {
+      allow get: if (isOwner(uid) || canManageUsers()) && isValidId(uid) && isValidId(docId);
+      allow list: if isOwner(uid) || canManageUsers();
+      allow create: if isOwner(uid) && isValidId(uid) && isValidId(docId)
+        && docId == 'details'
+        && isValidUserProfile(incoming())
+        && incoming().uid == request.auth.uid
+        && (!('status' in incoming()) || incoming().status == 'active')
+        && (!('accountStatus' in incoming()) || incoming().accountStatus == 'active')
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isSignedIn() && isValidId(uid) && isValidId(docId)
+        && isValidUserProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          // Action 1: Owner updates own profile
+          (isOwner(uid) && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'photoURL', 'provider', 'migrationCompleted', 'updatedAt']))
+          ||
+          // Action 2: Admin moderates user status
+          (canManageUsers() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'accountStatus', 'role', 'updatedAt']))
+        );
+      allow delete: if (isOwner(uid) || canManageUsers()) && isValidId(uid) && isValidId(docId);
+    }
+
+    // CollectionGroup query support for Admin User Management (/users/*/profile/*)
+    match /{path=**}/profile/{docId} {
+      allow get, list: if canManageUsers();
+    }
+
+    // Collection 2: Watchlist (/users/{uid}/watchlist/{animeId})
+    match /users/{uid}/watchlist/{animeId} {
+      allow get: if isOwner(uid) && isValidId(uid) && isValidId(animeId);
+      allow list: if isOwner(uid);
+      allow create: if isOwner(uid) && isValidId(uid) && isValidId(animeId)
+        && isValidWatchlistItem(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isOwner(uid) && isValidId(uid) && isValidId(animeId)
+        && isValidWatchlistItem(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['anilistId', 'title', 'coverImage', 'format', 'rating', 'seasonYear', 'status', 'addedAt', 'updatedAt']);
+      allow delete: if isOwner(uid) && isValidId(uid) && isValidId(animeId);
+    }
+
+    // Collection 3: Continue Watching (/users/{uid}/continueWatching/{animeId})
+    match /users/{uid}/continueWatching/{animeId} {
+      allow get: if isOwner(uid) && isValidId(uid) && isValidId(animeId);
+      allow list: if isOwner(uid);
+      allow create: if isOwner(uid) && isValidId(uid) && isValidId(animeId)
+        && isValidContinueWatchingItem(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isOwner(uid) && isValidId(uid) && isValidId(animeId)
+        && isValidContinueWatchingItem(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['anilistId', 'title', 'episodeNumber', 'currentTime', 'duration', 'coverImage', 'bannerImage', 'episodeTitle', 'audioType', 'timestamp', 'updatedAt']);
+      allow delete: if isOwner(uid) && isValidId(uid) && isValidId(animeId);
+    }
+
+    // Collection 4: Watch History (/users/{uid}/watchHistory/{historyId})
+    match /users/{uid}/watchHistory/{historyId} {
+      allow get: if isOwner(uid) && isValidId(uid) && isValidId(historyId);
+      allow list: if isOwner(uid);
+      allow create: if isOwner(uid) && isValidId(uid) && isValidId(historyId)
+        && isValidWatchHistoryItem(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isOwner(uid) && isValidId(uid) && isValidId(historyId)
+        && isValidWatchHistoryItem(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['anilistId', 'title', 'coverImage', 'bannerImage', 'episodeNumber', 'episodeTitle', 'currentTime', 'duration', 'status', 'timestamp', 'updatedAt']);
+      allow delete: if isOwner(uid) && isValidId(uid) && isValidId(historyId);
+    }
+
+    // Collection 5: User Preferences (/users/{uid}/preferences/{docId})
+    match /users/{uid}/preferences/{docId} {
+      allow get: if isOwner(uid) && isValidId(uid) && isValidId(docId);
+      allow list: if isOwner(uid);
+      allow create: if isOwner(uid) && isValidId(uid) && isValidId(docId)
+        && docId == 'settings'
+        && isValidUserPreferencesDoc(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isOwner(uid) && isValidId(uid) && isValidId(docId)
+        && isValidUserPreferencesDoc(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly(['theme', 'defaultAudio', 'defaultQuality', 'autoPlayNext', 'autoSkipIntro', 'autoSkipOutro', 'sidebarCollapsed', 'compactCards', 'updatedAt']);
+      allow delete: if isOwner(uid) && isValidId(uid) && isValidId(docId);
+    }
+
+    // Collection 6: Administrators (/admins/{adminUid})
+    match /admins/{adminUid} {
+      allow get: if isSignedIn() && isValidId(adminUid) && (request.auth.uid == adminUid || isActiveAdmin());
+      allow list: if isActiveAdmin();
+      allow create: if isSignedIn() && isValidId(adminUid)
+        && isValidAdminRecord(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (
+          isOwnerRole()
+          || (
+            request.auth.uid == adminUid
+            && incoming().uid == request.auth.uid
+            && incoming().email == 'balampiyush2009@gmail.com'
+            && incoming().role == 'owner'
+            && incoming().status == 'active'
+          )
+        );
+      allow update: if isSignedIn() && isValidId(adminUid)
+        && isValidAdminRecord(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (isOwnerRole() || (request.auth.uid == adminUid && existing().role == 'owner'))
+        && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'displayName', 'role', 'status', 'permissions', 'addedBy', 'addedAt', 'lastLogin', 'invitedBy', 'updatedAt']);
+      allow delete: if isSignedIn() && isValidId(adminUid)
+        && existing().role != 'owner'
+        && isOwnerRole();
+    }
+
+    // Collection 7: Anime Artwork (/animeArtwork/{animeId})
+    match /animeArtwork/{animeId} {
+      allow get: if isValidId(animeId);
+      allow list: if request.time != null;
+      allow create: if isSignedIn() && isValidId(animeId)
+        && isValidAnimeArtworkDoc(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && canManageArtwork();
+      allow update: if isSignedIn() && isValidId(animeId)
+        && isValidAnimeArtworkDoc(incoming())
+        && incoming().hoshikaId == existing().hoshikaId
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && canManageArtwork()
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'animeId', 'anilistId', 'tvdbId', 'tmdbId', 'title',
+          'selectedLogoUrl', 'selectedLogoSource', 'selectedLogoLanguage',
+          'selectionMode', 'selectedLogo', 'previousLogo', 'availableLogos', 'customLogos', 'hiddenLogoIds',
+          'logoDisplay', 'hasLogo', 'logoStatus', 'fanartLogoCount',
+          'backgroundUrl', 'posterUrl', 'hasEnglishLogo', 'hasJapaneseLogo', 'reviewed',
+          'lastChecked', 'lastCheckedAt', 'updatedBy', 'updatedByEmail', 'updatedAt'
+        ]);
+      allow delete: if isSignedIn() && isValidId(animeId) && isOwnerRole();
+    }
+
+    // Collection 8: Artwork Audit Logs (/artworkAuditLogs/{logId})
+    match /artworkAuditLogs/{logId} {
+      allow get: if isSignedIn() && isValidId(logId) && isActiveAdmin();
+      allow list: if isActiveAdmin();
+      allow create: if isSignedIn() && isValidId(logId)
+        && isValidArtworkAuditLog(incoming())
+        && incoming().createdAt == request.time
+        && canManageArtwork();
+      allow update, delete: if false;
+    }
+
+    // Collection 9: Admin Activity Logs (/adminActivityLogs/{logId})
+    match /adminActivityLogs/{logId} {
+      allow get: if isSignedIn() && isValidId(logId) && isActiveAdmin();
+      allow list: if isActiveAdmin();
+      allow create: if isSignedIn() && isValidId(logId)
+        && isValidAdminActivityLog(incoming())
+        && incoming().createdAt == request.time
+        && isActiveAdmin();
+      allow update, delete: if false;
+    }
+
+    // Collection 10: Announcements (/announcements/{announcementId})
+    match /announcements/{announcementId} {
+      allow get: if isValidId(announcementId);
+      allow list: if request.time != null;
+      allow create: if isSignedIn() && isValidId(announcementId)
+        && isValidAnnouncementDoc(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && canManageAnnouncements();
+      allow update: if isSignedIn() && isValidId(announcementId)
+        && isValidAnnouncementDoc(incoming())
+        && incoming().createdByUid == existing().createdByUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && canManageAnnouncements()
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'message', 'type', 'status', 'dismissible',
+          'ctaText', 'ctaLink', 'startsAt', 'expiresAt',
+          'createdByEmail', 'updatedAt'
+        ]);
+      allow delete: if isSignedIn() && isValidId(announcementId) && canManageAnnouncements();
+    }
+
+    // Collection 11: Anime Management (/animeManagement/{docId})
+    match /animeManagement/{docId} {
+      allow get: if isValidId(docId);
+      allow list: if request.time != null;
+      allow create: if isSignedIn() && isValidId(docId)
+        && isValidAnimeManagementDoc(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && canManageAnime();
+      allow update: if isSignedIn() && isValidId(docId)
+        && isValidAnimeManagementDoc(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && canManageAnime()
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'configId', 'featuredAnimeIds', 'featuredAnime', 'pinnedSeasonalIds', 'pinnedSeasonal',
+          'collections', 'promoBanner', 'updatedByUid', 'updatedByEmail', 'updatedAt'
+        ]);
+      allow delete: if isSignedIn() && isValidId(docId) && isOwnerRole();
+    }
+
+    // Collection 12: Site Configuration (/siteConfig/{docId})
+    match /siteConfig/{docId} {
+      allow get: if isValidId(docId);
+      allow list: if isActiveAdmin();
+      allow create: if isSignedIn() && isValidId(docId)
+        && isValidSiteConfigDoc(incoming())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (canManageSettings() || canManageArtwork());
+      allow update: if isSignedIn() && isValidId(docId)
+        && isValidSiteConfigDoc(incoming())
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && canManageSettings()
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'configId', 'siteName', 'siteDescription', 'preferEnglishLogos', 'autoArtworkScan',
+          'artworkCacheTtlMinutes', 'maintenanceMode', 'require2FAForAdmins', 'sessionTimeoutMinutes',
+          'updatedByUid', 'updatedByEmail', 'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    // Collection 13: Streaming Monitor Logs (/streamingLogs/{logId})
+    match /streamingLogs/{logId} {
+      allow get: if isSignedIn() && isValidId(logId) && isActiveAdmin();
+      allow list: if isActiveAdmin();
+      allow create: if isSignedIn() && isValidId(logId)
+        && isValidStreamingMonitorLog(incoming())
+        && incoming().createdAt == request.time;
+      allow update, delete: if false;
+    }
+  }
+}

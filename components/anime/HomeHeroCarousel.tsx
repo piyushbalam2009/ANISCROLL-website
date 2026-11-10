@@ -171,7 +171,7 @@ export function HomeHeroCarousel({
               <ChevronRight size={22} />
             </button>
 
-            {/* Bottom-Center Pagination Indicators (Dots + Active Purple Pill Dash) */}
+            {/* Bottom-Center Pagination Indicators (Monochrome Dots + Active White Pill Dash) */}
             <div
               className="absolute bottom-6 sm:bottom-8 left-1/2 -translate-x-1/2 z-30 flex items-center gap-2 pointer-events-auto"
               role="tablist"
@@ -186,7 +186,7 @@ export function HomeHeroCarousel({
                     onClick={() => goToSlide(idx)}
                     className={`h-2 rounded-full transition-all duration-300 ${
                       isActive
-                        ? 'w-6 bg-purple-500 shadow-md'
+                        ? 'w-6 bg-white shadow-md'
                         : 'w-2 bg-white/40 hover:bg-white/70'
                     }`}
                     aria-label={`Go to slide ${idx + 1}: ${
