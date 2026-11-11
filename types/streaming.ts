@@ -48,13 +48,19 @@ export interface WatchHistoryEntry {
   anilistId?: number | null;
   malId?: number | null;
   title: string;
+  animeTitle?: string;
   coverImage?: string;
+  animeCover?: string;
   bannerImage?: string;
   episodeNumber: number;
   episodeTitle?: string;
+  episodeThumbnail?: string;
   currentTime: number;
   duration: number;
+  progress?: number;
+  audioType?: 'sub' | 'dub';
   timestamp: number;
+  lastWatched?: number | string;
   completed?: boolean;
 }
 

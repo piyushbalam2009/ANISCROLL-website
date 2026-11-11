@@ -11,7 +11,11 @@ import {
   IdMappingResult,
 } from '@/types/anime';
 import { AniScrollStreamResponse } from '@/types/streaming';
-import { getUserPreferences } from '@/lib/storage';
+import {
+  getUserPreferences,
+  getSavedHistoryEntry,
+  updateWatchHistoryMetadata,
+} from '@/lib/storage';
 import { cacheEpisodes, getCachedEpisode, fetchEpisodeBatch } from '@/lib/episode-store';
 import { ChevronRight, ArrowLeft, AlertCircle, Loader2 } from 'lucide-react';
 
@@ -29,6 +33,7 @@ export function WatchPageClient({
   const router = useRouter();
 
   const [activeType, setActiveType] = useState<'sub' | 'dub'>('sub');
+  const [initialResumeTime, setInitialResumeTime] = useState<number>(0);
   const [idMapping, setIdMapping] = useState<IdMappingResult | null>(null);
   const [isResolvingId, setIsResolvingId] = useState<boolean>(true);
   const [idError, setIdError] = useState<string | null>(null);
@@ -70,16 +75,86 @@ export function WatchPageClient({
     'Anime Episode';
 
   const currentEpItem = episodes.find((e) => e.number === episodeNumber);
-  const episodeTitle = activeEpisodeItem?.title || currentEpItem?.title || `Episode ${episodeNumber}`;
+  const resolvedEpTitle = activeEpisodeItem?.title?.trim() || currentEpItem?.title?.trim();
+  const episodeTitle = resolvedEpTitle || `Episode ${episodeNumber}`;
+  const episodeThumbnail =
+    activeEpisodeItem?.thumbnail?.trim() ||
+    currentEpItem?.thumbnail?.trim() ||
+    undefined;
   const totalEpisodes = anime.episodes || episodes.length || 1;
+  const episodeDurationSeconds = (anime.episodeDuration || 24) * 60;
 
-  // Initialize preferred audio format (sub/dub)
+  // Initialize preferred audio format (sub/dub) and saved resume time from URL query or watch history
   useEffect(() => {
+    const savedEntry = getSavedHistoryEntry(anime.shortId, episodeNumber);
     const prefs = getUserPreferences();
-    if (prefs.defaultAudio) {
+
+    let urlType: 'sub' | 'dub' | null = null;
+    let urlTime: number | null = null;
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const tParam = params.get('t');
+      const typeParam = params.get('type');
+      if (typeParam === 'sub' || typeParam === 'dub') {
+        urlType = typeParam;
+      }
+      if (tParam !== null && tParam !== '') {
+        const parsedT = Number(tParam);
+        if (Number.isFinite(parsedT) && parsedT > 0) {
+          urlTime = parsedT;
+        }
+      }
+    }
+
+    if (urlType) {
+      setActiveType(urlType);
+    } else if (savedEntry?.audioType === 'sub' || savedEntry?.audioType === 'dub') {
+      setActiveType(savedEntry.audioType);
+    } else if (prefs.defaultAudio) {
       setActiveType(prefs.defaultAudio);
     }
-  }, []);
+
+    if (urlTime !== null && urlTime > 0) {
+      setInitialResumeTime(urlTime);
+    } else if (savedEntry && savedEntry.currentTime > 0 && !savedEntry.completed) {
+      setInitialResumeTime(savedEntry.currentTime);
+    } else {
+      setInitialResumeTime(0);
+    }
+  }, [anime.shortId, episodeNumber]);
+
+  // Whenever episode metadata or AniList ID resolves after playback has started,
+  // update the existing watch-history record without overwriting valid metadata or position.
+  useEffect(() => {
+    updateWatchHistoryMetadata({
+      hoshikaId: anime.shortId,
+      episodeNumber,
+      anilistId: idMapping?.anilistId ?? anime.anilistId ?? null,
+      malId: idMapping?.malId ?? anime.malId ?? null,
+      title,
+      animeTitle: title,
+      coverImage: anime.coverImage || undefined,
+      animeCover: anime.coverImage || undefined,
+      bannerImage: anime.bannerImage || undefined,
+      episodeTitle: resolvedEpTitle || undefined,
+      episodeThumbnail,
+      audioType: activeType,
+    });
+  }, [
+    anime.shortId,
+    anime.anilistId,
+    anime.malId,
+    anime.coverImage,
+    anime.bannerImage,
+    episodeNumber,
+    title,
+    resolvedEpTitle,
+    episodeThumbnail,
+    idMapping?.anilistId,
+    idMapping?.malId,
+    activeType,
+  ]);
 
   // STEP 1-8: Resolve IDs for this anime
   useEffect(() => {
@@ -215,9 +290,15 @@ export function WatchPageClient({
         ) : (
           <VideoPlayer
             animeId={anime.shortId}
+            anilistId={idMapping?.anilistId ?? anime.anilistId ?? null}
             animeTitle={title}
+            coverImage={anime.coverImage || undefined}
+            bannerImage={anime.bannerImage || undefined}
             episodeNumber={episodeNumber}
             episodeTitle={episodeTitle}
+            episodeThumbnail={episodeThumbnail}
+            episodeDurationSeconds={episodeDurationSeconds}
+            initialResumeTime={initialResumeTime}
             totalEpisodes={totalEpisodes}
             malId={idMapping?.malId}
             streamData={streamData}

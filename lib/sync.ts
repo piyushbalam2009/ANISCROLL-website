@@ -165,16 +165,33 @@ export function subscribeToUserCloudData(uid: string): () => void {
       const items: WatchHistoryEntry[] = [];
       snapshot.forEach((docSnap) => {
         const d = docSnap.data();
+        const currentTime = Number(d.currentTime || 0);
+        const duration = Number(d.duration || 0);
+        const progress =
+          typeof d.progress === 'number'
+            ? d.progress
+            : duration > 0
+            ? Math.min(100, Math.max(0, Math.round((currentTime / duration) * 100)))
+            : 0;
+        const titleStr = String(d.animeTitle || d.title || 'Anime');
+        const coverStr = d.animeCover || d.coverImage || undefined;
+
         items.push({
           hoshikaId: Number(d.hoshikaId),
-          title: String(d.title || 'Anime'),
-          coverImage: d.coverImage || undefined,
+          title: titleStr,
+          animeTitle: titleStr,
+          coverImage: coverStr,
+          animeCover: coverStr,
           bannerImage: d.bannerImage || undefined,
           episodeNumber: Number(d.episodeNumber || 1),
           episodeTitle: d.episodeTitle || undefined,
-          currentTime: Number(d.currentTime || 0),
-          duration: Number(d.duration || 0),
+          episodeThumbnail: d.episodeThumbnail || undefined,
+          currentTime,
+          duration,
+          progress,
+          audioType: d.audioType === 'dub' ? 'dub' : 'sub',
           timestamp: Number(d.timestamp || Date.now()),
+          lastWatched: d.lastWatched || undefined,
           completed: d.status === 'completed',
         });
       });

@@ -3,10 +3,16 @@
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
-import { History, Film, Trash2, Play } from 'lucide-react';
+import { History, Trash2, Play } from 'lucide-react';
 import { WatchHistoryEntry } from '@/types/streaming';
 import { getWatchHistory, clearWatchHistory, removeHistoryEntry } from '@/lib/storage';
-import { ProtectedRoute } from '@/components/auth/ProtectedRoute';
+import { enrichWatchHistoryEntries } from '@/lib/episode-store';
+import {
+  calculateWatchProgress,
+  getContinueWatchingThumbnailCandidates,
+  resolveDisplayAnimeTitle,
+  resolveDisplayEpisodeTitle,
+} from '@/lib/continue-watching';
 
 export default function HistoryPage() {
   const [history, setHistory] = useState<WatchHistoryEntry[]>([]);
@@ -15,11 +21,18 @@ export default function HistoryPage() {
 
   useEffect(() => {
     setMounted(true);
-    setHistory(getWatchHistory());
+    const loadAndEnrich = () => {
+      const current = getWatchHistory();
+      setHistory(current);
+      if (current.length > 0) {
+        enrichWatchHistoryEntries(current.slice(0, 12));
+      }
+    };
 
-    const handleUpdate = () => setHistory(getWatchHistory());
-    window.addEventListener('aniscroll_history_updated', handleUpdate);
-    return () => window.removeEventListener('aniscroll_history_updated', handleUpdate);
+    loadAndEnrich();
+
+    window.addEventListener('aniscroll_history_updated', loadAndEnrich);
+    return () => window.removeEventListener('aniscroll_history_updated', loadAndEnrich);
   }, []);
 
   const handleClear = () => {
@@ -31,19 +44,21 @@ export default function HistoryPage() {
     removeHistoryEntry(hoshikaId, episodeNumber);
   };
 
-  return (
-    <ProtectedRoute>
-      {!mounted ? (
-        <div className="space-y-6 pb-16">
-          <div className="h-8 w-48 bg-[#141414] rounded-lg animate-pulse" />
-          <div className="space-y-3">
-            {Array.from({ length: 4 }).map((_, i) => (
-              <div key={i} className="h-20 bg-[#141414] rounded-xl animate-pulse" />
-            ))}
-          </div>
+  if (!mounted) {
+    return (
+      <div className="space-y-6 pb-16">
+        <div className="h-8 w-48 bg-[#141414] rounded-lg animate-pulse" />
+        <div className="space-y-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <div key={i} className="h-20 bg-[#141414] rounded-xl animate-pulse" />
+          ))}
         </div>
-      ) : (
-        <div className="space-y-6 pb-16">
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-6 pb-16">
           <div className="flex items-center justify-between pb-2 border-b border-[#292929]">
             <div className="flex items-center gap-2.5">
               <History size={22} className="text-white" />
@@ -107,6 +122,20 @@ export default function HistoryPage() {
                   hour: '2-digit',
                   minute: '2-digit',
                 });
+                const thumbCandidates = getContinueWatchingThumbnailCandidates(item);
+                const thumbUrl = thumbCandidates[0] || null;
+                const animeTitle = resolveDisplayAnimeTitle(item);
+                const epTitle = resolveDisplayEpisodeTitle(item);
+                const progressPercent = calculateWatchProgress(
+                  item.currentTime,
+                  item.duration,
+                  item.progress
+                );
+                const resumeSeconds = Math.max(0, Math.floor(item.currentTime || 0));
+                const audioParam =
+                  item.audioType === 'dub' || item.audioType === 'sub'
+                    ? `&type=${item.audioType}`
+                    : '';
 
                 return (
                   <div
@@ -114,46 +143,50 @@ export default function HistoryPage() {
                     className="group flex items-center justify-between p-3 rounded-xl bg-[#141414] border border-[#292929] hover:border-[#404040] hover:bg-[#1B1B1B] transition-all"
                   >
                     <Link
-                      href={`/watch/${item.hoshikaId}/${item.episodeNumber}`}
+                      href={`/watch/${item.hoshikaId}/${item.episodeNumber}?resume=1&t=${resumeSeconds}${audioParam}`}
                       className="flex items-center gap-4 flex-1 min-w-0"
                     >
-                      <div className="relative w-24 aspect-video bg-[#0A0A0A] rounded-lg overflow-hidden shrink-0 border border-[#292929]">
-                        {item.bannerImage || item.coverImage ? (
+                      <div className="relative w-28 sm:w-32 aspect-video bg-[#0A0A0A] rounded-lg overflow-hidden shrink-0 border border-[#292929]">
+                        {thumbUrl ? (
                           <Image
-                            src={item.bannerImage || item.coverImage!}
-                            alt={item.title}
+                            src={thumbUrl}
+                            alt={`${animeTitle} - ${epTitle}`}
                             fill
-                            sizes="96px"
+                            sizes="128px"
                             className="object-cover"
                             referrerPolicy="no-referrer"
                           />
                         ) : (
-                          <div className="w-full h-full flex items-center justify-center text-[#707070]">
-                            <Film size={18} />
+                          <div className="w-full h-full flex items-center justify-center bg-[#141414] text-[10px] font-mono text-[#707070]">
+                            EP {item.episodeNumber}
                           </div>
                         )}
                         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                           <Play size={15} fill="white" className="text-white" />
                         </div>
+                        {progressPercent > 0 && (
+                          <div className="absolute bottom-0 left-0 right-0 h-1 bg-[#292929]">
+                            <div
+                              className="h-full bg-white"
+                              style={{ width: `${progressPercent}%` }}
+                            />
+                          </div>
+                        )}
                       </div>
 
                       <div className="min-w-0 flex-1">
                         <h3 className="text-sm font-semibold text-white truncate group-hover:underline">
-                          {item.title}
+                          {animeTitle}
                         </h3>
-                        <div className="flex items-center gap-2 text-xs text-[#A0A0A0] mt-0.5">
-                          <span className="font-medium text-white">
-                            Episode {item.episodeNumber}
-                          </span>
-                          {item.episodeTitle && item.episodeTitle !== `Episode ${item.episodeNumber}` && (
-                            <>
-                              <span aria-hidden="true" className="text-[#707070]">·</span>
-                              <span className="truncate max-w-xs">{item.episodeTitle}</span>
-                            </>
-                          )}
-                        </div>
-                        <div className="text-[11px] text-[#707070] mt-1">
-                          Watched on {watchedDate}
+                        <p className="text-xs text-[#CCCCCC] truncate mt-0.5">
+                          {epTitle}
+                        </p>
+                        <div className="flex items-center gap-2 text-[11px] text-[#707070] mt-1 font-mono tabular-nums">
+                          <span>Episode {item.episodeNumber}</span>
+                          <span aria-hidden="true">·</span>
+                          <span>{progressPercent}% watched</span>
+                          <span aria-hidden="true">·</span>
+                          <span>{watchedDate}</span>
                         </div>
                       </div>
                     </Link>
@@ -173,7 +206,5 @@ export default function HistoryPage() {
             </div>
           )}
         </div>
-      )}
-    </ProtectedRoute>
   );
 }

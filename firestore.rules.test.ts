@@ -110,7 +110,11 @@ function evaluateRule(ctx: {
   if (collection === 'continueWatching') {
     const valid =
       hasAllKeys(data, ['uid', 'hoshikaId', 'title', 'episodeNumber', 'currentTime', 'duration', 'timestamp', 'createdAt', 'updatedAt']) &&
-      hasOnlyKeys(data, ['uid', 'hoshikaId', 'title', 'episodeNumber', 'currentTime', 'duration', 'coverImage', 'bannerImage', 'episodeTitle', 'audioType', 'timestamp', 'createdAt', 'updatedAt']) &&
+      hasOnlyKeys(data, [
+        'uid', 'hoshikaId', 'title', 'animeTitle', 'episodeNumber', 'currentTime', 'duration', 'progress',
+        'coverImage', 'animeCover', 'bannerImage', 'episodeTitle', 'episodeThumbnail',
+        'audioType', 'timestamp', 'lastWatched', 'createdAt', 'updatedAt'
+      ]) &&
       typeof data.uid === 'string' && data.uid === ctx.auth.uid &&
       typeof data.hoshikaId === 'number' && data.hoshikaId > 0 &&
       typeof data.title === 'string' && data.title.length >= 1 && data.title.length <= 300 &&

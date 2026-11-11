@@ -110,17 +110,26 @@ service cloud.firestore {
     // Entity Blueprint 3: ContinueWatchingItem (/users/{uid}/continueWatching/{animeId})
     function isValidContinueWatchingItem(data) {
       return data.keys().hasAll(['uid', 'hoshikaId', 'title', 'episodeNumber', 'currentTime', 'duration', 'timestamp', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'hoshikaId', 'title', 'episodeNumber', 'currentTime', 'duration', 'coverImage', 'bannerImage', 'episodeTitle', 'audioType', 'timestamp', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'uid', 'hoshikaId', 'title', 'animeTitle', 'episodeNumber', 'currentTime', 'duration', 'progress',
+          'coverImage', 'animeCover', 'bannerImage', 'episodeTitle', 'episodeThumbnail',
+          'audioType', 'timestamp', 'lastWatched', 'createdAt', 'updatedAt'
+        ])
         && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid == request.auth.uid
         && data.hoshikaId is number && data.hoshikaId > 0
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && (!('animeTitle' in data) || data.animeTitle == null || (data.animeTitle is string && data.animeTitle.size() <= 300))
         && data.episodeNumber is number && data.episodeNumber >= 1
         && data.currentTime is number && data.currentTime >= 0
         && data.duration is number && data.duration > 0
+        && (!('progress' in data) || data.progress == null || (data.progress is number && data.progress >= 0 && data.progress <= 100))
         && (!('coverImage' in data) || data.coverImage == null || (data.coverImage is string && data.coverImage.size() <= 1024))
+        && (!('animeCover' in data) || data.animeCover == null || (data.animeCover is string && data.animeCover.size() <= 1024))
         && (!('bannerImage' in data) || data.bannerImage == null || (data.bannerImage is string && data.bannerImage.size() <= 1024))
         && (!('episodeTitle' in data) || data.episodeTitle == null || (data.episodeTitle is string && data.episodeTitle.size() <= 300))
+        && (!('episodeThumbnail' in data) || data.episodeThumbnail == null || (data.episodeThumbnail is string && data.episodeThumbnail.size() <= 1024))
         && (!('audioType' in data) || data.audioType == null || (data.audioType is string && data.audioType in ['sub', 'dub']))
+        && (!('lastWatched' in data) || data.lastWatched == null || (data.lastWatched is string && data.lastWatched.size() <= 64))
         && data.timestamp is number && data.timestamp > 0
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -129,17 +138,27 @@ service cloud.firestore {
     // Entity Blueprint 4: WatchHistoryItem (/users/{uid}/watchHistory/{historyId})
     function isValidWatchHistoryItem(data) {
       return data.keys().hasAll(['uid', 'hoshikaId', 'title', 'episodeNumber', 'currentTime', 'duration', 'status', 'timestamp', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'hoshikaId', 'title', 'coverImage', 'bannerImage', 'episodeNumber', 'episodeTitle', 'currentTime', 'duration', 'status', 'timestamp', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'uid', 'hoshikaId', 'title', 'animeTitle', 'coverImage', 'animeCover', 'bannerImage',
+          'episodeNumber', 'episodeTitle', 'episodeThumbnail', 'currentTime', 'duration', 'progress',
+          'audioType', 'status', 'timestamp', 'lastWatched', 'createdAt', 'updatedAt'
+        ])
         && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 && data.uid == request.auth.uid
         && data.hoshikaId is number && data.hoshikaId > 0
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
+        && (!('animeTitle' in data) || data.animeTitle == null || (data.animeTitle is string && data.animeTitle.size() <= 300))
         && (!('coverImage' in data) || data.coverImage == null || (data.coverImage is string && data.coverImage.size() <= 1024))
+        && (!('animeCover' in data) || data.animeCover == null || (data.animeCover is string && data.animeCover.size() <= 1024))
         && (!('bannerImage' in data) || data.bannerImage == null || (data.bannerImage is string && data.bannerImage.size() <= 1024))
         && data.episodeNumber is number && data.episodeNumber >= 1
         && (!('episodeTitle' in data) || data.episodeTitle == null || (data.episodeTitle is string && data.episodeTitle.size() <= 300))
+        && (!('episodeThumbnail' in data) || data.episodeThumbnail == null || (data.episodeThumbnail is string && data.episodeThumbnail.size() <= 1024))
         && data.currentTime is number && data.currentTime >= 0
         && data.duration is number && data.duration >= 0
+        && (!('progress' in data) || data.progress == null || (data.progress is number && data.progress >= 0 && data.progress <= 100))
+        && (!('audioType' in data) || data.audioType == null || (data.audioType is string && data.audioType in ['sub', 'dub']))
         && data.status is string && data.status in ['watching', 'completed']
+        && (!('lastWatched' in data) || data.lastWatched == null || (data.lastWatched is string && data.lastWatched.size() <= 64))
         && data.timestamp is number && data.timestamp > 0
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
@@ -416,7 +435,11 @@ service cloud.firestore {
         && incoming().uid == existing().uid
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'episodeNumber', 'currentTime', 'duration', 'coverImage', 'bannerImage', 'episodeTitle', 'audioType', 'timestamp', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'animeTitle', 'episodeNumber', 'currentTime', 'duration', 'progress',
+          'coverImage', 'animeCover', 'bannerImage', 'episodeTitle', 'episodeThumbnail',
+          'audioType', 'timestamp', 'lastWatched', 'updatedAt'
+        ]);
       allow delete: if isOwner(uid) && isValidId(uid) && isValidId(animeId);
     }
 
@@ -433,7 +456,11 @@ service cloud.firestore {
         && incoming().uid == existing().uid
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && incoming().diff(existing()).affectedKeys().hasOnly(['title', 'coverImage', 'bannerImage', 'episodeNumber', 'episodeTitle', 'currentTime', 'duration', 'status', 'timestamp', 'updatedAt']);
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'title', 'animeTitle', 'coverImage', 'animeCover', 'bannerImage',
+          'episodeNumber', 'episodeTitle', 'episodeThumbnail', 'currentTime', 'duration', 'progress',
+          'audioType', 'status', 'timestamp', 'lastWatched', 'updatedAt'
+        ]);
       allow delete: if isOwner(uid) && isValidId(uid) && isValidId(historyId);
     }
 

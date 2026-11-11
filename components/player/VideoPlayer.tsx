@@ -33,6 +33,7 @@ import {
 import {
   saveWatchProgress,
   getSavedProgress,
+  getSavedHistoryEntry,
   getUserPreferences,
   getSubtitlePreferences,
   saveSubtitlePreferences,
@@ -45,9 +46,15 @@ import { SubtitleSettingsModal } from './SubtitleSettingsModal';
 
 interface VideoPlayerProps {
   animeId: number;
+  anilistId?: number | null;
   animeTitle: string;
+  coverImage?: string;
+  bannerImage?: string;
   episodeNumber: number;
   episodeTitle?: string;
+  episodeThumbnail?: string;
+  episodeDurationSeconds?: number;
+  initialResumeTime?: number;
   totalEpisodes?: number;
   malId?: number | null;
   streamData?: AniScrollStreamResponse | null;
@@ -60,9 +67,15 @@ interface VideoPlayerProps {
 
 export function VideoPlayer({
   animeId,
+  anilistId,
   animeTitle,
+  coverImage,
+  bannerImage,
   episodeNumber,
   episodeTitle,
+  episodeThumbnail,
+  episodeDurationSeconds = 1440,
+  initialResumeTime = 0,
   totalEpisodes = 1,
   malId,
   streamData,
@@ -77,11 +90,19 @@ export function VideoPlayer({
   const hlsRef = useRef<Hls | null>(null);
   const hideControlsTimerRef = useRef<NodeJS.Timeout | null>(null);
   const lastProgressSaveRef = useRef<number>(0);
+  const hasRestoredPositionRef = useRef<boolean>(false);
 
   // Player state
   const [isPlaying, setIsPlaying] = useState(false);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
+  const [currentTime, setCurrentTime] = useState<number>(() => {
+    if (initialResumeTime > 0) return initialResumeTime;
+    return getSavedProgress(animeId, episodeNumber);
+  });
+  const [duration, setDuration] = useState<number>(() => {
+    const saved = getSavedHistoryEntry(animeId, episodeNumber);
+    if (saved?.duration && saved.duration > 0) return saved.duration;
+    return episodeDurationSeconds || 1440;
+  });
   const [volume, setVolume] = useState(1);
   const [isMuted, setIsMuted] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -111,6 +132,126 @@ export function VideoPlayer({
 
   // Resume toast
   const [resumePrompt, setResumePrompt] = useState<{ time: number } | null>(null);
+
+  // Keep latest metadata ref so playback callbacks always save fresh episode/anime metadata
+  const metadataRef = useRef({
+    animeId,
+    anilistId: anilistId ?? streamData?.anilistId ?? null,
+    malId: malId ?? streamData?.malId ?? null,
+    animeTitle,
+    coverImage,
+    bannerImage,
+    episodeNumber,
+    episodeTitle,
+    episodeThumbnail,
+    episodeDurationSeconds,
+    activeType,
+  });
+
+  useEffect(() => {
+    metadataRef.current = {
+      animeId,
+      anilistId: anilistId ?? streamData?.anilistId ?? null,
+      malId: malId ?? streamData?.malId ?? null,
+      animeTitle,
+      coverImage,
+      bannerImage,
+      episodeNumber,
+      episodeTitle,
+      episodeThumbnail,
+      episodeDurationSeconds,
+      activeType,
+    };
+  }, [
+    animeId,
+    anilistId,
+    malId,
+    streamData?.anilistId,
+    streamData?.malId,
+    animeTitle,
+    coverImage,
+    bannerImage,
+    episodeNumber,
+    episodeTitle,
+    episodeThumbnail,
+    episodeDurationSeconds,
+    activeType,
+  ]);
+
+  const persistProgress = useCallback(
+    (timeSec: number, durationSec?: number) => {
+      const meta = metadataRef.current;
+      const videoDur =
+        videoRef.current &&
+        Number.isFinite(videoRef.current.duration) &&
+        videoRef.current.duration > 0
+          ? videoRef.current.duration
+          : 0;
+      const effectiveDuration =
+        durationSec && durationSec > 0
+          ? durationSec
+          : videoDur > 0
+          ? videoDur
+          : duration > 0
+          ? duration
+          : meta.episodeDurationSeconds || 1440;
+
+      if (effectiveDuration <= 0 || timeSec < 0) return;
+
+      const progressPct = Math.min(
+        100,
+        Math.max(0, Math.round((timeSec / effectiveDuration) * 100))
+      );
+
+      saveWatchProgress({
+        hoshikaId: meta.animeId,
+        anilistId: meta.anilistId,
+        malId: meta.malId,
+        title: meta.animeTitle,
+        animeTitle: meta.animeTitle,
+        coverImage: meta.coverImage,
+        animeCover: meta.coverImage,
+        bannerImage: meta.bannerImage,
+        episodeNumber: meta.episodeNumber,
+        episodeTitle: meta.episodeTitle,
+        episodeThumbnail: meta.episodeThumbnail,
+        currentTime: timeSec,
+        duration: effectiveDuration,
+        progress: progressPct,
+        audioType: meta.activeType,
+        completed: timeSec / effectiveDuration >= 0.99,
+      });
+    },
+    [duration]
+  );
+
+  // Sync initialResumeTime when episode or URL resume param updates
+  useEffect(() => {
+    hasRestoredPositionRef.current = false;
+    const saved = getSavedHistoryEntry(animeId, episodeNumber);
+    const targetTime =
+      initialResumeTime > 0
+        ? initialResumeTime
+        : saved && saved.currentTime > 0 && !saved.completed
+        ? saved.currentTime
+        : 0;
+
+    if (targetTime > 0) {
+      setCurrentTime(targetTime);
+      if (videoRef.current && videoRef.current.readyState >= 1) {
+        videoRef.current.currentTime = targetTime;
+        hasRestoredPositionRef.current = true;
+      }
+    } else {
+      setCurrentTime(0);
+    }
+
+    if (saved?.duration && saved.duration > 0) {
+      setDuration(saved.duration);
+    } else {
+      setDuration(episodeDurationSeconds || 1440);
+    }
+  }, [animeId, episodeNumber, initialResumeTime, episodeDurationSeconds]);
 
   // Load preferences
   useEffect(() => {
@@ -158,6 +299,31 @@ export function VideoPlayer({
     };
   }, [malId, episodeNumber, duration]);
 
+  // Restore saved playback position onto the video element
+  const restoreSavedPositionOnVideo = useCallback(
+    (video: HTMLVideoElement) => {
+      if (hasRestoredPositionRef.current) return;
+      const savedTime =
+        initialResumeTime > 0 ? initialResumeTime : getSavedProgress(animeId, episodeNumber);
+      if (savedTime > 0) {
+        const maxSeek =
+          Number.isFinite(video.duration) && video.duration > 2
+            ? Math.min(savedTime, video.duration - 2)
+            : savedTime;
+        try {
+          video.currentTime = maxSeek;
+          setCurrentTime(maxSeek);
+          hasRestoredPositionRef.current = true;
+        } catch {
+          // Will retry on loadedmetadata
+        }
+      } else {
+        hasRestoredPositionRef.current = true;
+      }
+    },
+    [animeId, episodeNumber, initialResumeTime]
+  );
+
   // Load HLS Stream
   useEffect(() => {
     const video = videoRef.current;
@@ -187,11 +353,7 @@ export function VideoPlayer({
       hls.attachMedia(video);
 
       hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        // Check saved progress
-        const savedTime = getSavedProgress(animeId, episodeNumber);
-        if (savedTime > 15) {
-          setResumePrompt({ time: savedTime });
-        }
+        restoreSavedPositionOnVideo(video);
       });
 
       hls.on(Hls.Events.ERROR, (_event, data) => {
@@ -215,10 +377,7 @@ export function VideoPlayer({
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
       // Native Safari HLS
       video.src = streamUrl;
-      const savedTime = getSavedProgress(animeId, episodeNumber);
-      if (savedTime > 15) {
-        setResumePrompt({ time: savedTime });
-      }
+      restoreSavedPositionOnVideo(video);
     }
 
     return () => {
@@ -227,7 +386,7 @@ export function VideoPlayer({
         hlsRef.current = null;
       }
     };
-  }, [streamData, animeId, episodeNumber]);
+  }, [streamData, animeId, episodeNumber, restoreSavedPositionOnVideo]);
 
   // Handle Video Time Updates & AniSkip triggers
   const handleTimeUpdate = () => {
@@ -235,21 +394,22 @@ export function VideoPlayer({
     if (!video) return;
 
     const time = video.currentTime;
+    const savedTime =
+      initialResumeTime > 0 ? initialResumeTime : getSavedProgress(animeId, episodeNumber);
+
+    // Prevent initial 0:00 mount tick from overwriting a restored playback position
+    if (!hasRestoredPositionRef.current && savedTime > 5 && time < 2) {
+      restoreSavedPositionOnVideo(video);
+      return;
+    }
+
     setCurrentTime(time);
 
-    // Throttled progress save (every 5 seconds)
+    // Throttled progress save (every 3 seconds)
     const now = Date.now();
-    if (now - lastProgressSaveRef.current > 5000 && video.duration > 0) {
+    if (now - lastProgressSaveRef.current > 3000 && time > 0) {
       lastProgressSaveRef.current = now;
-      saveWatchProgress({
-        hoshikaId: animeId,
-        title: animeTitle,
-        episodeNumber,
-        episodeTitle,
-        currentTime: time,
-        duration: video.duration,
-        completed: time / video.duration > 0.9,
-      });
+      persistProgress(time, video.duration);
     }
 
     // Check for active Skip Intervals (OP / ED)
@@ -279,6 +439,7 @@ export function VideoPlayer({
     if (!video || !currentSkip) return;
     video.currentTime = currentSkip.interval.endTime;
     setCurrentSkip(null);
+    persistProgress(currentSkip.interval.endTime, video.duration);
   };
 
   // Play / Pause toggle
@@ -289,26 +450,56 @@ export function VideoPlayer({
     if (video.paused) {
       video.play().catch(() => {});
       setIsPlaying(true);
+      const effectiveTime = video.currentTime > 0 ? video.currentTime : currentTime > 0 ? currentTime : 5;
+      persistProgress(effectiveTime, video.duration);
     } else {
       video.pause();
       setIsPlaying(false);
+      if (video.currentTime > 0) {
+        persistProgress(video.currentTime, video.duration);
+      }
     }
-  }, []);
+  }, [currentTime, persistProgress]);
 
   // Seek forward / backward
   const handleSeekRelative = (seconds: number) => {
     const video = videoRef.current;
-    if (!video) return;
-    video.currentTime = Math.max(0, Math.min(video.duration, video.currentTime + seconds));
+    const maxDur =
+      video && Number.isFinite(video.duration) && video.duration > 0
+        ? video.duration
+        : duration || 1440;
+    const baseTime = video && video.currentTime > 0 ? video.currentTime : currentTime;
+    const nextTime = Math.max(0, Math.min(maxDur, baseTime + seconds));
+    if (video) {
+      try {
+        video.currentTime = nextTime;
+      } catch {
+        // Ignore if media not ready
+      }
+    }
+    hasRestoredPositionRef.current = true;
+    setCurrentTime(nextTime);
+    persistProgress(nextTime, maxDur);
   };
 
   // Progress bar scrub
   const handleSeekChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const video = videoRef.current;
-    if (!video) return;
     const newTime = parseFloat(e.target.value);
-    video.currentTime = newTime;
+    const maxDur =
+      video && Number.isFinite(video.duration) && video.duration > 0
+        ? video.duration
+        : duration || 1440;
+    if (video) {
+      try {
+        video.currentTime = newTime;
+      } catch {
+        // Ignore if media not ready
+      }
+    }
+    hasRestoredPositionRef.current = true;
     setCurrentTime(newTime);
+    persistProgress(newTime, maxDur);
   };
 
   // Volume & Mute
@@ -557,11 +748,22 @@ export function VideoPlayer({
         className="w-full h-full object-contain cursor-pointer"
         onClick={togglePlay}
         onPlay={() => setIsPlaying(true)}
-        onPause={() => setIsPlaying(false)}
+        onPause={() => {
+          setIsPlaying(false);
+          if (videoRef.current && videoRef.current.currentTime >= 1) {
+            persistProgress(
+              videoRef.current.currentTime,
+              videoRef.current.duration || duration || episodeDurationSeconds || 1440
+            );
+          }
+        }}
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={() => {
           if (videoRef.current) {
-            setDuration(videoRef.current.duration);
+            if (videoRef.current.duration && isFinite(videoRef.current.duration)) {
+              setDuration(videoRef.current.duration);
+            }
+            restoreSavedPositionOnVideo(videoRef.current);
           }
         }}
         onWaiting={() => setIsBuffering(true)}

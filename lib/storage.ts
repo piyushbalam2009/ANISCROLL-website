@@ -15,6 +15,7 @@ import {
   clearCloudWatchHistory,
   saveCloudPreferences,
 } from './firestore';
+import { mergeWatchHistoryEntry } from './continue-watching';
 
 const WATCHLIST_KEY = 'aniscroll_watchlist';
 const HISTORY_KEY = 'aniscroll_watch_history';
@@ -61,7 +62,19 @@ export function syncWatchlistFromCloud(items: WatchlistEntry[]): void {
 }
 
 export function syncWatchHistoryFromCloud(items: WatchHistoryEntry[]): void {
-  setStored(HISTORY_KEY, items);
+  const localHistory = getStored<WatchHistoryEntry[]>(HISTORY_KEY, []);
+  const localMap = new Map<string, WatchHistoryEntry>();
+  for (const item of localHistory) {
+    localMap.set(`${item.hoshikaId}_${item.episodeNumber}`, item);
+  }
+
+  const merged = items.map((cloudItem) => {
+    const key = `${cloudItem.hoshikaId}_${cloudItem.episodeNumber}`;
+    const existingLocal = localMap.get(key);
+    return mergeWatchHistoryEntry(cloudItem, existingLocal, { metadataOnly: true });
+  });
+
+  setStored(HISTORY_KEY, merged);
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('aniscroll_history_updated'));
   }
@@ -176,29 +189,71 @@ export function getWatchHistory(): WatchHistoryEntry[] {
 
 export function getContinueWatching(): WatchHistoryEntry[] {
   const history = getWatchHistory();
-  // Filter items where progress is between 3% and 95%
-  return history.filter((h) => {
-    if (!h.duration || h.duration <= 0) return false;
+  const seenAnime = new Set<number>();
+  const result: WatchHistoryEntry[] = [];
+
+  for (const h of history) {
+    if (!h.duration || h.duration <= 0) continue;
+    if (h.completed) continue;
     const progress = h.currentTime / h.duration;
-    return progress > 0.03 && progress < 0.95;
-  });
+    // Include started episodes (< 99% complete and at least 1% or >= 5s watched)
+    if ((progress >= 0.01 || h.currentTime >= 5) && progress < 0.99) {
+      if (!seenAnime.has(h.hoshikaId)) {
+        seenAnime.add(h.hoshikaId);
+        result.push(h);
+      }
+    }
+  }
+
+  return result;
+}
+
+export function getSavedHistoryEntry(
+  hoshikaId: number,
+  episodeNumber: number
+): WatchHistoryEntry | null {
+  const history = getWatchHistory();
+  return (
+    history.find(
+      (h) => h.hoshikaId === Number(hoshikaId) && h.episodeNumber === Number(episodeNumber)
+    ) || null
+  );
 }
 
 export function getSavedProgress(hoshikaId: number, episodeNumber: number): number {
-  const history = getWatchHistory();
-  const entry = history.find(
-    (h) => h.hoshikaId === hoshikaId && h.episodeNumber === episodeNumber
-  );
+  const entry = getSavedHistoryEntry(hoshikaId, episodeNumber);
   return entry ? entry.currentTime : 0;
 }
 
-export function saveWatchProgress(entry: Omit<WatchHistoryEntry, 'timestamp'>): void {
+export function saveWatchProgress(
+  entry: Omit<WatchHistoryEntry, 'timestamp'> & { timestamp?: number }
+): WatchHistoryEntry {
   const history = getWatchHistory();
-  const { anilistId: _omitAnilistId, ...cleanEntry } = entry;
-  const fullEntry: WatchHistoryEntry = {
-    ...cleanEntry,
-    timestamp: Date.now(),
-  };
+  const existingEpisode = history.find(
+    (h) => h.hoshikaId === entry.hoshikaId && h.episodeNumber === entry.episodeNumber
+  );
+  const existingSeries = history.find((h) => h.hoshikaId === entry.hoshikaId);
+
+  const baseExisting: Partial<WatchHistoryEntry> | undefined = existingEpisode
+    ? {
+        ...existingSeries,
+        ...existingEpisode,
+      }
+    : existingSeries
+    ? {
+        hoshikaId: existingSeries.hoshikaId,
+        anilistId: existingSeries.anilistId,
+        malId: existingSeries.malId,
+        title: existingSeries.title,
+        animeTitle: existingSeries.animeTitle,
+        coverImage: existingSeries.coverImage,
+        animeCover: existingSeries.animeCover,
+        bannerImage: existingSeries.bannerImage,
+        audioType: existingSeries.audioType,
+      }
+    : undefined;
+
+  const fullEntry = mergeWatchHistoryEntry(entry, baseExisting);
 
   // Remove older entry for the same anime + episode
   const filtered = history.filter(
@@ -215,17 +270,73 @@ export function saveWatchProgress(entry: Omit<WatchHistoryEntry, 'timestamp'>): 
   const currentUser = auth?.currentUser;
   if (currentUser) {
     const prefs = getUserPreferences();
+    const audioType = fullEntry.audioType || prefs.defaultAudio || 'sub';
     saveCloudWatchHistoryItem(currentUser.uid, fullEntry).catch((err) =>
       console.error('Cloud watch history save failed:', err)
     );
-    saveCloudContinueWatchingItem(
-      currentUser.uid,
-      fullEntry,
-      prefs.defaultAudio
-    ).catch((err) =>
+    saveCloudContinueWatchingItem(currentUser.uid, fullEntry, audioType).catch((err) =>
       console.error('Cloud continue watching save failed:', err)
     );
   }
+
+  return fullEntry;
+}
+
+/**
+ * Updates metadata (episodeTitle, episodeThumbnail, coverImage, bannerImage, anilistId)
+ * on an existing watch-history record when metadata resolves after playback starts,
+ * without resetting playback position or timestamp order.
+ */
+export function updateWatchHistoryMetadata(
+  metadata: Partial<WatchHistoryEntry> & { hoshikaId: number; episodeNumber: number }
+): WatchHistoryEntry | null {
+  const history = getWatchHistory();
+  const idx = history.findIndex(
+    (h) =>
+      h.hoshikaId === Number(metadata.hoshikaId) &&
+      h.episodeNumber === Number(metadata.episodeNumber)
+  );
+
+  if (idx === -1) return null;
+
+  const existing = history[idx];
+  const merged = mergeWatchHistoryEntry(metadata, existing, { metadataOnly: true });
+
+  // Only write and dispatch if metadata actually improved/changed
+  const changed =
+    merged.episodeTitle !== existing.episodeTitle ||
+    merged.episodeThumbnail !== existing.episodeThumbnail ||
+    merged.coverImage !== existing.coverImage ||
+    merged.animeCover !== existing.animeCover ||
+    merged.bannerImage !== existing.bannerImage ||
+    merged.animeTitle !== existing.animeTitle ||
+    merged.title !== existing.title ||
+    merged.anilistId !== existing.anilistId ||
+    merged.audioType !== existing.audioType;
+
+  if (!changed) return existing;
+
+  const updated = [...history];
+  updated[idx] = merged;
+  setStored(HISTORY_KEY, updated);
+
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('aniscroll_history_updated'));
+  }
+
+  const currentUser = auth?.currentUser;
+  if (currentUser) {
+    const prefs = getUserPreferences();
+    const audioType = merged.audioType || prefs.defaultAudio || 'sub';
+    saveCloudWatchHistoryItem(currentUser.uid, merged).catch((err) =>
+      console.error('Cloud watch history metadata update failed:', err)
+    );
+    saveCloudContinueWatchingItem(currentUser.uid, merged, audioType).catch((err) =>
+      console.error('Cloud continue watching metadata update failed:', err)
+    );
+  }
+
+  return merged;
 }
 
 export function clearWatchHistory(): void {

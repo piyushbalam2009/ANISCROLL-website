@@ -7,6 +7,7 @@ import {
   saveWatchProgress,
   removeHistoryEntry,
 } from '@/lib/storage';
+import { enrichWatchHistoryEntries } from '@/lib/episode-store';
 
 export function useContinueWatching() {
   const [items, setItems] = useState<WatchHistoryEntry[]>([]);
@@ -14,12 +15,19 @@ export function useContinueWatching() {
 
   useEffect(() => {
     setMounted(true);
-    setItems(getContinueWatching());
+    const loadAndEnrich = () => {
+      const current = getContinueWatching();
+      setItems(current);
+      if (current.length > 0) {
+        enrichWatchHistoryEntries(current);
+      }
+    };
 
-    const handleUpdate = () => setItems(getContinueWatching());
-    window.addEventListener('aniscroll_history_updated', handleUpdate);
+    loadAndEnrich();
+
+    window.addEventListener('aniscroll_history_updated', loadAndEnrich);
     return () =>
-      window.removeEventListener('aniscroll_history_updated', handleUpdate);
+      window.removeEventListener('aniscroll_history_updated', loadAndEnrich);
   }, []);
 
   const saveProgress = useCallback(

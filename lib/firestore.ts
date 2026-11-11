@@ -282,16 +282,33 @@ export async function getCloudContinueWatching(
     const items: WatchHistoryEntry[] = [];
     snap.forEach((docSnap) => {
       const d = docSnap.data();
+      const currentTime = Number(d.currentTime || 0);
+      const duration = Number(d.duration || 1);
+      const progress =
+        typeof d.progress === 'number'
+          ? d.progress
+          : duration > 0
+          ? Math.min(100, Math.max(0, Math.round((currentTime / duration) * 100)))
+          : 0;
+      const titleStr = String(d.animeTitle || d.title || 'Anime');
+      const coverStr = d.animeCover || d.coverImage || undefined;
+
       items.push({
         hoshikaId: Number(d.hoshikaId),
-        title: String(d.title || 'Anime'),
-        coverImage: d.coverImage || undefined,
+        title: titleStr,
+        animeTitle: titleStr,
+        coverImage: coverStr,
+        animeCover: coverStr,
         bannerImage: d.bannerImage || undefined,
         episodeNumber: Number(d.episodeNumber || 1),
         episodeTitle: d.episodeTitle || undefined,
-        currentTime: Number(d.currentTime || 0),
-        duration: Number(d.duration || 1),
+        episodeThumbnail: d.episodeThumbnail || undefined,
+        currentTime,
+        duration,
+        progress,
+        audioType: d.audioType === 'dub' ? 'dub' : 'sub',
         timestamp: Number(d.timestamp || Date.now()),
+        lastWatched: d.lastWatched || undefined,
       });
     });
     return items.sort((a, b) => b.timestamp - a.timestamp);
@@ -311,10 +328,10 @@ export async function saveCloudContinueWatchingItem(
 
   const safeDuration = entry.duration && entry.duration > 0 ? entry.duration : 1;
   const safeCurrentTime = Math.max(0, entry.currentTime || 0);
-  const progress = safeCurrentTime / safeDuration;
+  const progressRatio = safeCurrentTime / safeDuration;
 
   // If completed (>= 95%), remove from continueWatching
-  if (progress >= 0.95) {
+  if (progressRatio >= 0.95) {
     try {
       const snap = await getDoc(ref);
       if (snap.exists()) {
@@ -326,20 +343,65 @@ export async function saveCloudContinueWatchingItem(
     }
   }
 
-  const baseFields: Record<string, any> = {
-    title: sanitizeString(entry.title, 300, 'Unknown Anime'),
-    episodeNumber: Math.max(1, Number(entry.episodeNumber || 1)),
-    currentTime: safeCurrentTime,
-    duration: safeDuration,
-    coverImage: entry.coverImage ? sanitizeString(entry.coverImage, 1024) : null,
-    bannerImage: entry.bannerImage ? sanitizeString(entry.bannerImage, 1024) : null,
-    episodeTitle: entry.episodeTitle ? sanitizeString(entry.episodeTitle, 300) : null,
-    audioType: audioType === 'dub' ? 'dub' : 'sub',
-    timestamp: entry.timestamp > 0 ? entry.timestamp : Date.now(),
-  };
-
   try {
     const snap = await getDoc(ref);
+    const existing = snap.exists() ? snap.data() : null;
+    const sameEpisode = existing && Number(existing.episodeNumber) === Number(entry.episodeNumber);
+
+    const resolvedTitle = sanitizeString(
+      entry.animeTitle || entry.title || existing?.animeTitle || existing?.title,
+      300,
+      'Unknown Anime'
+    );
+    const rawCover = entry.animeCover || entry.coverImage || existing?.animeCover || existing?.coverImage;
+    const safeCover = rawCover ? sanitizeString(rawCover, 1024) : null;
+    const rawBanner = entry.bannerImage || existing?.bannerImage;
+    const safeBanner = rawBanner ? sanitizeString(rawBanner, 1024) : null;
+
+    const incomingEpTitle = entry.episodeTitle?.trim();
+    const isIncomingGeneric =
+      !incomingEpTitle || /^ep(?:isode)?\.?\s*#?\d+$/i.test(incomingEpTitle);
+    const rawEpTitle =
+      !isIncomingGeneric
+        ? incomingEpTitle
+        : (sameEpisode && existing?.episodeTitle) || incomingEpTitle || null;
+    const safeEpTitle = rawEpTitle ? sanitizeString(rawEpTitle, 300) : null;
+
+    const rawEpThumb =
+      entry.episodeThumbnail || (sameEpisode ? existing?.episodeThumbnail : null);
+    const safeEpThumb = rawEpThumb ? sanitizeString(rawEpThumb, 1024) : null;
+
+    const safeProgress = Math.min(
+      100,
+      Math.max(0, Math.round((safeCurrentTime / safeDuration) * 100))
+    );
+    const resolvedAudio =
+      entry.audioType === 'dub' || audioType === 'dub' ? 'dub' : 'sub';
+    const safeTimestamp = entry.timestamp > 0 ? entry.timestamp : Date.now();
+    const safeLastWatched = sanitizeString(
+      typeof entry.lastWatched === 'string'
+        ? entry.lastWatched
+        : new Date(safeTimestamp).toISOString(),
+      64
+    );
+
+    const baseFields: Record<string, any> = {
+      title: resolvedTitle,
+      animeTitle: resolvedTitle,
+      episodeNumber: Math.max(1, Number(entry.episodeNumber || 1)),
+      currentTime: safeCurrentTime,
+      duration: safeDuration,
+      progress: safeProgress,
+      coverImage: safeCover,
+      animeCover: safeCover,
+      bannerImage: safeBanner,
+      episodeTitle: safeEpTitle,
+      episodeThumbnail: safeEpThumb,
+      audioType: resolvedAudio,
+      timestamp: safeTimestamp,
+      lastWatched: safeLastWatched,
+    };
+
     if (!snap.exists()) {
       await setDoc(ref, {
         uid,
@@ -386,16 +448,33 @@ export async function getCloudWatchHistory(
     const items: WatchHistoryEntry[] = [];
     snap.forEach((docSnap) => {
       const d = docSnap.data();
+      const currentTime = Number(d.currentTime || 0);
+      const duration = Number(d.duration || 0);
+      const progress =
+        typeof d.progress === 'number'
+          ? d.progress
+          : duration > 0
+          ? Math.min(100, Math.max(0, Math.round((currentTime / duration) * 100)))
+          : 0;
+      const titleStr = String(d.animeTitle || d.title || 'Anime');
+      const coverStr = d.animeCover || d.coverImage || undefined;
+
       items.push({
         hoshikaId: Number(d.hoshikaId),
-        title: String(d.title || 'Anime'),
-        coverImage: d.coverImage || undefined,
+        title: titleStr,
+        animeTitle: titleStr,
+        coverImage: coverStr,
+        animeCover: coverStr,
         bannerImage: d.bannerImage || undefined,
         episodeNumber: Number(d.episodeNumber || 1),
         episodeTitle: d.episodeTitle || undefined,
-        currentTime: Number(d.currentTime || 0),
-        duration: Number(d.duration || 0),
+        episodeThumbnail: d.episodeThumbnail || undefined,
+        currentTime,
+        duration,
+        progress,
+        audioType: d.audioType === 'dub' ? 'dub' : 'sub',
         timestamp: Number(d.timestamp || Date.now()),
+        lastWatched: d.lastWatched || undefined,
         completed: d.status === 'completed',
       });
     });
@@ -413,26 +492,83 @@ export async function saveCloudWatchHistoryItem(
   const path = `users/${uid}/watchHistory/${docId}`;
   const ref = doc(db, 'users', uid, 'watchHistory', docId);
 
-  const safeDuration = Math.max(0, Number(entry.duration || 0));
-  const safeCurrentTime = Math.max(0, Number(entry.currentTime || 0));
-  const isCompleted =
-    entry.completed ||
-    (safeDuration > 0 && safeCurrentTime / safeDuration >= 0.9);
-
-  const baseFields: Record<string, any> = {
-    title: sanitizeString(entry.title, 300, 'Unknown Anime'),
-    coverImage: entry.coverImage ? sanitizeString(entry.coverImage, 1024) : null,
-    bannerImage: entry.bannerImage ? sanitizeString(entry.bannerImage, 1024) : null,
-    episodeNumber: Math.max(1, Number(entry.episodeNumber || 1)),
-    episodeTitle: entry.episodeTitle ? sanitizeString(entry.episodeTitle, 300) : null,
-    currentTime: safeCurrentTime,
-    duration: safeDuration,
-    status: isCompleted ? 'completed' : 'watching',
-    timestamp: entry.timestamp > 0 ? entry.timestamp : Date.now(),
-  };
-
   try {
     const snap = await getDoc(ref);
+    const existing = snap.exists() ? snap.data() : null;
+
+    const safeDuration = Math.max(
+      0,
+      Number(entry.duration || existing?.duration || 0)
+    );
+    const safeCurrentTime = Math.max(
+      0,
+      Number(
+        entry.currentTime > 0
+          ? entry.currentTime
+          : existing?.currentTime || entry.currentTime || 0
+      )
+    );
+    const isCompleted =
+      entry.completed ||
+      (safeDuration > 0 && safeCurrentTime / safeDuration >= 0.95);
+
+    const resolvedTitle = sanitizeString(
+      entry.animeTitle || entry.title || existing?.animeTitle || existing?.title,
+      300,
+      'Unknown Anime'
+    );
+    const rawCover =
+      entry.animeCover || entry.coverImage || existing?.animeCover || existing?.coverImage;
+    const safeCover = rawCover ? sanitizeString(rawCover, 1024) : null;
+    const rawBanner = entry.bannerImage || existing?.bannerImage;
+    const safeBanner = rawBanner ? sanitizeString(rawBanner, 1024) : null;
+
+    const incomingEpTitle = entry.episodeTitle?.trim();
+    const isIncomingGeneric =
+      !incomingEpTitle || /^ep(?:isode)?\.?\s*#?\d+$/i.test(incomingEpTitle);
+    const rawEpTitle =
+      !isIncomingGeneric
+        ? incomingEpTitle
+        : existing?.episodeTitle || incomingEpTitle || null;
+    const safeEpTitle = rawEpTitle ? sanitizeString(rawEpTitle, 300) : null;
+
+    const rawEpThumb = entry.episodeThumbnail || existing?.episodeThumbnail;
+    const safeEpThumb = rawEpThumb ? sanitizeString(rawEpThumb, 1024) : null;
+
+    const safeProgress =
+      safeDuration > 0
+        ? Math.min(100, Math.max(0, Math.round((safeCurrentTime / safeDuration) * 100)))
+        : typeof entry.progress === 'number'
+        ? Math.min(100, Math.max(0, Math.round(entry.progress)))
+        : 0;
+    const resolvedAudio =
+      entry.audioType === 'dub' || existing?.audioType === 'dub' ? 'dub' : 'sub';
+    const safeTimestamp = entry.timestamp > 0 ? entry.timestamp : Date.now();
+    const safeLastWatched = sanitizeString(
+      typeof entry.lastWatched === 'string'
+        ? entry.lastWatched
+        : new Date(safeTimestamp).toISOString(),
+      64
+    );
+
+    const baseFields: Record<string, any> = {
+      title: resolvedTitle,
+      animeTitle: resolvedTitle,
+      coverImage: safeCover,
+      animeCover: safeCover,
+      bannerImage: safeBanner,
+      episodeNumber: Math.max(1, Number(entry.episodeNumber || 1)),
+      episodeTitle: safeEpTitle,
+      episodeThumbnail: safeEpThumb,
+      currentTime: safeCurrentTime,
+      duration: safeDuration,
+      progress: safeProgress,
+      audioType: resolvedAudio,
+      status: isCompleted ? 'completed' : 'watching',
+      timestamp: safeTimestamp,
+      lastWatched: safeLastWatched,
+    };
+
     if (!snap.exists()) {
       await setDoc(ref, {
         uid,
