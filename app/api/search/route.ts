@@ -4,7 +4,8 @@ import { searchHoshika } from '@/lib/hoshika';
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
   const q = searchParams.get('q') || '';
-  const limit = parseInt(searchParams.get('limit') || '20', 10);
+  const rawLimit = parseInt(searchParams.get('limit') || '20', 10);
+  const limit = Number.isFinite(rawLimit) ? Math.min(20, Math.max(1, rawLimit)) : 20;
   const format = searchParams.get('format') || undefined;
   const year = searchParams.get('year') || undefined;
 

@@ -63,6 +63,9 @@ interface VideoPlayerProps {
   activeType: 'sub' | 'dub';
   onChangeType: (type: 'sub' | 'dub') => void;
   onNavigateEpisode: (episode: number) => void;
+  hasSub?: boolean;
+  hasDub?: boolean;
+  isLoadingAvailability?: boolean;
 }
 
 export function VideoPlayer({
@@ -84,6 +87,9 @@ export function VideoPlayer({
   activeType,
   onChangeType,
   onNavigateEpisode,
+  hasSub = true,
+  hasDub = true,
+  isLoadingAvailability = false,
 }: VideoPlayerProps) {
   const containerRef = useRef<HTMLDivElement>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -795,13 +801,15 @@ export function VideoPlayer({
           </p>
 
           <div className="flex items-center gap-3">
-            {/* Try Dub if Sub failed or vice versa */}
-            <button
-              onClick={() => onChangeType(activeType === 'sub' ? 'dub' : 'sub')}
-              className="px-4 py-2 rounded-lg bg-white text-black text-xs font-semibold hover:bg-neutral-200 transition-colors"
-            >
-              Switch to {activeType === 'sub' ? 'Dub' : 'Sub'}
-            </button>
+            {/* Try Dub if Sub failed or vice versa, only if that other language is available */}
+            {((activeType === 'sub' && hasDub) || (activeType === 'dub' && hasSub)) && (
+              <button
+                onClick={() => onChangeType(activeType === 'sub' ? 'dub' : 'sub')}
+                className="px-4 py-2 rounded-lg bg-white text-black text-xs font-semibold hover:bg-neutral-200 transition-colors"
+              >
+                Switch to {activeType === 'sub' ? 'Dub' : 'Sub'}
+              </button>
+            )}
 
             {streamData?.embedUrl && (
               <a
@@ -903,28 +911,45 @@ export function VideoPlayer({
             </h3>
           </div>
 
-          {/* Sub / Dub Selector Pill */}
-          <div className="flex items-center bg-[#141414]/90 border border-[#292929] rounded-lg p-0.5">
-            <button
-              onClick={() => onChangeType('sub')}
-              className={`px-3 py-1 text-xs rounded font-medium transition-colors ${
-                activeType === 'sub'
-                  ? 'bg-white text-black font-semibold'
-                  : 'text-[#A0A0A0] hover:text-white'
-              }`}
-            >
-              SUB
-            </button>
-            <button
-              onClick={() => onChangeType('dub')}
-              className={`px-3 py-1 text-xs rounded font-medium transition-colors ${
-                activeType === 'dub'
-                  ? 'bg-white text-black font-semibold'
-                  : 'text-[#A0A0A0] hover:text-white'
-              }`}
-            >
-              DUB
-            </button>
+          {/* Dynamic Sub / Dub Selector Pill */}
+          <div
+            data-testid="player-sub-dub-controls"
+            className="flex items-center bg-[#141414]/90 border border-[#292929] rounded-lg p-0.5"
+          >
+            {isLoadingAvailability ? (
+              <span className="px-3 py-1 text-[11px] font-mono text-[#A0A0A0]">
+                Audio...
+              </span>
+            ) : (
+              <>
+                {hasSub && (
+                  <button
+                    type="button"
+                    onClick={() => onChangeType('sub')}
+                    className={`px-3 py-1 text-xs rounded font-medium transition-colors ${
+                      activeType === 'sub'
+                        ? 'bg-white text-black font-semibold'
+                        : 'text-[#A0A0A0] hover:text-white'
+                    }`}
+                  >
+                    SUB
+                  </button>
+                )}
+                {hasDub && (
+                  <button
+                    type="button"
+                    onClick={() => onChangeType('dub')}
+                    className={`px-3 py-1 text-xs rounded font-medium transition-colors ${
+                      activeType === 'dub'
+                        ? 'bg-white text-black font-semibold'
+                        : 'text-[#A0A0A0] hover:text-white'
+                    }`}
+                  >
+                    DUB
+                  </button>
+                )}
+              </>
+            )}
           </div>
         </div>
 

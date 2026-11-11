@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { VideoPlayer } from './VideoPlayer';
@@ -16,7 +16,13 @@ import {
   getSavedHistoryEntry,
   updateWatchHistoryMetadata,
 } from '@/lib/storage';
-import { cacheEpisodes, getCachedEpisode, fetchEpisodeBatch } from '@/lib/episode-store';
+import {
+  cacheEpisodes,
+  getCachedEpisode,
+  fetchEpisodeBatch,
+  selectDefaultLanguage,
+} from '@/lib/episode-store';
+import { useEpisodeAvailability } from '@/hooks/useEpisodeAvailability';
 import { ChevronRight, ArrowLeft, AlertCircle, Loader2 } from 'lucide-react';
 
 interface WatchPageClientProps {
@@ -42,31 +48,76 @@ export function WatchPageClient({
   const [isLoadingStream, setIsLoadingStream] = useState<boolean>(false);
   const [streamError, setStreamError] = useState<string | null>(null);
 
+  const totalEpisodes = anime.episodes || episodes.length || 1;
+
   // Store server-passed episodes into cache on mount
   useEffect(() => {
     if (episodes && episodes.length > 0) {
-      cacheEpisodes(anime.shortId, episodes);
+      cacheEpisodes(anime.shortId, episodes, {
+        language: 'sub',
+        limit: Math.max(50, episodes.length),
+        total: totalEpisodes,
+        nextAfter:
+          episodes.length < 50 || episodes.length >= totalEpisodes
+            ? null
+            : undefined,
+      });
     }
-  }, [anime.shortId, episodes]);
+  }, [anime.shortId, episodes, totalEpisodes]);
 
-  const [activeEpisodeItem, setActiveEpisodeItem] = useState<HoshikaEpisodeItem | null>(() => {
-    return episodes.find((e) => e.number === episodeNumber) || getCachedEpisode(anime.shortId, episodeNumber) || null;
+  // Resolve Sub/Dub availability and auto-select available language
+  const {
+    availability,
+    isLoadingAvailability,
+    hasSub,
+    hasDub,
+  } = useEpisodeAvailability(anime.shortId, {
+    preferredLanguage: activeType,
   });
 
   useEffect(() => {
-    const found = episodes.find((e) => e.number === episodeNumber) || getCachedEpisode(anime.shortId, episodeNumber);
+    if (isLoadingAvailability) return;
+    const recommended = selectDefaultLanguage(availability, activeType);
+    if (recommended && recommended !== activeType) {
+      setActiveType(recommended);
+    }
+  }, [availability, isLoadingAvailability, activeType]);
+
+  const [activeEpisodeItem, setActiveEpisodeItem] = useState<HoshikaEpisodeItem | null>(() => {
+    return (
+      episodes.find((e) => e.number === episodeNumber) ||
+      getCachedEpisode(anime.shortId, episodeNumber) ||
+      null
+    );
+  });
+
+  useEffect(() => {
+    const found =
+      episodes.find((e) => e.number === episodeNumber) ||
+      getCachedEpisode(anime.shortId, episodeNumber);
     if (found) {
       setActiveEpisodeItem(found);
     } else {
-      const afterParam = episodeNumber > 50 ? Math.floor((episodeNumber - 1) / 50) * 50 : undefined;
-      fetchEpisodeBatch(anime.shortId, afterParam, 50).then((items) => {
+      const afterParam =
+        episodeNumber > 50 ? Math.floor((episodeNumber - 1) / 50) * 50 : undefined;
+      fetchEpisodeBatch(anime.shortId, afterParam, 50, { language: activeType }).then((items) => {
         const match = items.find((e) => e.number === episodeNumber);
         if (match) {
           setActiveEpisodeItem(match);
         }
       });
     }
-  }, [anime.shortId, episodeNumber, episodes]);
+  }, [anime.shortId, episodeNumber, episodes, activeType]);
+
+  const handleEpisodesLoaded = useCallback(
+    (loaded: HoshikaEpisodeItem[]) => {
+      const match = loaded.find((e) => e.number === episodeNumber);
+      if (match) {
+        setActiveEpisodeItem(match);
+      }
+    },
+    [episodeNumber]
+  );
 
   const title =
     anime.titleEnglish ||
@@ -81,7 +132,6 @@ export function WatchPageClient({
     activeEpisodeItem?.thumbnail?.trim() ||
     currentEpItem?.thumbnail?.trim() ||
     undefined;
-  const totalEpisodes = anime.episodes || episodes.length || 1;
   const episodeDurationSeconds = (anime.episodeDuration || 24) * 60;
 
   // Initialize preferred audio format (sub/dub) and saved resume time from URL query or watch history
@@ -156,7 +206,7 @@ export function WatchPageClient({
     activeType,
   ]);
 
-  // STEP 1-8: Resolve IDs for this anime
+  // Resolve IDs for this anime
   useEffect(() => {
     let isMounted = true;
     async function resolveIds() {
@@ -213,11 +263,15 @@ export function WatchPageClient({
         if (data.ok && data.stream) {
           setStreamData(data.stream);
         } else {
+          const canSwitchOther =
+            (activeType === 'sub' && hasDub) || (activeType === 'dub' && hasSub);
           setStreamError(
             data.error ||
-              `Stream unavailable for Episode ${episodeNumber} (${activeType.toUpperCase()}). Try switching to ${
-                activeType === 'sub' ? 'DUB' : 'SUB'
-              }.`
+              `Stream unavailable for Episode ${episodeNumber} (${activeType.toUpperCase()}).${
+                canSwitchOther
+                  ? ` Try switching to ${activeType === 'sub' ? 'DUB' : 'SUB'}.`
+                  : ''
+              }`
           );
         }
       } catch (err: any) {
@@ -235,7 +289,7 @@ export function WatchPageClient({
     return () => {
       isMounted = false;
     };
-  }, [idMapping, episodeNumber, activeType]);
+  }, [idMapping, episodeNumber, activeType, hasSub, hasDub]);
 
   const handleNavigateEpisode = (newEpisode: number) => {
     router.push(`/watch/${anime.shortId}/${newEpisode}`);
@@ -249,7 +303,10 @@ export function WatchPageClient({
           Home
         </Link>
         <ChevronRight size={13} />
-        <Link href={`/anime/${anime.shortId}`} className="hover:text-white transition-colors truncate max-w-[200px]">
+        <Link
+          href={`/anime/${anime.shortId}`}
+          className="hover:text-white transition-colors truncate max-w-[200px]"
+        >
           {title}
         </Link>
         <ChevronRight size={13} />
@@ -307,6 +364,9 @@ export function WatchPageClient({
             activeType={activeType}
             onChangeType={setActiveType}
             onNavigateEpisode={handleNavigateEpisode}
+            hasSub={hasSub}
+            hasDub={hasDub}
+            isLoadingAvailability={isLoadingAvailability}
           />
         )}
 
@@ -367,10 +427,7 @@ export function WatchPageClient({
           totalEpisodes={totalEpisodes}
           activeType={activeType}
           onChangeType={setActiveType}
-          onEpisodesLoaded={(loaded) => {
-            const match = loaded.find((e) => e.number === episodeNumber);
-            if (match) setActiveEpisodeItem(match);
-          }}
+          onEpisodesLoaded={handleEpisodesLoaded}
         />
       </div>
     </div>

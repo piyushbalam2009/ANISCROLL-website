@@ -44,7 +44,14 @@ async function fetchFromHoshika<T>(endpoint: string, cacheTtlSeconds: number = 3
       return null;
     }
 
-    appCache.set(cacheKey, data, cacheTtlSeconds);
+    const isEmptyEpisodesResponse =
+      endpoint.includes('/episodes') &&
+      Array.isArray((data as any).items) &&
+      (data as any).items.length === 0;
+
+    if (!isEmptyEpisodesResponse) {
+      appCache.set(cacheKey, data, cacheTtlSeconds);
+    }
     return data as T;
   } catch (err: any) {
     if (err?.name !== 'AbortError') {
@@ -58,9 +65,14 @@ async function fetchFromHoshika<T>(endpoint: string, cacheTtlSeconds: number = 3
 
 export async function searchHoshika(query: string, limit: number = 20, format?: string, year?: string | number) {
   if (!query || !query.trim()) return [];
+  const trimmedQuery = query.trim();
+  const requestedLimit = Number.isFinite(Number(limit)) ? Math.max(1, Math.floor(Number(limit))) : 20;
+  // Hoshika /api/v1/search strictly requires 1 <= limit <= 20 (values > 20 return 400 Bad Request)
+  const searchApiLimit = Math.min(20, requestedLimit);
+
   const params = new URLSearchParams({
-    q: query.trim(),
-    limit: String(limit),
+    q: trimmedQuery,
+    limit: String(searchApiLimit),
   });
   if (format) params.append('format', format);
   if (year) params.append('year', String(year));
@@ -69,7 +81,32 @@ export async function searchHoshika(query: string, limit: number = 20, format?: 
     `/search?${params.toString()}`,
     120
   );
-  return data?.anime || [];
+  const searchResults = data?.anime || [];
+
+  if (requestedLimit <= 20 || searchResults.length < 20) {
+    return searchResults.slice(0, requestedLimit);
+  }
+
+  // When more than 20 results are requested, supplement from /catalog without violating /search limit=20
+  const catalogData = await getHoshikaCatalog({
+    q: trimmedQuery,
+    format,
+    year: year ? String(year) : undefined,
+  });
+
+  const mergedMap = new Map<number | string, HoshikaAnimeItem>();
+  for (const item of searchResults) {
+    if (item && item.shortId != null) {
+      mergedMap.set(item.shortId, item);
+    }
+  }
+  for (const item of catalogData.items) {
+    if (item && item.shortId != null && !mergedMap.has(item.shortId)) {
+      mergedMap.set(item.shortId, item);
+    }
+  }
+
+  return Array.from(mergedMap.values()).slice(0, requestedLimit);
 }
 
 export async function getHoshikaAnime(shortId: string | number, locale: string = 'en'): Promise<HoshikaAnimeItem | null> {
@@ -104,7 +141,8 @@ export async function getHoshikaEpisodes(
   after?: number,
   limit: number = 50
 ): Promise<{ items: HoshikaEpisodeItem[]; total: number; nextAfter: number | null }> {
-  const params = new URLSearchParams({ locale, limit: String(limit) });
+  const safeLimit = Math.min(50, Math.max(1, Math.floor(Number(limit) || 50)));
+  const params = new URLSearchParams({ locale, limit: String(safeLimit) });
   if (after !== undefined) params.append('after', String(after));
 
   const data = await fetchFromHoshika<{

@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import { HoshikaAnimeItem } from '@/types/anime';
 import { AnimeArtworkResult } from '@/types/artwork';
+import { EpisodeAvailabilityResult } from '@/lib/episode-store';
 import {
   getWatchlistEntry,
   setWatchlistStatus,
@@ -30,6 +31,7 @@ import { getLogoDisplayTailwindClasses } from '@/lib/artwork/logo-selector';
 interface AnimeDetailsHeroProps {
   anime: HoshikaAnimeItem;
   artwork?: AnimeArtworkResult | null;
+  availability?: EpisodeAvailabilityResult | null;
   priority?: boolean;
 }
 
@@ -44,6 +46,7 @@ const WATCHLIST_STATUS_LABELS: Record<string, string> = {
 export function AnimeDetailsHero({
   anime,
   artwork: initialArtwork,
+  availability,
   priority = true,
 }: AnimeDetailsHeroProps) {
   const [inWatchlist, setInWatchlist] = useState(false);
@@ -359,10 +362,18 @@ export function AnimeDetailsHero({
             )}
 
             {/* Language Sub/Dub */}
-            <div className="flex items-center gap-1.5 text-white/95">
-              <Subtitles size={15} className="text-[#D0D0D0]" />
-              <span>Sub</span>
-            </div>
+            {(!availability || availability.sub.available || availability.dub.available) && (
+              <div className="flex items-center gap-1.5 text-white/95">
+                <Subtitles size={15} className="text-[#D0D0D0]" />
+                <span>
+                  {availability?.sub.available && availability?.dub.available
+                    ? 'Sub / Dub'
+                    : availability?.dub.available
+                    ? 'Dub'
+                    : 'Sub'}
+                </span>
+              </div>
+            )}
           </div>
 
           {/* 4. Genre Tags: Rounded Dark Translucent Pills */}

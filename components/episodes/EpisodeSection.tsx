@@ -1,22 +1,26 @@
 'use client';
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { Search, Loader2 } from 'lucide-react';
+import { Search, Loader2, RefreshCw, AlertCircle } from 'lucide-react';
 import { HoshikaEpisodeItem } from '@/types/anime';
 import { WatchHistoryEntry } from '@/types/streaming';
 import { getWatchHistory, getUserPreferences } from '@/lib/storage';
 import {
   generateEpisodeRanges,
   findRangeForEpisode,
-  sliceEpisodesForRange,
   EpisodeRange,
 } from '@/lib/episode-pagination';
 import {
+  AudioLanguage,
+  EpisodeAvailabilityResult,
   cacheEpisodes,
   getCachedEpisodes,
-  fetchEpisodeBatch,
+  fetchEpisodeBatchWithMeta,
   isRangeCached,
+  invalidateAnimeEpisodeCache,
+  selectDefaultLanguage,
 } from '@/lib/episode-store';
+import { useEpisodeAvailability } from '@/hooks/useEpisodeAvailability';
 import { EpisodeRangeSelector } from './EpisodeRangeSelector';
 import { EpisodeList } from './EpisodeList';
 
@@ -25,11 +29,13 @@ interface EpisodeSectionProps {
   episodes: HoshikaEpisodeItem[];
   totalEpisodes?: number;
   currentEpisode?: number;
-  activeType?: 'sub' | 'dub';
-  onChangeType?: (type: 'sub' | 'dub') => void;
+  activeType?: AudioLanguage;
+  onChangeType?: (type: AudioLanguage) => void;
   showSubDubToggle?: boolean;
+  initialAvailability?: EpisodeAvailabilityResult | null;
   className?: string;
   onEpisodesLoaded?: (episodes: HoshikaEpisodeItem[]) => void;
+  onAvailabilityResolved?: (availability: EpisodeAvailabilityResult) => void;
 }
 
 export function EpisodeSection({
@@ -40,13 +46,76 @@ export function EpisodeSection({
   activeType: externalActiveType,
   onChangeType: externalOnChangeType,
   showSubDubToggle = true,
+  initialAvailability = null,
   className = '',
   onEpisodesLoaded,
+  onAvailabilityResolved,
 }: EpisodeSectionProps) {
-  // Local sub/dub state if not controlled externally
-  const [localActiveType, setLocalActiveType] = useState<'sub' | 'dub'>('sub');
-  const activeType = externalActiveType ?? localActiveType;
-  const onChangeType = externalOnChangeType ?? setLocalActiveType;
+  const normalizedAnimeId = String(animeId).trim();
+
+  // Preferred language from user preferences if not externally controlled
+  const [preferredType, setPreferredType] = useState<AudioLanguage>(() => {
+    if (externalActiveType) return externalActiveType;
+    if (typeof window !== 'undefined') {
+      const prefs = getUserPreferences();
+      if (prefs.defaultAudio === 'dub' || prefs.defaultAudio === 'sub') {
+        return prefs.defaultAudio;
+      }
+    }
+    return 'sub';
+  });
+
+  const [localActiveType, setLocalActiveType] = useState<AudioLanguage>(preferredType);
+  const activeType: AudioLanguage = externalActiveType ?? localActiveType;
+
+  // Stabilize callbacks in refs to prevent useEffect request loops
+  const onEpisodesLoadedRef = useRef(onEpisodesLoaded);
+  const onAvailabilityResolvedRef = useRef(onAvailabilityResolved);
+  const externalOnChangeTypeRef = useRef(externalOnChangeType);
+
+  useEffect(() => {
+    onEpisodesLoadedRef.current = onEpisodesLoaded;
+    onAvailabilityResolvedRef.current = onAvailabilityResolved;
+    externalOnChangeTypeRef.current = externalOnChangeType;
+  }, [onEpisodesLoaded, onAvailabilityResolved, externalOnChangeType]);
+
+  const handleSelectLanguage = useCallback((type: AudioLanguage) => {
+    setPreferredType(type);
+    setLocalActiveType(type);
+    if (externalOnChangeTypeRef.current) {
+      externalOnChangeTypeRef.current(type);
+    }
+  }, []);
+
+  // Resolve dynamic Sub/Dub availability for this anime
+  const {
+    availability,
+    isLoadingAvailability,
+    hasSub,
+    hasDub,
+    hasAny,
+    refreshAvailability,
+  } = useEpisodeAvailability(normalizedAnimeId, {
+    preferredLanguage: activeType,
+    initialAvailability,
+  });
+
+  // Notify parent when availability resolves and auto-correct activeType if unavailable
+  useEffect(() => {
+    if (isLoadingAvailability) return;
+
+    if (onAvailabilityResolvedRef.current) {
+      onAvailabilityResolvedRef.current(availability);
+    }
+
+    const recommended = selectDefaultLanguage(availability, activeType);
+    if (recommended && recommended !== activeType) {
+      setLocalActiveType(recommended);
+      if (externalOnChangeTypeRef.current) {
+        externalOnChangeTypeRef.current(recommended);
+      }
+    }
+  }, [availability, isLoadingAvailability, activeType]);
 
   // Search filter
   const [filterQuery, setFilterQuery] = useState('');
@@ -54,22 +123,32 @@ export function EpisodeSection({
   // Watch history map: { [episodeNumber]: WatchHistoryEntry }
   const [historyMap, setHistoryMap] = useState<Record<number, WatchHistoryEntry>>({});
 
-  // Loading state for fetching a paginated episode batch
+  // Loading & retry states for episode batches
   const [isLoadingBatch, setIsLoadingBatch] = useState(false);
+  const [retryStatusText, setRetryStatusText] = useState<string | null>(null);
+  const [batchError, setBatchError] = useState<string | null>(null);
 
   // Loaded real episodes map: Map<episodeNumber, HoshikaEpisodeItem>
   const [episodesMap, setEpisodesMap] = useState<Map<number, HoshikaEpisodeItem>>(() => {
     const map = new Map<number, HoshikaEpisodeItem>();
-    // First seed with client module-level cache
-    const cached = getCachedEpisodes(animeId);
+    const cached = getCachedEpisodes(normalizedAnimeId);
     for (const ep of cached) {
       if (ep && typeof ep.number === 'number') {
         map.set(ep.number, ep);
       }
     }
-    // Then seed with initial props episodes
     if (initialEpisodes && initialEpisodes.length > 0) {
-      cacheEpisodes(animeId, initialEpisodes);
+      cacheEpisodes(normalizedAnimeId, initialEpisodes, {
+        language: 'sub',
+        limit: Math.max(50, initialEpisodes.length),
+        total: totalEpisodes || initialEpisodes.length,
+        nextAfter:
+          initialEpisodes.length < 50 ||
+          (totalEpisodes && initialEpisodes.length >= totalEpisodes)
+            ? null
+            : undefined,
+        availability: initialAvailability || undefined,
+      });
       for (const ep of initialEpisodes) {
         if (ep && typeof ep.number === 'number') {
           map.set(ep.number, ep);
@@ -79,13 +158,67 @@ export function EpisodeSection({
     return map;
   });
 
-  // Sync initialEpisodes into episodesMap whenever initialEpisodes prop updates
+  const episodesMapRef = useRef(episodesMap);
+  useEffect(() => {
+    episodesMapRef.current = episodesMap;
+  }, [episodesMap]);
+
+  // Track which batch keys have already been attempted in this component mount
+  const attemptedBatchesRef = useRef<Set<string>>(new Set());
+
+  // Reset state cleanly when navigating to a different animeId
+  const prevAnimeIdRef = useRef(normalizedAnimeId);
+  useEffect(() => {
+    if (prevAnimeIdRef.current !== normalizedAnimeId) {
+      prevAnimeIdRef.current = normalizedAnimeId;
+      attemptedBatchesRef.current.clear();
+      setBatchError(null);
+      setRetryStatusText(null);
+
+      const nextMap = new Map<number, HoshikaEpisodeItem>();
+      const cached = getCachedEpisodes(normalizedAnimeId);
+      for (const ep of cached) {
+        if (ep && typeof ep.number === 'number') {
+          nextMap.set(ep.number, ep);
+        }
+      }
+      if (initialEpisodes && initialEpisodes.length > 0) {
+        cacheEpisodes(normalizedAnimeId, initialEpisodes, {
+          language: 'sub',
+          limit: Math.max(50, initialEpisodes.length),
+          total: totalEpisodes || initialEpisodes.length,
+          nextAfter:
+            initialEpisodes.length < 50 ||
+            (totalEpisodes && initialEpisodes.length >= totalEpisodes)
+              ? null
+              : undefined,
+        });
+        for (const ep of initialEpisodes) {
+          if (ep && typeof ep.number === 'number') {
+            nextMap.set(ep.number, ep);
+          }
+        }
+      }
+      setEpisodesMap(nextMap);
+    }
+  }, [normalizedAnimeId, initialEpisodes, totalEpisodes]);
+
+  // Sync initialEpisodes into episodesMap when server props update without triggering extra renders
   useEffect(() => {
     if (initialEpisodes && initialEpisodes.length > 0) {
-      cacheEpisodes(animeId, initialEpisodes);
+      cacheEpisodes(normalizedAnimeId, initialEpisodes, {
+        language: 'sub',
+        limit: Math.max(50, initialEpisodes.length),
+        total: totalEpisodes || initialEpisodes.length,
+        nextAfter:
+          initialEpisodes.length < 50 ||
+          (totalEpisodes && initialEpisodes.length >= totalEpisodes)
+            ? null
+            : undefined,
+      });
       setEpisodesMap((prev) => {
-        const next = new Map(prev);
         let changed = false;
+        const next = new Map(prev);
         for (const ep of initialEpisodes) {
           if (ep && typeof ep.number === 'number' && !next.has(ep.number)) {
             next.set(ep.number, ep);
@@ -95,10 +228,18 @@ export function EpisodeSection({
         return changed ? next : prev;
       });
     }
-  }, [animeId, initialEpisodes]);
+  }, [normalizedAnimeId, initialEpisodes, totalEpisodes]);
 
-  // Compute total episode count: prioritize explicit totalEpisodes, then max episode number found, fallback to 12
+  // Compute total episode count using language-specific count if available
   const computedTotalEpisodes = useMemo(() => {
+    const langCount =
+      activeType === 'dub'
+        ? availability.dub.episodeCount
+        : availability.sub.episodeCount;
+
+    if (!isLoadingAvailability && langCount > 0) {
+      return langCount;
+    }
     if (totalEpisodes && totalEpisodes > 0) return totalEpisodes;
     if (episodesMap.size > 0) {
       let maxNum = 0;
@@ -109,7 +250,15 @@ export function EpisodeSection({
     }
     if (initialEpisodes && initialEpisodes.length > 0) return initialEpisodes.length;
     return 12;
-  }, [totalEpisodes, episodesMap, initialEpisodes]);
+  }, [
+    activeType,
+    availability.dub.episodeCount,
+    availability.sub.episodeCount,
+    isLoadingAvailability,
+    totalEpisodes,
+    episodesMap,
+    initialEpisodes,
+  ]);
 
   // Generate dynamic 50-episode ranges
   const ranges = useMemo(() => {
@@ -146,84 +295,146 @@ export function EpisodeSection({
     lastRangesLengthRef.current = ranges.length;
   }, [currentEpisode, ranges]);
 
-  // Fetch episode batch dynamically if current range is missing from episodesMap
+  // Stable batch loader that never recreates on episodesMap or parent callback changes
   const loadRangeEpisodes = useCallback(
-    async (range: EpisodeRange) => {
+    async (
+      range: EpisodeRange,
+      lang: AudioLanguage,
+      options?: { forceRefresh?: boolean; signal?: AbortSignal }
+    ) => {
       if (!range) return;
 
-      // Check if range is already populated in episodesMap
-      let missingCount = 0;
-      for (let n = range.start; n <= range.end; n++) {
-        if (!episodesMap.has(n)) {
-          missingCount++;
+      const afterParam = range.start > 1 ? range.start - 1 : undefined;
+      const attemptKey = `${normalizedAnimeId}:${lang}:after=${afterParam ?? 0}`;
+
+      if (!options?.forceRefresh) {
+        // 1. Check if range is already fully present in component state
+        const currentMap = episodesMapRef.current;
+        let allPresent = true;
+        for (let n = range.start; n <= range.end; n++) {
+          if (!currentMap.has(n)) {
+            allPresent = false;
+            break;
+          }
+        }
+        if (allPresent && currentMap.size > 0) {
+          return;
+        }
+
+        // 2. Check if range/batch was already cached in module store
+        if (isRangeCached(normalizedAnimeId, range.start, range.end, lang)) {
+          const cached = getCachedEpisodes(normalizedAnimeId);
+          if (cached.length > 0) {
+            setEpisodesMap((prev) => {
+              let changed = false;
+              const next = new Map(prev);
+              for (const ep of cached) {
+                if (ep && typeof ep.number === 'number' && !next.has(ep.number)) {
+                  next.set(ep.number, ep);
+                  changed = true;
+                }
+              }
+              return changed ? next : prev;
+            });
+            return;
+          }
+        }
+
+        // 3. Avoid repeating an already attempted batch in the same view session
+        if (attemptedBatchesRef.current.has(attemptKey)) {
+          return;
         }
       }
 
-      if (missingCount === 0) {
-        return; // Fully cached in state
-      }
-
-      // Check if already in module-level cache
-      if (isRangeCached(animeId, range.start, range.end)) {
-        const cached = getCachedEpisodes(animeId);
-        setEpisodesMap((prev) => {
-          const next = new Map(prev);
-          for (const ep of cached) {
-            if (ep && typeof ep.number === 'number') {
-              next.set(ep.number, ep);
-            }
-          }
-          return next;
-        });
-        return;
-      }
-
-      // Determine 'after' parameter for Hoshika API:
-      // For range index 0 (001-050): after = undefined
-      // For range index > 0: find the last episode number of previous batch or range.start - 1
-      const afterParam = range.start > 1 ? range.start - 1 : undefined;
-
+      attemptedBatchesRef.current.add(attemptKey);
       setIsLoadingBatch(true);
+      setBatchError(null);
+      setRetryStatusText(null);
+
       try {
-        const fetchedItems = await fetchEpisodeBatch(animeId, afterParam, 50);
-        if (fetchedItems && fetchedItems.length > 0) {
+        const response = await fetchEpisodeBatchWithMeta(
+          normalizedAnimeId,
+          afterParam,
+          50,
+          {
+            language: lang,
+            forceRefresh: options?.forceRefresh,
+            signal: options?.signal,
+            onRetryAttempt: (attempt, delayMs) => {
+              const sec = Math.max(1, Math.round(delayMs / 1000));
+              setRetryStatusText(`Retrying episode fetch (attempt ${attempt}/5 in ${sec}s)...`);
+            },
+          }
+        );
+
+        if (options?.signal?.aborted) return;
+
+        setRetryStatusText(null);
+
+        if (response.items && response.items.length > 0) {
           setEpisodesMap((prev) => {
+            let changed = false;
             const next = new Map(prev);
-            for (const ep of fetchedItems) {
+            for (const ep of response.items) {
               if (ep && typeof ep.number === 'number') {
-                next.set(ep.number, ep);
+                const existing = next.get(ep.number);
+                if (!existing || existing.title !== ep.title || existing.thumbnail !== ep.thumbnail) {
+                  next.set(ep.number, ep);
+                  changed = true;
+                }
               }
             }
-            return next;
+            return changed ? next : prev;
           });
-          if (onEpisodesLoaded) {
-            onEpisodesLoaded(fetchedItems);
+          if (onEpisodesLoadedRef.current) {
+            onEpisodesLoadedRef.current(response.items);
           }
+        } else if (!response.ok) {
+          setBatchError(response.error || 'Episodes are not available yet.');
         }
-      } catch (err) {
-        console.error('Failed to load episode range:', err);
+      } catch (err: any) {
+        if (err?.name === 'AbortError') {
+          attemptedBatchesRef.current.delete(attemptKey);
+          return;
+        }
+        setBatchError('Failed to load episode data. Please try again.');
       } finally {
-        setIsLoadingBatch(false);
+        if (!options?.signal?.aborted) {
+          setIsLoadingBatch(false);
+          setRetryStatusText(null);
+        }
       }
     },
-    [animeId, episodesMap, onEpisodesLoaded]
+    [normalizedAnimeId]
   );
 
-  // Trigger episode fetch when selectedRangeIndex changes
+  // Trigger episode batch check only when animeId, selectedRangeIndex, or activeType changes
   useEffect(() => {
-    const range = ranges[selectedRangeIndex];
-    if (range) {
-      loadRangeEpisodes(range);
-    }
-  }, [selectedRangeIndex, ranges, loadRangeEpisodes]);
+    const range = ranges[selectedRangeIndex] || ranges[0];
+    if (!range) return;
 
-  // Load user watch history and default audio preferences
+    const controller = new AbortController();
+    loadRangeEpisodes(range, activeType, { signal: controller.signal });
+
+    return () => {
+      controller.abort();
+    };
+  }, [normalizedAnimeId, selectedRangeIndex, activeType, ranges, loadRangeEpisodes]);
+
+  // Manual retry handler when episodes are unavailable
+  const handleManualRetry = useCallback(async () => {
+    const range = ranges[selectedRangeIndex] || ranges[0];
+    if (!range) return;
+    invalidateAnimeEpisodeCache(normalizedAnimeId);
+    attemptedBatchesRef.current.clear();
+    await Promise.all([
+      refreshAvailability(),
+      loadRangeEpisodes(range, activeType, { forceRefresh: true }),
+    ]);
+  }, [normalizedAnimeId, ranges, selectedRangeIndex, activeType, refreshAvailability, loadRangeEpisodes]);
+
+  // Load user watch history
   useEffect(() => {
-    const prefs = getUserPreferences();
-    if (prefs.defaultAudio && !externalActiveType) {
-      setLocalActiveType(prefs.defaultAudio);
-    }
-
     const loadHistory = () => {
       const numericId = typeof animeId === 'string' ? parseInt(animeId, 10) : animeId;
       const history = getWatchHistory();
@@ -243,7 +454,6 @@ export function EpisodeSection({
 
       setHistoryMap(map);
 
-      // On details page (no currentEpisode specified), auto-select range containing last watched episode
       if (!currentEpisode && lastWatchedEp > 0 && ranges.length > 1) {
         const lastRange = findRangeForEpisode(lastWatchedEp, ranges);
         if (lastRange) {
@@ -257,19 +467,30 @@ export function EpisodeSection({
     const handleHistoryUpdate = () => loadHistory();
     window.addEventListener('aniscroll_history_updated', handleHistoryUpdate);
     return () => window.removeEventListener('aniscroll_history_updated', handleHistoryUpdate);
-  }, [animeId, currentEpisode, ranges, externalActiveType]);
+  }, [animeId, currentEpisode, ranges]);
 
   const currentRange = ranges[selectedRangeIndex] || ranges[0];
 
-  // All sorted loaded episodes array
+  // All sorted loaded episodes array (filtered by active language episode count if applicable)
   const allLoadedEpisodes = useMemo<HoshikaEpisodeItem[]>(() => {
-    return Array.from(episodesMap.values()).sort((a, b) => a.number - b.number);
-  }, [episodesMap]);
+    const maxAllowed =
+      !isLoadingAvailability &&
+      activeType === 'dub' &&
+      availability.dub.available &&
+      availability.dub.episodeCount > 0
+        ? availability.dub.episodeCount
+        : Infinity;
 
-  // Episodes to display:
-  // If search query is active, filter all loaded episodes
-  // Otherwise, display episodes belonging to currentRange
+    return Array.from(episodesMap.values())
+      .filter((ep) => ep.number <= maxAllowed)
+      .sort((a, b) => a.number - b.number);
+  }, [episodesMap, isLoadingAvailability, activeType, availability.dub]);
+
   const displayEpisodes = useMemo(() => {
+    if (!isLoadingAvailability && !hasAny && episodesMap.size === 0) {
+      return [];
+    }
+
     if (filterQuery.trim()) {
       const q = filterQuery.toLowerCase();
       return allLoadedEpisodes.filter(
@@ -281,63 +502,120 @@ export function EpisodeSection({
 
     if (!currentRange) return allLoadedEpisodes;
 
-    // Filter loaded episodes that fall within currentRange
+    const maxAllowed =
+      !isLoadingAvailability &&
+      activeType === 'dub' &&
+      availability.dub.available &&
+      availability.dub.episodeCount > 0
+        ? availability.dub.episodeCount
+        : currentRange.end;
+
+    const endBound = Math.min(currentRange.end, maxAllowed);
     const rangeItems: HoshikaEpisodeItem[] = [];
-    for (let n = currentRange.start; n <= currentRange.end; n++) {
+    for (let n = currentRange.start; n <= endBound; n++) {
       const item = episodesMap.get(n);
       if (item) {
         rangeItems.push(item);
       }
     }
     return rangeItems;
-  }, [allLoadedEpisodes, episodesMap, filterQuery, currentRange]);
+  }, [
+    allLoadedEpisodes,
+    episodesMap,
+    filterQuery,
+    currentRange,
+    isLoadingAvailability,
+    hasAny,
+    activeType,
+    availability.dub,
+  ]);
 
   return (
-    <div className={`space-y-4 ${className}`}>
+    <div className={`space-y-4 ${className}`} data-testid="episode-section">
       {/* Episodes Header Strip */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 pb-3 border-b border-[#292929]">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <h2 className="text-lg md:text-xl font-bold text-white tracking-wide">
             Episodes
           </h2>
           <span className="text-xs text-[#A0A0A0] font-mono bg-[#141414] px-2.5 py-0.5 rounded-lg border border-[#292929]">
             {computedTotalEpisodes} Episodes
           </span>
-          {isLoadingBatch && (
+          {(isLoadingBatch || retryStatusText) && (
             <div className="flex items-center gap-1.5 text-xs text-[#A0A0A0] font-mono animate-pulse">
               <Loader2 size={13} className="animate-spin text-white" />
-              <span>Loading batch...</span>
+              <span>{retryStatusText || 'Loading batch...'}</span>
             </div>
           )}
         </div>
 
-        {/* Controls: Sub/Dub, Range Selector and Search Filter */}
+        {/* Controls: Dynamic Sub/Dub, Range Selector and Search Filter */}
         <div className="flex flex-wrap items-center gap-2.5 sm:gap-3">
-          {/* Sub / Dub Selector */}
+          {/* Dynamic Sub / Dub Selector based on actual availability */}
           {showSubDubToggle && (
-            <div className="flex items-center bg-[#0A0A0A] p-0.5 rounded-xl border border-[#303030]">
-              <button
-                type="button"
-                onClick={() => onChangeType('sub')}
-                className={`px-3 py-1 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer ${
-                  activeType === 'sub'
-                    ? 'bg-white text-black shadow-sm'
-                    : 'text-[#A0A0A0] hover:text-white'
-                }`}
-              >
-                SUB
-              </button>
-              <button
-                type="button"
-                onClick={() => onChangeType('dub')}
-                className={`px-3 py-1 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer ${
-                  activeType === 'dub'
-                    ? 'bg-white text-black shadow-sm'
-                    : 'text-[#A0A0A0] hover:text-white'
-                }`}
-              >
-                DUB
-              </button>
+            <div
+              data-testid="sub-dub-controls"
+              data-availability-status={
+                isLoadingAvailability
+                  ? 'loading'
+                  : hasSub && hasDub
+                  ? 'both'
+                  : hasSub
+                  ? 'sub-only'
+                  : hasDub
+                  ? 'dub-only'
+                  : 'unavailable'
+              }
+              className="flex items-center bg-[#0A0A0A] p-0.5 rounded-xl border border-[#303030]"
+            >
+              {isLoadingAvailability ? (
+                <div
+                  data-testid="sub-dub-loading"
+                  className="flex items-center gap-1.5 px-3 py-1 text-[11px] font-mono text-[#A0A0A0]"
+                >
+                  <Loader2 size={12} className="animate-spin text-white" />
+                  <span>Audio...</span>
+                </div>
+              ) : (
+                <>
+                  {hasSub && (
+                    <button
+                      type="button"
+                      data-testid="lang-btn-sub"
+                      onClick={() => handleSelectLanguage('sub')}
+                      className={`px-3 py-1 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer ${
+                        activeType === 'sub'
+                          ? 'bg-white text-black shadow-sm'
+                          : 'text-[#A0A0A0] hover:text-white'
+                      }`}
+                    >
+                      SUB
+                    </button>
+                  )}
+                  {hasDub && (
+                    <button
+                      type="button"
+                      data-testid="lang-btn-dub"
+                      onClick={() => handleSelectLanguage('dub')}
+                      className={`px-3 py-1 rounded-lg text-xs font-semibold uppercase tracking-wider transition-all cursor-pointer ${
+                        activeType === 'dub'
+                          ? 'bg-white text-black shadow-sm'
+                          : 'text-[#A0A0A0] hover:text-white'
+                      }`}
+                    >
+                      DUB
+                    </button>
+                  )}
+                  {!hasSub && !hasDub && (
+                    <span
+                      data-testid="sub-dub-unavailable"
+                      className="px-3 py-1 text-[11px] font-mono text-[#707070] uppercase"
+                    >
+                      Unavailable
+                    </span>
+                  )}
+                </>
+              )}
             </div>
           )}
 
@@ -350,7 +628,7 @@ export function EpisodeSection({
                 setSelectedRangeIndex(idx);
                 const targetRange = ranges[idx];
                 if (targetRange) {
-                  loadRangeEpisodes(targetRange);
+                  loadRangeEpisodes(targetRange, activeType);
                 }
               }}
             />
@@ -417,6 +695,30 @@ export function EpisodeSection({
               <div className="w-8 h-8 rounded-full bg-[#202020] shrink-0" />
             </div>
           ))}
+        </div>
+      ) : batchError && displayEpisodes.length === 0 ? (
+        <div
+          data-testid="episode-retry-state"
+          className="py-12 px-6 text-center rounded-xl border border-[#292929] bg-[#0F0F0F] space-y-3"
+        >
+          <AlertCircle size={28} className="mx-auto text-[#A0A0A0]" />
+          <div className="space-y-1">
+            <p className="text-sm font-semibold text-white">
+              Episodes Temporarily Unavailable
+            </p>
+            <p className="text-xs text-[#707070] max-w-md mx-auto">
+              {batchError}
+            </p>
+          </div>
+          <button
+            type="button"
+            data-testid="episode-manual-retry-btn"
+            onClick={handleManualRetry}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-white text-black text-xs font-semibold hover:bg-neutral-200 transition-colors cursor-pointer"
+          >
+            <RefreshCw size={13} />
+            <span>Retry Loading Episodes</span>
+          </button>
         </div>
       ) : (
         /* Vertical Episode List */

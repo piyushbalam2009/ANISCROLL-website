@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getHoshikaAnime, getAllHoshikaEpisodes } from '@/lib/hoshika';
 import { resolveAnimeArtwork } from '@/lib/artwork-mapper';
+import { resolveServerAudioAvailability } from '@/lib/aniscroll';
 import { AnimeDetailsHero } from '@/components/anime/AnimeDetailsHero';
 import { EpisodeSection } from '@/components/episodes/EpisodeSection';
 import { CharacterList } from '@/components/anime/CharacterList';
@@ -26,6 +27,14 @@ export default async function AnimePage({ params }: AnimePageProps) {
   }
 
   const artwork = await resolveAnimeArtwork(anime.shortId || id, anime);
+  const initialAvailability =
+    episodeData.items.length > 0
+      ? await resolveServerAudioAvailability({
+          hoshikaId: anime.shortId || id,
+          anilistId: anime.anilistId ?? null,
+          episodeCount: episodeData.total || episodeData.items.length || anime.episodes || 0,
+        })
+      : null;
 
   const title =
     anime.titleEnglish ||
@@ -39,6 +48,7 @@ export default async function AnimePage({ params }: AnimePageProps) {
       <AnimeDetailsHero
         anime={anime}
         artwork={artwork}
+        availability={initialAvailability}
         priority={true}
       />
 
@@ -175,6 +185,7 @@ export default async function AnimePage({ params }: AnimePageProps) {
             animeId={anime.shortId}
             episodes={episodeData.items}
             totalEpisodes={anime.episodes || episodeData.total}
+            initialAvailability={initialAvailability}
           />
         </section>
 
