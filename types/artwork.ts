@@ -107,6 +107,24 @@ export type AnimeLogoStatus =
   | 'typography_fallback'
   | 'custom_override';
 
+export interface ArtworkResolutionDiagnostics {
+  requestedId: number;
+  resolvedAnilistId: number | null;
+  resolvedTvdbId: number | null;
+  resolvedTmdbId: number | null;
+  fanartBackdropCount: number;
+  hoshikaBannerAvailable: boolean;
+  anilistBannerAvailable: boolean;
+  selectedBackdropUrl: string | null;
+  selectedBackdropSource:
+    | 'fanart'
+    | 'anilist_banner'
+    | 'hoshika_banner'
+    | 'hoshika_cover'
+    | 'none';
+  candidateCount: number;
+}
+
 export interface AnimeArtworkResult {
   hoshikaId: number;
   title?: string;
@@ -121,6 +139,7 @@ export interface AnimeArtworkResult {
     | 'hoshika_banner'
     | 'hoshika_cover'
     | 'none';
+  backdropCandidates?: string[];
   logoUrl: string | null;
   logoSource?:
     | 'fanart_hdtvlogo'
@@ -149,4 +168,6 @@ export interface AnimeArtworkResult {
   hasEnglishLogo?: boolean;
   hasJapaneseLogo?: boolean;
   reviewed?: boolean;
+  diagnostics?: ArtworkResolutionDiagnostics;
 }
+

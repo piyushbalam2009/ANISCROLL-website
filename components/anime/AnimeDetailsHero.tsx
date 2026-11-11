@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import Image from 'next/image';
 import Link from 'next/link';
 import {
@@ -19,7 +19,6 @@ import {
 import { HoshikaAnimeItem } from '@/types/anime';
 import { AnimeArtworkResult } from '@/types/artwork';
 import {
-  isInWatchlist,
   getWatchlistEntry,
   setWatchlistStatus,
   isSubscribed,
@@ -53,13 +52,21 @@ export function AnimeDetailsHero({
   const [subscribed, setSubscribed] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [logoError, setLogoError] = useState(false);
-  const [bgError, setBgError] = useState(false);
+  const [candidateIndex, setCandidateIndex] = useState(0);
 
-  const artwork = useRealtimeArtworkOverride(anime.shortId, initialArtwork, anime.format);
+  const artwork = useRealtimeArtworkOverride(
+    anime.shortId,
+    initialArtwork,
+    anime.format
+  );
 
   useEffect(() => {
     setLogoError(false);
-  }, [artwork?.logoUrl]);
+  }, [artwork?.logoUrl, anime.shortId]);
+
+  useEffect(() => {
+    setCandidateIndex(0);
+  }, [anime.shortId, artwork?.backgroundUrl]);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -71,7 +78,9 @@ export function AnimeDetailsHero({
 
   // Subtitle above logo
   const subtitleText =
-    anime.titleEnglish && anime.titleRomaji && anime.titleEnglish !== anime.titleRomaji
+    anime.titleEnglish &&
+    anime.titleRomaji &&
+    anime.titleEnglish !== anime.titleRomaji
       ? anime.titleEnglish
       : title;
 
@@ -114,7 +123,15 @@ export function AnimeDetailsHero({
     setTimeout(() => setToastMessage(null), 3000);
   };
 
-  const handleSelectStatus = (status: 'watching' | 'plan_to_watch' | 'completed' | 'on_hold' | 'dropped' | 'remove') => {
+  const handleSelectStatus = (
+    status:
+      | 'watching'
+      | 'plan_to_watch'
+      | 'completed'
+      | 'on_hold'
+      | 'dropped'
+      | 'remove'
+  ) => {
     const success = setWatchlistStatus(
       {
         hoshikaId: anime.shortId,
@@ -146,35 +163,62 @@ export function AnimeDetailsHero({
     );
   };
 
-  // 1. Background Artwork: Fanart.tv showbackground -> Hoshika banner -> Hoshika cover
-  const backgroundUrl = !bgError
-    ? artwork?.backgroundUrl || anime.bannerImage || anime.coverImage
-    : anime.bannerImage || anime.coverImage;
+  // 1. Ordered multi-candidate landscape backdrops: Fanart.tv showbackground -> Hoshika banner -> AniList banner -> Hoshika cover
+  const backdropCandidates = useMemo(() => {
+    const rawList = [
+      artwork?.backgroundUrl,
+      ...(artwork?.backdropCandidates || []),
+      anime.bannerImage,
+      anime.coverImage,
+    ];
+    const seen = new Set<string>();
+    const valid: string[] = [];
+    for (const item of rawList) {
+      if (!item || typeof item !== 'string') continue;
+      const trimmed = item.trim();
+      if (!trimmed || seen.has(trimmed)) continue;
+      seen.add(trimmed);
+      valid.push(trimmed);
+    }
+    return valid;
+  }, [
+    artwork?.backgroundUrl,
+    artwork?.backdropCandidates,
+    anime.bannerImage,
+    anime.coverImage,
+  ]);
+
+  const backgroundUrl = backdropCandidates[candidateIndex] || null;
+
+  const handleBackdropError = () => {
+    setCandidateIndex((prev) =>
+      prev + 1 < backdropCandidates.length ? prev + 1 : backdropCandidates.length
+    );
+  };
 
   // 2. Transparent Anime Title Logo: Fanart.tv hdtvlogo/clearlogo/custom override
   const hasLogo = !logoError && Boolean(artwork?.logoUrl);
-  const logoSizingClasses = getLogoDisplayTailwindClasses(artwork?.logoDisplay, 'details');
+  const logoSizingClasses = getLogoDisplayTailwindClasses(
+    artwork?.logoDisplay,
+    'details'
+  );
 
   // Metadata formatting
-  // Rating: In screenshot: "★ 89.0"
   const scoreDisplay = anime.averageScore
     ? anime.averageScore >= 10
-      ? (anime.averageScore).toFixed(1)
+      ? anime.averageScore.toFixed(1)
       : (anime.averageScore * 10).toFixed(1)
     : anime.canonScore
     ? String(anime.canonScore)
     : null;
 
-  // Format: "Tv"
   const formatDisplay =
-    anime.format?.toUpperCase() === 'TV'
-      ? 'Tv'
-      : anime.format || 'Tv';
+    anime.format?.toUpperCase() === 'TV' ? 'Tv' : anime.format || 'Tv';
 
-  // Duration: "23m"
-  const durationDisplay = anime.episodeDuration ? `${anime.episodeDuration}m` : null;
+  const durationDisplay = anime.episodeDuration
+    ? `${anime.episodeDuration}m`
+    : null;
 
-  // Season and Year: "Winter 2026"
   const seasonName = anime.season
     ? anime.season.charAt(0).toUpperCase() + anime.season.slice(1).toLowerCase()
     : null;
@@ -185,9 +229,9 @@ export function AnimeDetailsHero({
       ? String(anime.seasonYear)
       : null;
 
-  // Airing status: "Currently Airing"
   const statusDisplay =
-    anime.status?.toUpperCase() === 'RELEASING' || anime.status?.toUpperCase() === 'AIRING'
+    anime.status?.toUpperCase() === 'RELEASING' ||
+    anime.status?.toUpperCase() === 'AIRING'
       ? 'Currently Airing'
       : anime.status?.toUpperCase() === 'FINISHED'
       ? 'Finished Airing'
@@ -195,31 +239,30 @@ export function AnimeDetailsHero({
       ? 'Upcoming'
       : anime.status || 'Finished Airing';
 
-  // Studio and Source
   const studioName =
     anime.studios && anime.studios.length > 0 ? anime.studios[0].name : null;
   const sourceName = anime.source || null;
 
   return (
-    <div className="relative w-full overflow-hidden bg-[#000000] min-h-[640px] md:min-h-[680px] lg:h-[740px] max-h-[800px] flex items-center select-none pt-24 sm:pt-28 pb-12">
-      {/* 1. Full-Width Background Artwork Layer */}
+    <div className="relative w-full overflow-hidden bg-[#000000] min-h-[620px] md:min-h-[660px] lg:h-[720px] max-h-[800px] flex items-center select-none pt-24 sm:pt-28 pb-12">
+      {/* 1. Full-Width Landscape Backdrop Layer (Full Brightness + Localized Gradients) */}
       {backgroundUrl ? (
         <div className="absolute inset-0 z-0 overflow-hidden">
           <Image
+            key={`${anime.shortId}-${backgroundUrl}`}
             src={backgroundUrl}
             alt={title}
             fill
             priority={priority}
             sizes="100vw"
-            className="object-cover object-center opacity-45 lg:opacity-55 filter brightness-90 transition-transform duration-700 hover:scale-102"
+            className="object-cover object-center opacity-100 transition-transform duration-700 hover:scale-102"
             referrerPolicy="no-referrer"
-            onError={() => setBgError(true)}
+            onError={handleBackdropError}
           />
-          {/* Measured Cinematic Scrims (Monochrome gradients preserving vibrant artwork) */}
-          <div className="absolute inset-0 bg-black/45" />
-          <div className="absolute inset-0 bg-gradient-to-r from-black/95 via-black/80 via-45% to-transparent" />
-          <div className="absolute inset-0 bg-gradient-to-t from-black via-black/85 via-25% to-transparent" />
-          <div className="absolute inset-0 bg-gradient-to-b from-black/50 via-transparent to-transparent pointer-events-none" />
+          {/* Localized Readability Gradients (Preserves vibrant backdrop artwork while keeping poster and metadata clear) */}
+          <div className="absolute inset-0 bg-gradient-to-r from-black/82 via-black/45 via-42% to-black/10 pointer-events-none" />
+          <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 via-24% to-transparent pointer-events-none" />
+          <div className="absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-black/45 to-transparent pointer-events-none" />
         </div>
       ) : (
         <div className="absolute inset-0 z-0 bg-gradient-to-br from-[#141414] via-[#0A0A0A] to-black" />
@@ -229,7 +272,7 @@ export function AnimeDetailsHero({
       <div className="relative z-20 w-full max-w-[1600px] mx-auto h-full px-6 sm:px-10 md:px-14 lg:px-16 flex flex-col md:flex-row items-center gap-8 md:gap-12 lg:gap-16 justify-center md:justify-start">
         {/* Left Side: Anime Poster (Aspect 2:3, ~325px wide on desktop) */}
         {anime.coverImage && (
-          <div className="w-full max-w-[200px] sm:max-w-[240px] md:w-[240px] lg:w-[325px] flex-shrink-0 aspect-[2/3] relative rounded-2xl overflow-hidden shadow-2xl shadow-black ring-1 ring-white/10 group">
+          <div className="w-full max-w-[200px] sm:max-w-[240px] md:w-[240px] lg:w-[325px] flex-shrink-0 aspect-[2/3] relative rounded-2xl overflow-hidden shadow-2xl shadow-black ring-1 ring-white/15 group">
             <Image
               src={anime.coverImage}
               alt={`${title} poster`}
@@ -247,14 +290,16 @@ export function AnimeDetailsHero({
         {/* Right Side: Anime Content & Actions */}
         <div className="flex-1 min-w-0 flex flex-col justify-center space-y-3.5 lg:space-y-4 text-left w-full">
           {/* 1. Anime Title Text as Small Subtitle Above Logo */}
-          <div className="text-xs sm:text-sm md:text-base font-medium text-[#A0A0A0] tracking-wide">
+          <div className="text-xs sm:text-sm md:text-base font-medium text-white/80 tracking-wide drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
             {subtitleText}
           </div>
 
           {/* 2. Transparent Fanart.tv Anime Title Logo (Max width ~580px) */}
           <div className="py-1">
             {hasLogo ? (
-              <div className={`relative w-full ${logoSizingClasses} filter drop-shadow-[0_4px_24px_rgba(0,0,0,0.95)] transition-transform duration-300`}>
+              <div
+                className={`relative w-full ${logoSizingClasses} filter drop-shadow-[0_4px_24px_rgba(0,0,0,0.95)] transition-transform duration-300`}
+              >
                 <Image
                   src={artwork!.logoUrl!}
                   alt={title}
@@ -267,14 +312,14 @@ export function AnimeDetailsHero({
                 />
               </div>
             ) : (
-              <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-black tracking-tight text-white leading-tight drop-shadow-md">
+              <h1 className="text-3xl sm:text-4xl md:text-5xl lg:text-6xl font-black tracking-tight text-white leading-tight drop-shadow-[0_4px_20px_rgba(0,0,0,0.9)]">
                 {title}
               </h1>
             )}
           </div>
 
           {/* 3. Horizontal Compact Metadata Row */}
-          <div className="flex flex-wrap items-center gap-x-4 sm:gap-x-5 gap-y-2 text-xs sm:text-sm font-medium text-white/90">
+          <div className="flex flex-wrap items-center gap-x-4 sm:gap-x-5 gap-y-2 text-xs sm:text-sm font-medium text-white/95 drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
             {/* Rating */}
             {scoreDisplay && (
               <div className="flex items-center gap-1.5 font-bold text-white">
@@ -284,38 +329,38 @@ export function AnimeDetailsHero({
             )}
 
             {/* Format */}
-            <div className="flex items-center gap-1.5 text-white/90">
-              <Tv size={15} className="text-[#A0A0A0]" />
+            <div className="flex items-center gap-1.5 text-white/95">
+              <Tv size={15} className="text-[#D0D0D0]" />
               <span>{formatDisplay}</span>
             </div>
 
             {/* Duration */}
             {durationDisplay && (
-              <div className="flex items-center gap-1.5 text-white/90">
-                <Clock size={15} className="text-[#A0A0A0]" />
+              <div className="flex items-center gap-1.5 text-white/95">
+                <Clock size={15} className="text-[#D0D0D0]" />
                 <span>{durationDisplay}</span>
               </div>
             )}
 
             {/* Release Season & Year */}
             {seasonYearDisplay && (
-              <div className="flex items-center gap-1.5 text-white/90">
-                <Calendar size={15} className="text-[#A0A0A0]" />
+              <div className="flex items-center gap-1.5 text-white/95">
+                <Calendar size={15} className="text-[#D0D0D0]" />
                 <span>{seasonYearDisplay}</span>
               </div>
             )}
 
             {/* Airing Status */}
             {statusDisplay && (
-              <div className="flex items-center gap-1.5 text-white/90">
-                <Radio size={15} className="text-[#A0A0A0]" />
+              <div className="flex items-center gap-1.5 text-white/95">
+                <Radio size={15} className="text-[#D0D0D0]" />
                 <span>{statusDisplay}</span>
               </div>
             )}
 
             {/* Language Sub/Dub */}
-            <div className="flex items-center gap-1.5 text-white/90">
-              <Subtitles size={15} className="text-[#A0A0A0]" />
+            <div className="flex items-center gap-1.5 text-white/95">
+              <Subtitles size={15} className="text-[#D0D0D0]" />
               <span>Sub</span>
             </div>
           </div>
@@ -327,7 +372,7 @@ export function AnimeDetailsHero({
                 <Link
                   key={g.slug || g.name}
                   href={`/genres/${g.slug || g.name.toLowerCase()}`}
-                  className="px-4 py-1.5 rounded-full bg-black/40 backdrop-blur-md border border-white/15 text-xs text-white/90 font-medium hover:border-white/40 hover:text-white transition-all shadow-sm"
+                  className="px-4 py-1.5 rounded-full bg-black/55 backdrop-blur-md border border-white/20 text-xs text-white/95 font-medium hover:border-white/50 hover:text-white transition-all shadow-sm"
                 >
                   {g.name}
                 </Link>
@@ -337,7 +382,7 @@ export function AnimeDetailsHero({
 
           {/* 5. Studio and Source Information */}
           {(studioName || sourceName) && (
-            <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs sm:text-sm text-[#A0A0A0] pt-1">
+            <div className="flex flex-wrap items-center gap-x-6 gap-y-1 text-xs sm:text-sm text-white/80 pt-1 drop-shadow-[0_2px_8px_rgba(0,0,0,0.9)]">
               {studioName && (
                 <div>
                   Studio:{' '}
@@ -373,8 +418,8 @@ export function AnimeDetailsHero({
                 onClick={() => setIsDropdownOpen((prev) => !prev)}
                 className={`inline-flex items-center gap-2 px-5 sm:px-6 py-3 sm:py-3.5 rounded-full border text-xs sm:text-sm font-medium transition-all active:scale-95 ${
                   inWatchlist
-                    ? 'bg-white/10 backdrop-blur-md border-white/30 text-white'
-                    : 'bg-black/50 backdrop-blur-md border-white/20 text-white hover:bg-white/10'
+                    ? 'bg-white/15 backdrop-blur-md border-white/35 text-white'
+                    : 'bg-black/60 backdrop-blur-md border-white/25 text-white hover:bg-white/15'
                 }`}
                 aria-expanded={isDropdownOpen}
                 aria-haspopup="true"
@@ -422,7 +467,9 @@ export function AnimeDetailsHero({
                       }`}
                     >
                       <span>{WATCHLIST_STATUS_LABELS[st]}</span>
-                      {watchlistStatus === st && <Check size={14} className="text-white" />}
+                      {watchlistStatus === st && (
+                        <Check size={14} className="text-white" />
+                      )}
                     </button>
                   ))}
 
@@ -448,8 +495,8 @@ export function AnimeDetailsHero({
               onClick={handleSubscribeToggle}
               className={`inline-flex items-center gap-2 px-5 sm:px-6 py-3 sm:py-3.5 rounded-full border text-xs sm:text-sm font-medium transition-all active:scale-95 ${
                 subscribed
-                  ? 'bg-white/10 backdrop-blur-md border-white/40 text-white ring-1 ring-white/20'
-                  : 'bg-black/50 backdrop-blur-md border-white/20 text-white hover:bg-white/10'
+                  ? 'bg-white/15 backdrop-blur-md border-white/40 text-white ring-1 ring-white/20'
+                  : 'bg-black/60 backdrop-blur-md border-white/25 text-white hover:bg-white/15'
               }`}
               title={
                 subscribed

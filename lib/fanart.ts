@@ -1,6 +1,249 @@
 import { FanartImage, FanartResponse, FanartLogoItem } from '@/types/artwork';
 
 const BASE_CURATED_FANART: Record<string, FanartResponse> = {
+  // Demon Slayer: Kimetsu no Yaiba (TVDB: 348545)
+  '348545': {
+    name: 'Demon Slayer: Kimetsu no Yaiba',
+    thetvdb_id: '348545',
+    hdtvlogo: [
+      {
+        id: '219401',
+        url: 'https://assets.fanart.tv/fanart/demon-slayer-kimetsu-no-yaiba-5ce04655066e4.png',
+        lang: 'en',
+        likes: '29',
+      },
+      {
+        id: '219402',
+        url: 'https://assets.fanart.tv/fanart/demon-slayer-kimetsu-no-yaiba-64bd402213d73.png',
+        lang: 'en',
+        likes: '18',
+      },
+      {
+        id: '219405',
+        url: 'https://assets.fanart.tv/fanart/demon-slayer-kimetsu-no-yaiba-5ce0464b747b6.png',
+        lang: 'ja',
+        likes: '15',
+      },
+    ],
+    clearlogo: [
+      {
+        id: '219408',
+        url: 'https://assets.fanart.tv/fanart/demon-slayer-kimetsu-no-yaiba-620983678fee5.png',
+        lang: 'en',
+        likes: '12',
+      },
+    ],
+  },
+  // Attack on Titan (TVDB: 267440)
+  '267440': {
+    name: 'Attack on Titan',
+    thetvdb_id: '267440',
+    hdtvlogo: [
+      {
+        id: '154301',
+        url: 'https://assets.fanart.tv/fanart/attack-on-titan-5355731a3ebe5.png',
+        lang: 'en',
+        likes: '45',
+      },
+      {
+        id: '154305',
+        url: 'https://assets.fanart.tv/fanart/attack-on-titan-51a64c2cb7247.png',
+        lang: 'ja',
+        likes: '22',
+      },
+    ],
+    clearlogo: [
+      {
+        id: '154308',
+        url: 'https://assets.fanart.tv/fanart/attack-on-titan-523efe6e4910a.png',
+        lang: 'en',
+        likes: '18',
+      },
+      {
+        id: '154309',
+        url: 'https://assets.fanart.tv/fanart/attack-on-titan-5161b2a4a6318.png',
+        lang: 'ja',
+        likes: '11',
+      },
+    ],
+  },
+  // Hunter x Hunter (TVDB: 252322)
+  '252322': {
+    name: 'Hunter x Hunter (2011)',
+    thetvdb_id: '252322',
+    hdtvlogo: [
+      {
+        id: '188201',
+        url: 'https://assets.fanart.tv/fanart/hunter-x-hunter-2011-56c9b2afa909e.png',
+        lang: 'en',
+        likes: '31',
+      },
+      {
+        id: '188205',
+        url: 'https://assets.fanart.tv/fanart/hunter-x-hunter-2011-54350192d52d2.png',
+        lang: 'ja',
+        likes: '14',
+      },
+    ],
+    clearlogo: [
+      {
+        id: '188208',
+        url: 'https://assets.fanart.tv/fanart/hunter-x-hunter-2011-4f02ea599fdff.png',
+        lang: 'en',
+        likes: '12',
+      },
+    ],
+  },
+  // Bleach (TVDB: 74796)
+  '74796': {
+    name: 'Bleach',
+    thetvdb_id: '74796',
+    hdtvlogo: [
+      {
+        id: '112301',
+        url: 'https://assets.fanart.tv/fanart/bleach-695a06ea02b92.png',
+        lang: 'en',
+        likes: '28',
+      },
+      {
+        id: '112305',
+        url: 'https://assets.fanart.tv/fanart/bleach-517d60c51e282.png',
+        lang: 'ja',
+        likes: '13',
+      },
+    ],
+    clearlogo: [
+      {
+        id: '112308',
+        url: 'https://assets.fanart.tv/fanart/bleach-5063528161e4f.png',
+        lang: 'en',
+        likes: '10',
+      },
+    ],
+  },
+  // Black Clover (TVDB: 331753)
+  '331753': {
+    name: 'Black Clover',
+    thetvdb_id: '331753',
+    hdtvlogo: [
+      {
+        id: '241101',
+        url: 'https://assets.fanart.tv/fanart/black-clover-5a3ed930864f0.png',
+        lang: 'en',
+        likes: '19',
+      },
+      {
+        id: '241105',
+        url: 'https://assets.fanart.tv/fanart/black-clover-5c75b30b0e5a8.png',
+        lang: 'ja',
+        likes: '11',
+      },
+    ],
+    clearlogo: [
+      {
+        id: '241108',
+        url: 'https://assets.fanart.tv/fanart/black-clover-5a3ed930864f0.png',
+        lang: 'en',
+        likes: '14',
+      },
+      {
+        id: '241109',
+        url: 'https://assets.fanart.tv/fanart/black-clover-5c75b30b0e5a8.png',
+        lang: 'ja',
+        likes: '7',
+      },
+    ],
+  },
+  // Naruto Shippuden (TVDB: 79824)
+  '79824': {
+    name: 'Naruto Shippuden',
+    thetvdb_id: '79824',
+    hdtvlogo: [
+      {
+        id: '198241',
+        url: 'https://assets.fanart.tv/fanart/naruto-shippuuden-540cc2d768e14.png',
+        lang: 'en',
+        likes: '26',
+      },
+      {
+        id: '198242',
+        url: 'https://assets.fanart.tv/fanart/naruto-shippuuden-5063504ebc6e7.png',
+        lang: 'ja',
+        likes: '14',
+      },
+    ],
+    clearlogo: [
+      {
+        id: '198243',
+        url: 'https://assets.fanart.tv/fanart/naruto-shippuuden-540cc2d768e14.png',
+        lang: 'en',
+        likes: '11',
+      },
+    ],
+  },
+  // Fullmetal Alchemist: Brotherhood (TVDB: 85249)
+  '85249': {
+    name: 'Fullmetal Alchemist: Brotherhood',
+    thetvdb_id: '85249',
+    hdtvlogo: [
+      {
+        id: '852491',
+        url: 'https://assets.fanart.tv/fanart/fullmetal-alchemist-brotherhood-51e2acc9b4536.png',
+        lang: 'en',
+        likes: '34',
+      },
+    ],
+    showbackground: [
+      {
+        id: '852492',
+        url: 'https://assets.fanart.tv/fanart/fullmetal-alchemist-brotherhood-5eb1ba644c2a4.jpg',
+        lang: 'en',
+        likes: '28',
+      },
+    ],
+  },
+  // One-Punch Man (TVDB: 293088)
+  '293088': {
+    name: 'One-Punch Man',
+    thetvdb_id: '293088',
+    hdtvlogo: [
+      {
+        id: '2930881',
+        url: 'https://assets.fanart.tv/fanart/one-punch-man-55fd2d46f35d1.png',
+        lang: 'en',
+        likes: '32',
+      },
+    ],
+    showbackground: [
+      {
+        id: '2930882',
+        url: 'https://assets.fanart.tv/fanart/one-punch-man-60b6e1ee91de8.jpg',
+        lang: 'en',
+        likes: '25',
+      },
+    ],
+  },
+  // My Hero Academia (TVDB: 305074)
+  '305074': {
+    name: 'My Hero Academia',
+    thetvdb_id: '305074',
+    hdtvlogo: [
+      {
+        id: '3050741',
+        url: 'https://assets.fanart.tv/fanart/my-hero-academia-58ab2e4282d2a.png',
+        lang: 'en',
+        likes: '30',
+      },
+    ],
+    showbackground: [
+      {
+        id: '3050742',
+        url: 'https://assets.fanart.tv/fanart/my-hero-academia-5ca8d43cd466f.jpg',
+        lang: 'en',
+        likes: '24',
+      },
+    ],
+  },
   // Solo Leveling (TVDB: 389597)
   '389597': {
     name: 'Solo Leveling',
@@ -33,14 +276,6 @@ const BASE_CURATED_FANART: Record<string, FanartResponse> = {
         likes: '5',
       },
     ],
-    showbackground: [
-      {
-        id: '355122',
-        url: 'https://assets.fanart.tv/fanart/tv/389597/showbackground/solo-leveling-65985b9a8414e.jpg',
-        lang: 'en',
-        likes: '18',
-      },
-    ],
   },
   // Frieren: Beyond Journey's End (TVDB: 424536)
   '424536': {
@@ -66,14 +301,6 @@ const BASE_CURATED_FANART: Record<string, FanartResponse> = {
         url: 'https://assets.fanart.tv/fanart/tv/424536/hdtvlogo/frieren-beyond-journeys-end-65173d4131c8e.png',
         lang: 'en',
         likes: '6',
-      },
-    ],
-    showbackground: [
-      {
-        id: '348902',
-        url: 'https://assets.fanart.tv/fanart/tv/424536/showbackground/frieren-beyond-journeys-end-65183397111a2.jpg',
-        lang: 'en',
-        likes: '21',
       },
     ],
   },
@@ -109,14 +336,6 @@ const BASE_CURATED_FANART: Record<string, FanartResponse> = {
         likes: '8',
       },
     ],
-    showbackground: [
-      {
-        id: '289102',
-        url: 'https://assets.fanart.tv/fanart/tv/377543/showbackground/jujutsu-kaisen-5f81d183b6593.jpg',
-        lang: 'en',
-        likes: '19',
-      },
-    ],
   },
   // One Piece (TVDB: 81797)
   '81797': {
@@ -150,375 +369,20 @@ const BASE_CURATED_FANART: Record<string, FanartResponse> = {
         likes: '14',
       },
     ],
-    showbackground: [
-      {
-        id: '101202',
-        url: 'https://assets.fanart.tv/fanart/tv/81797/showbackground/one-piece-54695a8f96e46.jpg',
-        lang: 'en',
-        likes: '35',
-      },
-    ],
   },
-  // Demon Slayer: Kimetsu no Yaiba (TVDB: 348545)
-  '348545': {
-    name: 'Demon Slayer: Kimetsu no Yaiba',
-    thetvdb_id: '348545',
-    hdtvlogo: [
-      {
-        id: '219401',
-        url: 'https://assets.fanart.tv/fanart/tv/348545/hdtvlogo/demon-slayer-kimetsu-no-yaiba-5d09362f00816.png',
-        lang: 'en',
-        likes: '29',
-      },
-      {
-        id: '219405',
-        url: 'https://assets.fanart.tv/fanart/tv/348545/hdtvlogo/demon-slayer-kimetsu-no-yaiba-5d09362f00816.png',
-        lang: 'ja',
-        likes: '15',
-      },
-    ],
-    clearlogo: [
-      {
-        id: '219408',
-        url: 'https://assets.fanart.tv/fanart/tv/348545/hdtvlogo/demon-slayer-kimetsu-no-yaiba-5d09362f00816.png',
-        lang: 'en',
-        likes: '12',
-      },
-    ],
-    showbackground: [
-      {
-        id: '219402',
-        url: 'https://assets.fanart.tv/fanart/tv/348545/showbackground/demon-slayer-kimetsu-no-yaiba-5cb367a455264.jpg',
-        lang: 'en',
-        likes: '31',
-      },
-    ],
-  },
-  // Attack on Titan (TVDB: 267440)
-  '267440': {
-    name: 'Attack on Titan',
-    thetvdb_id: '267440',
-    hdtvlogo: [
-      {
-        id: '154301',
-        url: 'https://assets.fanart.tv/fanart/tv/267440/hdtvlogo/attack-on-titan-517488e2524f3.png',
-        lang: 'en',
-        likes: '45',
-      },
-      {
-        id: '154305',
-        url: 'https://assets.fanart.tv/fanart/tv/267440/hdtvlogo/attack-on-titan-517488e2524f3.png',
-        lang: 'ja',
-        likes: '22',
-      },
-    ],
-    clearlogo: [
-      {
-        id: '154308',
-        url: 'https://assets.fanart.tv/fanart/tv/267440/hdtvlogo/attack-on-titan-517488e2524f3.png',
-        lang: 'en',
-        likes: '18',
-      },
-      {
-        id: '154309',
-        url: 'https://assets.fanart.tv/fanart/tv/267440/hdtvlogo/attack-on-titan-517488e2524f3.png',
-        lang: 'ja',
-        likes: '11',
-      },
-    ],
-    showbackground: [
-      {
-        id: '154302',
-        url: 'https://assets.fanart.tv/fanart/tv/267440/showbackground/attack-on-titan-52267d3975922.jpg',
-        lang: 'en',
-        likes: '39',
-      },
-    ],
-  },
-  // Hunter x Hunter (TVDB: 252322)
-  '252322': {
-    name: 'Hunter x Hunter (2011)',
-    thetvdb_id: '252322',
-    hdtvlogo: [
-      {
-        id: '188201',
-        url: 'https://assets.fanart.tv/fanart/tv/252322/hdtvlogo/hunter-x-hunter-2011-5377586c1b0dc.png',
-        lang: 'en',
-        likes: '31',
-      },
-      {
-        id: '188205',
-        url: 'https://assets.fanart.tv/fanart/tv/252322/hdtvlogo/hunter-x-hunter-2011-5377586c1b0dc.png',
-        lang: 'ja',
-        likes: '14',
-      },
-    ],
-    clearlogo: [
-      {
-        id: '188208',
-        url: 'https://assets.fanart.tv/fanart/tv/252322/hdtvlogo/hunter-x-hunter-2011-5377586c1b0dc.png',
-        lang: 'en',
-        likes: '12',
-      },
-    ],
-    showbackground: [
-      {
-        id: '188202',
-        url: 'https://assets.fanart.tv/fanart/tv/252322/showbackground/hunter-x-hunter-2011-537758b775b41.jpg',
-        lang: 'en',
-        likes: '28',
-      },
-    ],
-  },
-  // Bleach (TVDB: 74796)
-  '74796': {
-    name: 'Bleach',
-    thetvdb_id: '74796',
-    hdtvlogo: [
-      {
-        id: '112301',
-        url: 'https://assets.fanart.tv/fanart/tv/74796/hdtvlogo/bleach-503c0a3418f21.png',
-        lang: 'en',
-        likes: '28',
-      },
-      {
-        id: '112305',
-        url: 'https://assets.fanart.tv/fanart/tv/74796/hdtvlogo/bleach-503c0a3418f21.png',
-        lang: 'ja',
-        likes: '13',
-      },
-    ],
-    clearlogo: [
-      {
-        id: '112308',
-        url: 'https://assets.fanart.tv/fanart/tv/74796/hdtvlogo/bleach-503c0a3418f21.png',
-        lang: 'en',
-        likes: '10',
-      },
-    ],
-    showbackground: [
-      {
-        id: '112302',
-        url: 'https://assets.fanart.tv/fanart/tv/74796/showbackground/bleach-4fd7519c949b7.jpg',
-        lang: 'en',
-        likes: '25',
-      },
-    ],
-  },
-  // Chainsaw Man (TVDB: 393409)
-  '393409': {
-    name: 'Chainsaw Man',
-    thetvdb_id: '393409',
-    hdtvlogo: [
-      {
-        id: '321501',
-        url: 'https://assets.fanart.tv/fanart/tv/393409/hdtvlogo/chainsaw-man-633ee15fd5034.png',
-        lang: 'en',
-        likes: '22',
-      },
-      {
-        id: '321505',
-        url: 'https://assets.fanart.tv/fanart/tv/393409/hdtvlogo/chainsaw-man-633ee15fd5034.png',
-        lang: 'ja',
-        likes: '12',
-      },
-    ],
-    clearlogo: [
-      {
-        id: '321508',
-        url: 'https://assets.fanart.tv/fanart/tv/393409/hdtvlogo/chainsaw-man-633ee15fd5034.png',
-        lang: 'en',
-        likes: '9',
-      },
-    ],
-    showbackground: [
-      {
-        id: '321502',
-        url: 'https://assets.fanart.tv/fanart/tv/393409/showbackground/chainsaw-man-6345d3659347a.jpg',
-        lang: 'en',
-        likes: '20',
-      },
-    ],
-  },
-  // Dan Da Dan (TVDB: 442531)
-  '442531': {
-    name: 'DAN DA DAN',
-    thetvdb_id: '442531',
-    hdtvlogo: [
-      {
-        id: '372101',
-        url: 'https://assets.fanart.tv/fanart/tv/442531/hdtvlogo/dandadan-66e8969571588.png',
-        lang: 'en',
-        likes: '15',
-      },
-      {
-        id: '372105',
-        url: 'https://assets.fanart.tv/fanart/tv/442531/hdtvlogo/dandadan-66e8969571588.png',
-        lang: 'ja',
-        likes: '9',
-      },
-    ],
-    clearlogo: [
-      {
-        id: '372108',
-        url: 'https://assets.fanart.tv/fanart/tv/442531/hdtvlogo/dandadan-66e8969571588.png',
-        lang: 'en',
-        likes: '6',
-      },
-    ],
-    showbackground: [
-      {
-        id: '372102',
-        url: 'https://assets.fanart.tv/fanart/tv/442531/showbackground/dandadan-67002f8b8c04d.jpg',
-        lang: 'en',
-        likes: '17',
-      },
-    ],
-  },
-  // Kaiju No. 8 (TVDB: 423043)
-  '423043': {
-    name: 'Kaiju No. 8',
-    thetvdb_id: '423043',
-    hdtvlogo: [
-      {
-        id: '361201',
-        url: 'https://assets.fanart.tv/fanart/tv/423043/hdtvlogo/kaiju-no-8-6613e15c87918.png',
-        lang: 'en',
-        likes: '14',
-      },
-      {
-        id: '361205',
-        url: 'https://assets.fanart.tv/fanart/tv/423043/hdtvlogo/kaiju-no-8-6613e15c87918.png',
-        lang: 'ja',
-        likes: '8',
-      },
-    ],
-    clearlogo: [
-      {
-        id: '361208',
-        url: 'https://assets.fanart.tv/fanart/tv/423043/hdtvlogo/kaiju-no-8-6613e15c87918.png',
-        lang: 'en',
-        likes: '6',
-      },
-    ],
-    showbackground: [
-      {
-        id: '361202',
-        url: 'https://assets.fanart.tv/fanart/tv/423043/showbackground/kaiju-no-8-661bbff9d988c.jpg',
-        lang: 'en',
-        likes: '16',
-      },
-    ],
-  },
-  // Black Clover (TVDB: 331753)
-  '331753': {
-    name: 'Black Clover',
-    thetvdb_id: '331753',
-    hdtvlogo: [
-      {
-        id: '241101',
-        url: 'https://assets.fanart.tv/fanart/tv/331753/hdtvlogo/black-clover-59d295bf2646c.png',
-        lang: 'en',
-        likes: '19',
-      },
-      {
-        id: '241105',
-        url: 'https://assets.fanart.tv/fanart/tv/331753/hdtvlogo/black-clover-59d295bf2646c.png',
-        lang: 'ja',
-        likes: '11',
-      },
-    ],
-    clearlogo: [
-      {
-        id: '241108',
-        url: 'https://assets.fanart.tv/fanart/tv/331753/hdtvlogo/black-clover-59d295bf2646c.png',
-        lang: 'en',
-        likes: '14',
-      },
-      {
-        id: '241109',
-        url: 'https://assets.fanart.tv/fanart/tv/331753/hdtvlogo/black-clover-59d295bf2646c.png',
-        lang: 'ja',
-        likes: '7',
-      },
-    ],
-    showbackground: [
-      {
-        id: '241102',
-        url: 'https://assets.fanart.tv/fanart/tv/331753/showbackground/black-clover-59e3bd8bd810b.jpg',
-        lang: 'en',
-        likes: '21',
-      },
-    ],
-  },
-  // Death Note (TVDB: 79481 & 79824)
+  // Death Note (TVDB: 79481)
   '79481': {
     name: 'Death Note',
     thetvdb_id: '79481',
-    hdtvlogo: [
-      {
-        id: '105401',
-        url: 'https://assets.fanart.tv/fanart/tv/79481/hdtvlogo/death-note-50401ef8a8b24.png',
-        lang: 'en',
-        likes: '38',
-      },
-      {
-        id: '105405',
-        url: 'https://assets.fanart.tv/fanart/tv/79481/hdtvlogo/death-note-50401ef8a8b24.png',
-        lang: 'ja',
-        likes: '17',
-      },
-    ],
-    clearlogo: [
-      {
-        id: '105408',
-        url: 'https://assets.fanart.tv/fanart/tv/79481/hdtvlogo/death-note-50401ef8a8b24.png',
-        lang: 'en',
-        likes: '15',
-      },
-    ],
-    showbackground: [
-      {
-        id: '105402',
-        url: 'https://assets.fanart.tv/fanart/tv/79481/showbackground/death-note-4fc68049a96ef.jpg',
-        lang: 'en',
-        likes: '33',
-      },
-    ],
+    hdtvlogo: [],
+    clearlogo: [],
   },
-  '79824': {
-    name: 'Death Note',
-    thetvdb_id: '79824',
-    hdtvlogo: [
-      {
-        id: '105401',
-        url: 'https://assets.fanart.tv/fanart/tv/79481/hdtvlogo/death-note-50401ef8a8b24.png',
-        lang: 'en',
-        likes: '38',
-      },
-      {
-        id: '105405',
-        url: 'https://assets.fanart.tv/fanart/tv/79481/hdtvlogo/death-note-50401ef8a8b24.png',
-        lang: 'ja',
-        likes: '17',
-      },
-    ],
-    clearlogo: [
-      {
-        id: '105408',
-        url: 'https://assets.fanart.tv/fanart/tv/79481/hdtvlogo/death-note-50401ef8a8b24.png',
-        lang: 'en',
-        likes: '15',
-      },
-    ],
-    showbackground: [
-      {
-        id: '105402',
-        url: 'https://assets.fanart.tv/fanart/tv/79481/showbackground/death-note-4fc68049a96ef.jpg',
-        lang: 'en',
-        likes: '33',
-      },
-    ],
+  // Naruto (TVDB: 78857)
+  '78857': {
+    name: 'Naruto',
+    thetvdb_id: '78857',
+    hdtvlogo: [],
+    clearlogo: [],
   },
 };
 
@@ -529,47 +393,81 @@ export const CURATED_FANART_ARTWORK: Record<string, FanartResponse> = {
   ),
 };
 
-export function pickBestFanartImage(
+export function sortFanartImagesByPreference(
   images?: FanartImage[],
   preferredLang = 'en'
-): FanartImage | null {
+): FanartImage[] {
   if (!images || !Array.isArray(images) || images.length === 0) {
-    return null;
+    return [];
   }
 
   const validImages = images.filter(
     (img) => img && typeof img.url === 'string' && img.url.trim().length > 0
   );
-  if (validImages.length === 0) return null;
+  if (validImages.length === 0) return [];
 
-  const sortByLikes = (a: FanartImage, b: FanartImage) => {
+  const getLangRank = (langRaw?: string): number => {
+    const lang = (langRaw || '').trim().toLowerCase();
+    if (lang === preferredLang || lang === '00' || lang === '') return 1;
+    if (lang === 'ja') return 2;
+    return 3;
+  };
+
+  return [...validImages].sort((a, b) => {
+    const rankDiff = getLangRank(a.lang) - getLangRank(b.lang);
+    if (rankDiff !== 0) return rankDiff;
     const likesA = parseInt(a.likes || '0', 10) || 0;
     const likesB = parseInt(b.likes || '0', 10) || 0;
     return likesB - likesA;
-  };
+  });
+}
 
-  const preferred = validImages
-    .filter(
-      (img) =>
-        img.lang === preferredLang || img.lang === '00' || img.lang === ''
-    )
-    .sort(sortByLikes);
-
-  if (preferred.length > 0) {
-    return preferred[0];
-  }
-
-  const japanese = validImages.filter((img) => img.lang === 'ja').sort(sortByLikes);
-  if (japanese.length > 0) {
-    return japanese[0];
-  }
-
-  const sortedAll = [...validImages].sort(sortByLikes);
-  return sortedAll[0] || null;
+export function pickBestFanartImage(
+  images?: FanartImage[],
+  preferredLang = 'en'
+): FanartImage | null {
+  const sorted = sortFanartImagesByPreference(images, preferredLang);
+  return sorted[0] || null;
 }
 
 export function selectBestFanartImage(images?: FanartImage[]): string | null {
   return pickBestFanartImage(images, 'en')?.url || null;
+}
+
+/**
+ * Extracts all valid landscape background images from a FanartResponse in priority order:
+ * 1. showbackground / moviebackground
+ * 2. tvthumb / moviethumb (landscape 16:9 thumbs)
+ * Never includes hdtvlogo, clearlogo, tvposter, or movieposter.
+ */
+export function extractAllFanartBackdrops(
+  fanartData: FanartResponse | null | undefined,
+  proxyFn?: (url: string) => string | null,
+  preferredLang = 'en'
+): string[] {
+  if (!fanartData) return [];
+
+  const orderedRaw: FanartImage[] = [
+    ...sortFanartImagesByPreference(fanartData.showbackground, preferredLang),
+    ...sortFanartImagesByPreference(fanartData.moviebackground, preferredLang),
+    ...sortFanartImagesByPreference(fanartData.tvthumb, preferredLang),
+    ...sortFanartImagesByPreference(fanartData.moviethumb, preferredLang),
+  ];
+
+  const seen = new Set<string>();
+  const results: string[] = [];
+
+  for (const img of orderedRaw) {
+    const rawUrl = img.url.trim();
+    if (!rawUrl) continue;
+    const finalUrl = (proxyFn ? proxyFn(rawUrl) : rawUrl) || rawUrl;
+    if (!seen.has(finalUrl)) {
+      seen.add(finalUrl);
+      results.push(finalUrl);
+    }
+  }
+
+  return results;
 }
 
 /**
@@ -668,37 +566,6 @@ export function sortLogosByPriority(
   });
 }
 
-function mergeFanartResponses(
-  primary: FanartResponse,
-  fallback?: FanartResponse
-): FanartResponse {
-  if (!fallback) return primary;
-  const mergeList = (a?: FanartImage[], b?: FanartImage[]): FanartImage[] | undefined => {
-    if (!a && !b) return undefined;
-    const map = new Map<string, FanartImage>();
-    for (const item of [...(a || []), ...(b || [])]) {
-      if (item && item.url) {
-        const key = `${item.id || item.url}:${item.lang || 'en'}`;
-        if (!map.has(key)) map.set(key, item);
-      }
-    }
-    return Array.from(map.values());
-  };
-
-  return {
-    ...fallback,
-    ...primary,
-    hdtvlogo: mergeList(primary.hdtvlogo, fallback.hdtvlogo),
-    clearlogo: mergeList(primary.clearlogo, fallback.clearlogo),
-    hdmovielogo: mergeList(primary.hdmovielogo, fallback.hdmovielogo),
-    movielogo: mergeList(primary.movielogo, fallback.movielogo),
-    showbackground: mergeList(primary.showbackground, fallback.showbackground),
-    moviebackground: mergeList(primary.moviebackground, fallback.moviebackground),
-    tvposter: mergeList(primary.tvposter, fallback.tvposter),
-    movieposter: mergeList(primary.movieposter, fallback.movieposter),
-  };
-}
-
 export async function fetchFanartArtwork(
   paramsOrId:
     | number
@@ -755,9 +622,11 @@ export async function fetchFanartArtwork(
             data.hdmovielogo ||
             data.moviebackground ||
             data.clearlogo ||
-            data.movielogo)
+            data.movielogo ||
+            data.tvthumb ||
+            data.moviethumb)
         ) {
-          return mergeFanartResponses(data, curated);
+          return data;
         }
       }
     } catch {

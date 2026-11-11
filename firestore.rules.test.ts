@@ -173,6 +173,9 @@ test('firestore.rules file contains all required match blocks and validation blu
   assert.ok(rulesText.includes('isValidStreamingMonitorLog'));
   assert.ok(rulesText.includes('isBootstrappedOwner'));
   assert.ok(rulesText.includes('canManageArtwork'));
+  assert.ok(rulesText.includes("'previousLogoUrl'"));
+  assert.ok(rulesText.includes("'previousLogoSource'"));
+  assert.ok(rulesText.includes("'selectedLogo'"));
 });
 
 test('Dirty Dozen Payloads all return PERMISSION_DENIED', () => {

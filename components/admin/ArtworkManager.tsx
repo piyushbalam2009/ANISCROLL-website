@@ -449,6 +449,7 @@ export function ArtworkManager({ hoshikaId }: ArtworkManagerProps) {
       selectedLogoSource: resolved.selectedLogoSource,
       selectedLogoLanguage: resolved.selectedLogoLanguage,
       selectionMode: resolved.selectionMode,
+      selectedLogo: resolved.selectedLogo,
       availableLogos: resolved.availableLogos,
       customLogos: updatedCustomLogos,
       hiddenLogoIds: params.nextHiddenIds,

@@ -337,6 +337,26 @@ export async function listAllAnimeArtworkOverrides(): Promise<AnimeArtworkFirest
   }
 }
 
+function stripUndefinedDeep<T>(value: T): T {
+  if (Array.isArray(value)) {
+    return value.map((item) => stripUndefinedDeep(item)) as unknown as T;
+  }
+  if (value && typeof value === 'object') {
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== null && proto !== Object.prototype) {
+      return value;
+    }
+    const cleaned: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v !== undefined) {
+        cleaned[k] = stripUndefinedDeep(v);
+      }
+    }
+    return cleaned as T;
+  }
+  return value;
+}
+
 export async function saveAnimeArtworkOverride(
   input: Omit<AnimeArtworkFirestoreDoc, 'createdAt' | 'updatedAt' | 'updatedBy' | 'updatedByEmail' | 'lastChecked'> & {
     lastChecked?: string;
@@ -352,7 +372,23 @@ export async function saveAnimeArtworkOverride(
   const docRef = doc(db, 'animeArtwork', docId);
   const nowIso = input.lastChecked || new Date().toISOString();
 
-  const sanitized: Omit<AnimeArtworkFirestoreDoc, 'createdAt' | 'updatedAt'> = {
+  const validStatuses: AnimeLogoStatus[] = [
+    'valid',
+    'missing',
+    'japanese_only',
+    'no_english',
+    'low_resolution',
+    'broken',
+    'typography_fallback',
+    'custom_override',
+  ];
+  const safeLogoStatus: AnimeLogoStatus = validStatuses.includes(input.logoStatus)
+    ? input.logoStatus
+    : input.selectedLogoUrl
+    ? 'valid'
+    : 'missing';
+
+  const sanitized: Omit<AnimeArtworkFirestoreDoc, 'createdAt' | 'updatedAt'> = stripUndefinedDeep({
     hoshikaId: Math.max(1, Number(input.hoshikaId) || 1),
     tvdbId: Number(input.tvdbId) || 0,
     tmdbId: Number(input.tmdbId) || 0,
@@ -360,11 +396,11 @@ export async function saveAnimeArtworkOverride(
     selectedLogoUrl: cleanString(input.selectedLogoUrl, 2048, ''),
     selectedLogoSource: input.selectedLogoSource || 'typography_fallback',
     selectedLogoLanguage: cleanString(input.selectedLogoLanguage, 16, 'en'),
-    selectionMode: input.selectionMode || 'auto',
-    selectedLogo: input.selectedLogo || null,
-    availableLogos: (input.availableLogos || []).slice(0, 60),
-    customLogos: (input.customLogos || []).slice(0, 30),
-    hiddenLogoIds: (input.hiddenLogoIds || []).slice(0, 100),
+    selectionMode: input.selectionMode === 'manual' ? 'manual' : 'auto',
+    selectedLogo: input.selectedLogo ? stripUndefinedDeep(input.selectedLogo) : null,
+    availableLogos: (input.availableLogos || []).slice(0, 60).map((item) => stripUndefinedDeep(item)),
+    customLogos: (input.customLogos || []).slice(0, 30).map((item) => stripUndefinedDeep(item)),
+    hiddenLogoIds: (input.hiddenLogoIds || []).slice(0, 100).filter((id): id is string => typeof id === 'string'),
     logoDisplay: {
       width: Number(input.logoDisplay?.width) || DEFAULT_LOGO_DISPLAY_SETTINGS.width,
       scale: Number(input.logoDisplay?.scale) || DEFAULT_LOGO_DISPLAY_SETTINGS.scale,
@@ -375,7 +411,7 @@ export async function saveAnimeArtworkOverride(
         Number(input.logoDisplay?.verticalPosition) ||
         DEFAULT_LOGO_DISPLAY_SETTINGS.verticalPosition,
     },
-    logoStatus: input.logoStatus || 'valid',
+    logoStatus: safeLogoStatus,
     backgroundUrl: cleanString(input.backgroundUrl, 2048, ''),
     posterUrl: cleanString(input.posterUrl, 2048, ''),
     hasEnglishLogo: Boolean(input.hasEnglishLogo),
@@ -384,7 +420,7 @@ export async function saveAnimeArtworkOverride(
     updatedBy: user.uid,
     updatedByEmail: cleanString(user.email, 256, 'admin@aniscroll.app'),
     lastChecked: nowIso,
-  };
+  });
 
   try {
     const existing = await getDoc(docRef);
@@ -396,9 +432,18 @@ export async function saveAnimeArtworkOverride(
       });
     } else {
       const existingData = existing.data();
+      const rawCreatedAt = existingData?.createdAt;
+      const isValidFirestoreTimestamp =
+        rawCreatedAt &&
+        typeof rawCreatedAt === 'object' &&
+        (typeof (rawCreatedAt as { toMillis?: unknown }).toMillis === 'function' ||
+          typeof (rawCreatedAt as { seconds?: unknown }).seconds === 'number');
+
       await setDoc(docRef, {
         ...sanitized,
-        createdAt: existingData.createdAt || serverTimestamp(),
+        previousLogoUrl: cleanString(existingData?.selectedLogoUrl, 2048, ''),
+        previousLogoSource: cleanString(existingData?.selectedLogoSource, 64, 'typography_fallback'),
+        createdAt: isValidFirestoreTimestamp ? rawCreatedAt : serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
     }

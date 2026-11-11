@@ -52,12 +52,12 @@ export function AnimeHero({ anime }: AnimeHeroProps) {
             fill
             priority
             sizes="100vw"
-            className="object-cover object-top opacity-50 filter brightness-75 scale-105"
+            className="object-cover object-center opacity-100 scale-102"
             referrerPolicy="no-referrer"
           />
-          {/* Measured Monochrome Contrast Scrims */}
-          <div className="absolute inset-0 bg-gradient-to-t from-black via-black/80 to-transparent" />
-          <div className="absolute inset-0 bg-gradient-to-r from-black via-black/60 to-transparent" />
+          {/* Localized Monochrome Contrast Scrims */}
+          <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 via-30% to-transparent pointer-events-none" />
+          <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/35 via-40% to-transparent pointer-events-none" />
         </div>
       )}
 

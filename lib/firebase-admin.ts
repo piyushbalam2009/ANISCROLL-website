@@ -326,7 +326,7 @@ export async function writeFirestoreDocumentServer(params: {
     });
     if (existingRes.ok) {
       const rawExisting = await existingRes.json();
-      if (rawExisting?.fields?.createdAt) {
+      if (rawExisting?.fields?.createdAt?.timestampValue) {
         existingCreatedAtRaw = rawExisting.fields.createdAt;
       }
     }

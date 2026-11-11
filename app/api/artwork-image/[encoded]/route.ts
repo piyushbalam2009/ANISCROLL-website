@@ -7,24 +7,29 @@ import {
 
 export const revalidate = 604800; // 7 days
 const UPSTREAM_TIMEOUT_MS = 8000;
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10 MB cap
+const MAX_IMAGE_BYTES = 12 * 1024 * 1024; // 12 MB cap
 
-// 1x1 transparent PNG fallback so Next.js /_next/image never fails with 400 on unreachable upstream CDN assets
-const TRANSPARENT_1X1_PNG = Buffer.from(
-  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVQI12NgAAIAAAUAAeImBZsAAAAASUVORK5CYII=',
-  'base64'
-);
+function createUpstreamErrorResponse(status: number, reason: string): NextResponse {
+  const httpStatus = status === 404 ? 404 : status === 403 ? 404 : 502;
+  return NextResponse.json(
+    { ok: false, error: reason, upstreamStatus: status },
+    {
+      status: httpStatus,
+      headers: {
+        'Cache-Control': 'no-store, max-age=0',
+        'X-Content-Type-Options': 'nosniff',
+        'X-Artwork-Error': reason,
+      },
+    }
+  );
+}
 
-function createFallbackImageResponse(): NextResponse {
-  return new NextResponse(new Uint8Array(TRANSPARENT_1X1_PNG), {
-    status: 200,
-    headers: {
-      'Content-Type': 'image/png',
-      'Cache-Control': 'public, max-age=60, s-maxage=60',
-      'X-Content-Type-Options': 'nosniff',
-      'X-Artwork-Fallback': '1',
-    },
-  });
+function getUpstreamReferer(hostname: string): string {
+  const host = hostname.toLowerCase();
+  if (host.includes('fanart.tv')) return 'https://fanart.tv/';
+  if (host.includes('thetvdb.com')) return 'https://thetvdb.com/';
+  if (host.includes('anilist.co')) return 'https://anilist.co/';
+  return 'https://hoshika.app/';
 }
 
 function fetchViaHttp1(
@@ -35,20 +40,30 @@ function fetchViaHttp1(
     const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
     try {
+      const parsed = new URL(targetUrl);
       const res = await fetch(targetUrl, {
         headers: {
           Accept: 'image/avif,image/webp,image/apng,image/png,image/*,*/*;q=0.8',
-          Referer: 'https://fanart.tv/',
+          Referer: getUpstreamReferer(parsed.hostname),
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         },
         signal: controller.signal,
       });
 
-      const contentType = res.headers.get('content-type') || 'image/png';
+      const contentType = res.headers.get('content-type') || '';
       const contentLength = parseInt(res.headers.get('content-length') || '0', 10);
       if (contentLength > MAX_IMAGE_BYTES) {
         reject(new Error('Image exceeds maximum allowed size'));
+        return;
+      }
+
+      if (!res.ok) {
+        resolve({
+          status: res.status,
+          contentType,
+          buffer: Buffer.alloc(0),
+        });
         return;
       }
 
@@ -111,14 +126,14 @@ function fetchViaHttp2(
       ':path': parsed.pathname + parsed.search,
       ':scheme': 'https',
       ':authority': parsed.host,
-      referer: 'https://fanart.tv/',
+      referer: getUpstreamReferer(parsed.hostname),
       'user-agent':
         'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       accept: 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
     });
 
     let status = 200;
-    let contentType = 'image/png';
+    let contentType = '';
     let totalBytes = 0;
     const chunks: Buffer[] = [];
 
@@ -178,34 +193,15 @@ function fetchViaHttp2(
   });
 }
 
-export async function GET(
-  _req: NextRequest,
-  { params }: { params: Promise<{ encoded: string }> }
-) {
-  const { encoded } = await params;
-
-  if (!encoded || encoded.length > 4096) {
-    return new NextResponse('Missing or invalid encoded parameter', { status: 400 });
-  }
-
-  const urlParam = decodeBase64Url(encoded);
-  if (!urlParam) {
-    return new NextResponse('Invalid encoded URL', { status: 400 });
-  }
-
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(urlParam);
-  } catch {
-    return new NextResponse('Invalid URL', { status: 400 });
-  }
-
-  // Enforce HTTPS-only and strict domain allowlist to prevent SSRF / open proxy abuse
+async function proxyValidatedArtworkUrl(parsedUrl: URL): Promise<NextResponse> {
   if (
     parsedUrl.protocol !== 'https:' ||
     !ALLOWED_ARTWORK_PROXY_HOSTS.has(parsedUrl.hostname.toLowerCase())
   ) {
-    return new NextResponse('Forbidden host or protocol', { status: 403 });
+    return new NextResponse('Forbidden host or protocol', {
+      status: 403,
+      headers: { 'Cache-Control': 'no-store, max-age=0' },
+    });
   }
 
   try {
@@ -220,27 +216,71 @@ export async function GET(
     }
 
     if (result.status !== 200 || result.buffer.length === 0) {
-      return createFallbackImageResponse();
+      return createUpstreamErrorResponse(
+        result.status || 404,
+        'Upstream artwork returned non-200 or empty payload'
+      );
     }
 
     const normalizedType = result.contentType.toLowerCase().split(';')[0].trim();
     if (!normalizedType.startsWith('image/')) {
-      return createFallbackImageResponse();
+      return createUpstreamErrorResponse(
+        502,
+        `Invalid upstream content-type: ${normalizedType || 'unknown'}`
+      );
     }
 
     return new NextResponse(new Uint8Array(result.buffer), {
       status: 200,
       headers: {
         'Content-Type': normalizedType,
-        'Cache-Control': 'public, max-age=604800, stale-while-revalidate=86400, immutable',
+        'Cache-Control':
+          'public, max-age=604800, stale-while-revalidate=86400, immutable',
         'X-Content-Type-Options': 'nosniff',
       },
     });
   } catch (err: any) {
     const msg = String(err?.message || '');
     if (msg.includes('exceeds')) {
-      return new NextResponse('Artwork image exceeds size limit', { status: 413 });
+      return new NextResponse('Artwork image exceeds size limit', {
+        status: 413,
+        headers: { 'Cache-Control': 'no-store, max-age=0' },
+      });
     }
-    return createFallbackImageResponse();
+    return createUpstreamErrorResponse(502, 'Failed to fetch upstream artwork');
   }
+}
+
+export async function GET(
+  _req: NextRequest,
+  { params }: { params: Promise<{ encoded: string }> }
+) {
+  const { encoded } = await params;
+
+  if (!encoded || encoded.length > 4096) {
+    return new NextResponse('Missing or invalid encoded parameter', {
+      status: 400,
+      headers: { 'Cache-Control': 'no-store, max-age=0' },
+    });
+  }
+
+  const urlParam = decodeBase64Url(encoded);
+  if (!urlParam) {
+    return new NextResponse('Invalid encoded URL', {
+      status: 400,
+      headers: { 'Cache-Control': 'no-store, max-age=0' },
+    });
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(urlParam);
+  } catch {
+    return new NextResponse('Invalid URL', {
+      status: 400,
+      headers: { 'Cache-Control': 'no-store, max-age=0' },
+    });
+  }
+
+  return proxyValidatedArtworkUrl(parsedUrl);
 }

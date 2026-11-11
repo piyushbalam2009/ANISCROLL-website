@@ -213,6 +213,10 @@
         },
         "selectedLogoLanguage": { "type": "string", "maxLength": 16 },
         "selectionMode": { "type": "string", "enum": ["manual", "auto"], "maxLength": 20 },
+        "selectedLogo": { "type": "object" },
+        "previousLogo": { "type": "object" },
+        "previousLogoUrl": { "type": "string", "maxLength": 2048 },
+        "previousLogoSource": { "type": "string", "maxLength": 64 },
         "availableLogos": { "type": "array" },
         "customLogos": { "type": "array" },
         "hiddenLogoIds": { "type": "array" },
@@ -227,7 +231,8 @@
             "low_resolution",
             "broken",
             "typography_fallback",
-            "custom_override"
+            "custom_override",
+            "upstream_error"
           ],
           "maxLength": 40
         },

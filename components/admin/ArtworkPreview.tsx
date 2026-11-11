@@ -130,12 +130,11 @@ export function ArtworkPreview({
                 alt={animeTitle}
                 fill
                 sizes="100vw"
-                className="object-cover object-center opacity-55 brightness-90"
+                className="object-cover object-center opacity-100"
                 referrerPolicy="no-referrer"
               />
-              <div className="absolute inset-0 bg-black/40" />
-              <div className="absolute inset-0 bg-gradient-to-r from-black/95 via-black/75 to-transparent" />
-              <div className="absolute inset-0 bg-gradient-to-t from-black via-black/80 to-transparent" />
+              <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/40 via-40% to-transparent pointer-events-none" />
+              <div className="absolute inset-0 bg-gradient-to-t from-black via-black/35 via-25% to-transparent pointer-events-none" />
             </div>
           ) : (
             <div className="absolute inset-0 bg-gradient-to-br from-[#141414] to-black" />

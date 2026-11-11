@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import Image from 'next/image';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { HoshikaAnimeItem } from '@/types/anime';
@@ -114,10 +115,16 @@ export function HomeHeroCarousel({
   }
 
   const currentSlide = slides[currentIndex];
+  const nextSlide = total > 1 ? slides[(currentIndex + 1) % total] : null;
+  const nextBackdropUrl =
+    nextSlide?.artwork?.backgroundUrl ||
+    nextSlide?.anime.bannerImage ||
+    nextSlide?.anime.coverImage ||
+    null;
 
   return (
     <div
-      className="relative w-full select-none overflow-hidden"
+      className="relative w-full select-none overflow-hidden bg-black"
       onMouseEnter={() => setIsPaused(true)}
       onMouseLeave={() => setIsPaused(false)}
       onTouchStart={handleTouchStart}
@@ -134,17 +141,34 @@ export function HomeHeroCarousel({
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            transition={{ duration: 0.5, ease: 'easeInOut' }}
+            transition={{ duration: 0.4, ease: 'easeOut' }}
             className="w-full"
           >
             <CinematicHeroBanner
               anime={currentSlide.anime}
               artwork={currentSlide.artwork}
               mode="home"
-              priority={currentIndex === 0}
+              priority={true}
             />
           </motion.div>
         </AnimatePresence>
+
+        {/* Preload next slide's primary backdrop image off-screen for zero-flash transitions */}
+        {nextBackdropUrl && (
+          <div
+            className="pointer-events-none fixed -left-[9999px] -top-[9999px] w-1 h-1 overflow-hidden opacity-0"
+            aria-hidden="true"
+          >
+            <Image
+              src={nextBackdropUrl}
+              alt=""
+              width={1280}
+              height={720}
+              sizes="100vw"
+              referrerPolicy="no-referrer"
+            />
+          </div>
+        )}
 
         {/* Carousel Navigation Arrow Controls on Left and Right Edges */}
         {total > 1 && (

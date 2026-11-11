@@ -186,7 +186,8 @@ service cloud.firestore {
         && data.keys().hasOnly([
           'animeId', 'hoshikaId', 'tvdbId', 'tmdbId', 'title',
           'selectedLogoUrl', 'selectedLogoSource', 'selectedLogoLanguage',
-          'selectionMode', 'selectedLogo', 'previousLogo', 'availableLogos', 'customLogos', 'hiddenLogoIds',
+          'selectionMode', 'selectedLogo', 'previousLogo', 'previousLogoUrl', 'previousLogoSource',
+          'logos', 'availableLogos', 'customLogos', 'hiddenLogoIds',
           'logoDisplay', 'hasLogo', 'logoStatus', 'fanartLogoCount',
           'backgroundUrl', 'posterUrl', 'hasEnglishLogo', 'hasJapaneseLogo', 'reviewed',
           'lastChecked', 'lastCheckedAt', 'updatedBy', 'updatedByEmail', 'createdAt', 'updatedAt'
@@ -197,11 +198,14 @@ service cloud.firestore {
         && (!('tmdbId' in data) || data.tmdbId == null || data.tmdbId is number)
         && data.title is string && data.title.size() >= 1 && data.title.size() <= 300
         && (!('selectedLogoUrl' in data) || data.selectedLogoUrl == null || (data.selectedLogoUrl is string && data.selectedLogoUrl.size() <= 2048))
-        && (!('selectedLogoSource' in data) || (data.selectedLogoSource is string && data.selectedLogoSource.size() <= 64))
-        && (!('selectedLogoLanguage' in data) || (data.selectedLogoLanguage is string && data.selectedLogoLanguage.size() <= 16))
+        && (!('selectedLogoSource' in data) || data.selectedLogoSource == null || (data.selectedLogoSource is string && data.selectedLogoSource.size() <= 64))
+        && (!('selectedLogoLanguage' in data) || data.selectedLogoLanguage == null || (data.selectedLogoLanguage is string && data.selectedLogoLanguage.size() <= 16))
         && data.selectionMode is string && data.selectionMode in ['manual', 'auto']
         && (!('selectedLogo' in data) || data.selectedLogo == null || data.selectedLogo is map)
         && (!('previousLogo' in data) || data.previousLogo == null || data.previousLogo is map)
+        && (!('previousLogoUrl' in data) || data.previousLogoUrl == null || (data.previousLogoUrl is string && data.previousLogoUrl.size() <= 2048))
+        && (!('previousLogoSource' in data) || data.previousLogoSource == null || (data.previousLogoSource is string && data.previousLogoSource.size() <= 64))
+        && (!('logos' in data) || (data.logos is list && data.logos.size() <= 60))
         && (!('availableLogos' in data) || (data.availableLogos is list && data.availableLogos.size() <= 60))
         && (!('customLogos' in data) || (data.customLogos is list && data.customLogos.size() <= 30))
         && (!('hiddenLogoIds' in data) || (data.hiddenLogoIds is list && data.hiddenLogoIds.size() <= 100))
@@ -209,7 +213,7 @@ service cloud.firestore {
         && (!('hasLogo' in data) || data.hasLogo is bool)
         && data.logoStatus is string && data.logoStatus in [
           'valid', 'missing', 'japanese_only', 'no_english', 'low_resolution', 'broken', 'typography_fallback', 'custom_override',
-          'custom_logo', 'fanart_logo', 'missing_logo', 'broken_logo', 'no_english_logo', 'reviewed'
+          'custom_logo', 'fanart_logo', 'missing_logo', 'broken_logo', 'no_english_logo', 'reviewed', 'upstream_error'
         ]
         && (!('fanartLogoCount' in data) || data.fanartLogoCount is number)
         && (!('posterUrl' in data) || data.posterUrl == null || (data.posterUrl is string && data.posterUrl.size() <= 2048))
@@ -217,10 +221,10 @@ service cloud.firestore {
         && (!('hasEnglishLogo' in data) || data.hasEnglishLogo is bool)
         && (!('hasJapaneseLogo' in data) || data.hasJapaneseLogo is bool)
         && (!('reviewed' in data) || data.reviewed is bool)
-        && (!('lastChecked' in data) || (data.lastChecked is string && data.lastChecked.size() <= 64))
+        && (!('lastChecked' in data) || data.lastChecked == null || (data.lastChecked is string && data.lastChecked.size() <= 64))
         && (!('lastCheckedAt' in data) || data.lastCheckedAt is number)
         && data.updatedBy is string && data.updatedBy.size() >= 1 && data.updatedBy.size() <= 128 && data.updatedBy == request.auth.uid
-        && (!('updatedByEmail' in data) || (data.updatedByEmail is string && data.updatedByEmail.size() <= 256))
+        && (!('updatedByEmail' in data) || data.updatedByEmail == null || (data.updatedByEmail is string && data.updatedByEmail.size() <= 256))
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -492,17 +496,18 @@ service cloud.firestore {
         && canManageArtwork();
       allow update: if isSignedIn() && isValidId(animeId)
         && isValidAnimeArtworkDoc(incoming())
-        && incoming().hoshikaId == existing().hoshikaId
-        && incoming().createdAt == existing().createdAt
+        && (!('hoshikaId' in existing()) || incoming().hoshikaId == existing().hoshikaId)
+        && (!('createdAt' in existing()) || !(existing().createdAt is timestamp) || incoming().createdAt == existing().createdAt || incoming().createdAt == request.time)
         && incoming().updatedAt == request.time
         && canManageArtwork()
         && incoming().diff(existing()).affectedKeys().hasOnly([
-          'animeId', 'tvdbId', 'tmdbId', 'title',
+          'animeId', 'hoshikaId', 'tvdbId', 'tmdbId', 'title',
           'selectedLogoUrl', 'selectedLogoSource', 'selectedLogoLanguage',
-          'selectionMode', 'selectedLogo', 'previousLogo', 'availableLogos', 'customLogos', 'hiddenLogoIds',
+          'selectionMode', 'selectedLogo', 'previousLogo', 'previousLogoUrl', 'previousLogoSource',
+          'logos', 'availableLogos', 'customLogos', 'hiddenLogoIds',
           'logoDisplay', 'hasLogo', 'logoStatus', 'fanartLogoCount',
           'backgroundUrl', 'posterUrl', 'hasEnglishLogo', 'hasJapaneseLogo', 'reviewed',
-          'lastChecked', 'lastCheckedAt', 'updatedBy', 'updatedByEmail', 'updatedAt'
+          'lastChecked', 'lastCheckedAt', 'updatedBy', 'updatedByEmail', 'createdAt', 'updatedAt'
         ]);
       allow delete: if isSignedIn() && isValidId(animeId) && isOwnerRole();
     }

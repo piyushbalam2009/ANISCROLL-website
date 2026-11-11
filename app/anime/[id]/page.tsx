@@ -16,15 +16,16 @@ export const revalidate = 300;
 
 export default async function AnimePage({ params }: AnimePageProps) {
   const { id } = await params;
-  const [anime, episodeData, artwork] = await Promise.all([
+  const [anime, episodeData] = await Promise.all([
     getHoshikaAnime(id, 'en'),
     getAllHoshikaEpisodes(id, 'en'),
-    resolveAnimeArtwork(id),
   ]);
 
   if (!anime) {
     notFound();
   }
+
+  const artwork = await resolveAnimeArtwork(anime.shortId || id, anime);
 
   const title =
     anime.titleEnglish ||

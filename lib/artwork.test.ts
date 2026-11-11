@@ -354,7 +354,7 @@ test('bootstrapped owner permission check verifies both email and UID consistent
   assert.equal(isBootstrappedOwnerIdentity({ email: 'other@example.com', uid: 'user_123' }), false);
 });
 
-test('resolveAnimeArtwork respects artwork fallback priority hierarchy', async () => {
+test('resolveAnimeArtwork respects artwork fallback priority hierarchy and populates backdropCandidates', async () => {
   const mockAnime: HoshikaAnimeItem = {
     id: 'test_anime_99999',
     shortId: 99999,
@@ -370,7 +370,117 @@ test('resolveAnimeArtwork respects artwork fallback priority hierarchy', async (
   assert.equal(resolved.title, 'Test Fallback Series');
   assert.equal(resolved.backgroundSource, 'hoshika_banner');
   assert.equal(resolved.backgroundUrl, 'https://cdn.test/banner.jpg');
+  assert.ok(Array.isArray(resolved.backdropCandidates));
+  assert.deepEqual(resolved.backdropCandidates, [
+    'https://cdn.test/banner.jpg',
+    'https://cdn.test/cover.jpg',
+  ]);
+  assert.equal(resolved.diagnostics?.selectedBackdropSource, 'hoshika_banner');
   assert.equal(resolved.logoSource, 'typography');
   assert.equal(resolved.logoUrl, null);
   assert.equal(resolved.characterArtUrl, null, 'Character art cutouts must never be present');
 });
+
+test('matchTitleToTvdbId maps Naruto, Naruto Shippuden, Death Note, Demon Slayer, Black Clover, and Apothecary Diaries accurately without substring collisions', async () => {
+  const {
+    matchTitleToTvdbId,
+    isValidBackdropCandidateUrl,
+    isDeadLegacyFanartUrl,
+  } = await import('./artwork-mapper.ts');
+  const { extractAllFanartBackdrops } = await import('./fanart.ts');
+
+  assert.equal(matchTitleToTvdbId('Naruto'), 78857, 'Naruto must map to TVDB 78857, never Naruto Shippuden or Death Note');
+  assert.equal(matchTitleToTvdbId('Naruto Shippuden'), 79824);
+  assert.equal(matchTitleToTvdbId('Death Note'), 79481, 'Death Note must map to TVDB 79481');
+  assert.equal(matchTitleToTvdbId('Demon Slayer: Kimetsu no Yaiba'), 348545);
+  assert.equal(matchTitleToTvdbId('Black Clover Season 2'), 331753);
+  assert.equal(matchTitleToTvdbId('The Apothecary Diaries Season 3'), 430552);
+
+  // Verify dead legacy /fanart/tv/ URLs and cross-series collisions are rejected
+  assert.equal(
+    isDeadLegacyFanartUrl(
+      'https://assets.fanart.tv/fanart/tv/348545/showbackground/demon-slayer-kimetsu-no-yaiba-5cb367a455264.jpg'
+    ),
+    true
+  );
+  assert.equal(
+    isDeadLegacyFanartUrl(
+      'https://assets.fanart.tv/fanart/demon-slayer-kimetsu-no-yaiba-5ce04655066e4.png'
+    ),
+    false
+  );
+  assert.equal(
+    isDeadLegacyFanartUrl(
+      'https://assets.fanart.tv/fanart/death-note-50401ef8a8b24.png',
+      41391
+    ),
+    true
+  );
+
+  // Verify backdrop candidate validator rejects logos, dead legacy URLs, and AniZip URLs
+  assert.equal(
+    isValidBackdropCandidateUrl(
+      'https://assets.fanart.tv/fanart/tv/348545/hdtvlogo/demon-slayer.png'
+    ),
+    false
+  );
+  assert.equal(
+    isValidBackdropCandidateUrl(
+      'https://assets.fanart.tv/fanart/tv/348545/showbackground/demon-slayer-kimetsu-no-yaiba-5cb367a455264.jpg'
+    ),
+    false
+  );
+  assert.equal(
+    isValidBackdropCandidateUrl(
+      'https://assets.fanart.tv/fanart/tv/348545/clearlogo/demon-slayer.png'
+    ),
+    false
+  );
+  assert.equal(
+    isValidBackdropCandidateUrl('https://api.ani.zip/images/banner.jpg'),
+    false
+  );
+  assert.equal(
+    isValidBackdropCandidateUrl(
+      'https://cdn.hoshika.app/catalog/anime/95095/banner.webp'
+    ),
+    true
+  );
+  assert.equal(
+    isValidBackdropCandidateUrl(
+      'https://s4.anilist.co/file/anilistcdn/media/anime/banner/101922-33MtJGsUSxga.jpg'
+    ),
+    true
+  );
+
+  // Verify extractAllFanartBackdrops sorts landscape backgrounds by language & likes and never includes logos or posters
+  const backdrops = extractAllFanartBackdrops(
+    {
+      showbackground: [
+        { id: 'bg1', url: 'https://assets.fanart.tv/fanart/tv/1/showbackground/ja.jpg', lang: 'ja', likes: '50' },
+        { id: 'bg2', url: 'https://assets.fanart.tv/fanart/tv/1/showbackground/en1.jpg', lang: 'en', likes: '10' },
+        { id: 'bg3', url: 'https://assets.fanart.tv/fanart/tv/1/showbackground/en2.jpg', lang: 'en', likes: '30' },
+      ],
+      tvthumb: [
+        { id: 'th1', url: 'https://assets.fanart.tv/fanart/tv/1/tvthumb/thumb1.jpg', lang: 'en', likes: '15' },
+      ],
+      hdtvlogo: [
+        { id: 'lg1', url: 'https://assets.fanart.tv/fanart/tv/1/hdtvlogo/logo.png', lang: 'en', likes: '99' },
+      ],
+      tvposter: [
+        { id: 'ps1', url: 'https://assets.fanart.tv/fanart/tv/1/tvposter/poster.jpg', lang: 'en', likes: '99' },
+      ],
+    },
+    toSafeArtworkUrl
+  );
+  assert.equal(backdrops.length, 4);
+  assert.equal(
+    decodeBase64Url(backdrops[0].slice('/api/artwork-image/'.length)),
+    'https://assets.fanart.tv/fanart/tv/1/showbackground/en2.jpg'
+  );
+  assert.equal(
+    decodeBase64Url(backdrops[3].slice('/api/artwork-image/'.length)),
+    'https://assets.fanart.tv/fanart/tv/1/tvthumb/thumb1.jpg'
+  );
+});
+
