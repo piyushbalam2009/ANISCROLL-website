@@ -1,18 +1,39 @@
 import { appCache } from './cache';
-import { AniScrollStreamResponse } from '@/types/streaming';
+import {
+  AniScrollStreamResponse,
+  EpisodeStreamAvailability,
+} from '@/types/streaming';
 import { resolveAnimeIds } from './id-mapper';
 import {
   EpisodeAvailabilityResult,
   createEpisodeAvailability,
 } from './episode-store';
+import {
+  validateZokoAnimeResponse,
+  selectEpisodeAudioVersion,
+} from './zokoanime-stream';
 
-const ANISCROLL_API_BASE = 'https://api.aniscroll.in/api';
+const ANISCROLL_ZOKOANIME_BASE = 'https://api.aniscroll.in/api/watch/zokoanime';
 
-const inFlightAvailabilityMap = new Map<string, Promise<EpisodeAvailabilityResult>>();
+const inFlightStreamMap = new Map<string, Promise<AniScrollStreamResponse | null>>();
+const inFlightEpisodeAvailMap = new Map<string, Promise<EpisodeStreamAvailability>>();
+const inFlightSeriesAvailMap = new Map<string, Promise<EpisodeAvailabilityResult>>();
 
-async function fetchJsonWithTimeout<T>(url: string, timeoutMs: number = 4000): Promise<T | null> {
+interface FetchZokoResult {
+  stream: AniScrollStreamResponse | null;
+  definitiveUnavailable: boolean;
+}
+
+async function fetchZokoAnimeEndpoint(
+  anilistId: number,
+  episode: number,
+  type: 'sub' | 'dub',
+  timeoutMs: number = 15000
+): Promise<FetchZokoResult> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  const url = `${ANISCROLL_ZOKOANIME_BASE}/${anilistId}/${episode}/${type}`;
+
   try {
     const res = await fetch(url, {
       headers: {
@@ -21,53 +42,169 @@ async function fetchJsonWithTimeout<T>(url: string, timeoutMs: number = 4000): P
       },
       signal: controller.signal,
     });
-    if (!res.ok) return null;
-    const data = await res.json();
-    return data as T;
+
+    if (res.status === 404 || res.status === 400) {
+      return { stream: null, definitiveUnavailable: true };
+    }
+
+    if (!res.ok) {
+      return { stream: null, definitiveUnavailable: false };
+    }
+
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      return { stream: null, definitiveUnavailable: false };
+    }
+
+    const raw = await res.json();
+    const validated = validateZokoAnimeResponse(raw, anilistId, episode, type);
+    if (validated) {
+      return { stream: validated, definitiveUnavailable: false };
+    }
+
+    // Valid JSON returned with an error field or no usable streams means this version is definitively unavailable
+    return { stream: null, definitiveUnavailable: true };
   } catch {
-    return null;
+    return { stream: null, definitiveUnavailable: false };
   } finally {
     clearTimeout(timeout);
   }
 }
 
+/**
+ * Fetches and validates the ZokoAnime stream for a specific (anilistId, episode, type).
+ * Deduplicates concurrent requests and caches valid stream responses.
+ */
 export async function getAniScrollStream(
   anilistId: number,
   episode: number = 1,
   type: 'sub' | 'dub' = 'sub'
 ): Promise<AniScrollStreamResponse | null> {
-  const cacheKey = `stream:megaplay:${anilistId}:${episode}:${type}`;
+  if (!Number.isFinite(anilistId) || anilistId <= 0 || !Number.isFinite(episode) || episode <= 0) {
+    return null;
+  }
+
+  const normalizedType: 'sub' | 'dub' = type === 'dub' ? 'dub' : 'sub';
+  const cacheKey = `zokoanime:stream:${anilistId}:${episode}:${normalizedType}`;
+  const missCacheKey = `zokoanime:miss:${anilistId}:${episode}:${normalizedType}`;
+
   const cached = appCache.get<AniScrollStreamResponse>(cacheKey);
   if (cached) return cached;
 
-  const sources = ['megaplay', 'zokoanime', 'anikoto'] as const;
+  const recentMiss = appCache.get<boolean>(missCacheKey);
+  if (recentMiss) return null;
 
-  for (const source of sources) {
+  const existingInFlight = inFlightStreamMap.get(cacheKey);
+  if (existingInFlight) return existingInFlight;
+
+  const promise = (async (): Promise<AniScrollStreamResponse | null> => {
     try {
-      const url = `${ANISCROLL_API_BASE}/watch/${source}/${anilistId}/${episode}/${type}`;
-      const data = await fetchJsonWithTimeout<AniScrollStreamResponse>(url, 7000);
-      if (data && (data.m3u8 || data.hlsProxyUrl || data.embedUrl)) {
-        appCache.set(cacheKey, data, 1800);
-        return data;
-      }
-    } catch (err: any) {
-      console.error(`Error fetching AniScroll stream (${source}):`, err?.message || err);
-    }
-  }
+      let attemptResult = await fetchZokoAnimeEndpoint(anilistId, episode, normalizedType, 15000);
 
-  return null;
+      // Retry once on transient network/timeout failure
+      if (!attemptResult.stream && !attemptResult.definitiveUnavailable) {
+        attemptResult = await fetchZokoAnimeEndpoint(anilistId, episode, normalizedType, 15000);
+      }
+
+      if (attemptResult.stream) {
+        appCache.set(cacheKey, attemptResult.stream, 600);
+        return attemptResult.stream;
+      }
+
+      if (attemptResult.definitiveUnavailable) {
+        appCache.set(missCacheKey, true, 120);
+      }
+      return null;
+    } finally {
+      inFlightStreamMap.delete(cacheKey);
+    }
+  })();
+
+  inFlightStreamMap.set(cacheKey, promise);
+  return promise;
 }
 
 /**
- * Resolves actual Sub and Dub availability for an anime using streaming provider checks.
- * Caches resolved availability on the server for 30 minutes and deduplicates concurrent checks.
+ * Dynamically checks both Sub and Dub endpoints in parallel for a specific episode:
+ * - GET https://api.aniscroll.in/api/watch/zokoanime/{anilist_id}/{episode}/sub
+ * - GET https://api.aniscroll.in/api/watch/zokoanime/{anilist_id}/{episode}/dub
+ */
+export async function checkEpisodeStreamAvailability(
+  anilistId: number,
+  episode: number = 1,
+  userSelectedVersion?: 'sub' | 'dub' | null
+): Promise<EpisodeStreamAvailability> {
+  if (!Number.isFinite(anilistId) || anilistId <= 0 || !Number.isFinite(episode) || episode <= 0) {
+    return {
+      anilistId,
+      episode,
+      subAvailable: false,
+      dubAvailable: false,
+      subStream: null,
+      dubStream: null,
+      defaultVersion: null,
+    };
+  }
+
+  const availKey = `zokoanime:ep_avail:${anilistId}:${episode}`;
+  const existing = inFlightEpisodeAvailMap.get(availKey);
+
+  const basePromise =
+    existing ||
+    (async (): Promise<EpisodeStreamAvailability> => {
+      try {
+        const [subStream, dubStream] = await Promise.all([
+          getAniScrollStream(anilistId, episode, 'sub'),
+          getAniScrollStream(anilistId, episode, 'dub'),
+        ]);
+
+        const subAvailable = Boolean(subStream);
+        const dubAvailable = Boolean(dubStream);
+
+        return {
+          anilistId,
+          episode,
+          subAvailable,
+          dubAvailable,
+          subStream,
+          dubStream,
+          defaultVersion: selectEpisodeAudioVersion({
+            subAvailable,
+            dubAvailable,
+            userSelectedVersion: null,
+          }),
+        };
+      } finally {
+        inFlightEpisodeAvailMap.delete(availKey);
+      }
+    })();
+
+  if (!existing) {
+    inFlightEpisodeAvailMap.set(availKey, basePromise);
+  }
+
+  const resolved = await basePromise;
+  return {
+    ...resolved,
+    defaultVersion: selectEpisodeAudioVersion({
+      subAvailable: resolved.subAvailable,
+      dubAvailable: resolved.dubAvailable,
+      userSelectedVersion,
+    }),
+  };
+}
+
+/**
+ * Resolves Sub and Dub availability for an anime series (checking Episode 1 via ZokoAnime).
+ * Used by anime detail pages and episode listings.
  */
 export async function resolveServerAudioAvailability(params: {
   hoshikaId: string | number;
   anilistId?: number | null;
   episodeCount: number;
+  episodeNumber?: number;
 }): Promise<EpisodeAvailabilityResult> {
-  const { hoshikaId, episodeCount } = params;
+  const { hoshikaId, episodeCount, episodeNumber = 1 } = params;
 
   if (episodeCount <= 0) {
     return createEpisodeAvailability({
@@ -88,117 +225,48 @@ export async function resolveServerAudioAvailability(params: {
     }
   }
 
-  const cacheKey = `availability:audio:${anilistId || hoshikaId}:${episodeCount}`;
+  if (!anilistId) {
+    return createEpisodeAvailability({
+      subAvailable: false,
+      dubAvailable: false,
+      subEpisodeCount: 0,
+      dubEpisodeCount: 0,
+    });
+  }
+
+  const cacheKey = `zokoanime:series_avail:${anilistId}:${episodeNumber}:${episodeCount}`;
   const cached = appCache.get<EpisodeAvailabilityResult>(cacheKey);
   if (cached) return cached;
 
-  if (!anilistId) {
-    const fallback = createEpisodeAvailability({
-      subAvailable: episodeCount > 0,
-      dubAvailable: false,
-      subEpisodeCount: episodeCount,
-      dubEpisodeCount: 0,
-    });
-    return fallback;
-  }
-
-  const existing = inFlightAvailabilityMap.get(cacheKey);
+  const existing = inFlightSeriesAvailMap.get(cacheKey);
   if (existing) return existing;
 
   const promise = (async (): Promise<EpisodeAvailabilityResult> => {
     try {
-      const [megaSub, megaDub, desidubEps] = await Promise.all([
-        fetchJsonWithTimeout<any>(`${ANISCROLL_API_BASE}/watch/megaplay/${anilistId}/1/sub`, 6000),
-        fetchJsonWithTimeout<any>(`${ANISCROLL_API_BASE}/watch/megaplay/${anilistId}/1/dub`, 6000),
-        fetchJsonWithTimeout<any>(
-          `${ANISCROLL_API_BASE}/episodes?anilistId=${anilistId}&source=desidub`,
-          6000
-        ),
-      ]);
-
-      const megaSubOk = Boolean(megaSub && (megaSub.m3u8 || megaSub.hlsProxyUrl || megaSub.embedUrl));
-      const megaDubOk = Boolean(megaDub && (megaDub.m3u8 || megaDub.hlsProxyUrl || megaDub.embedUrl));
-      const desidubCount =
-        typeof desidubEps?.count === 'number' && desidubEps.count > 0
-          ? desidubEps.count
-          : Array.isArray(desidubEps?.episodes)
-          ? desidubEps.episodes.length
-          : 0;
-      const desidubOk = desidubCount > 0;
-
-      let anikotoSubOk = false;
-      let anikotoDubOk = false;
-      let anikotoSubLen = 0;
-      let anikotoDubLen = 0;
-
-      if (!megaSubOk && !megaDubOk && !desidubOk) {
-        const [anikotoSub, anikotoDub] = await Promise.all([
-          fetchJsonWithTimeout<any>(
-            `${ANISCROLL_API_BASE}/servers?anilistId=${anilistId}&ep=1&type=sub&source=anikoto`,
-            5000
-          ),
-          fetchJsonWithTimeout<any>(
-            `${ANISCROLL_API_BASE}/servers?anilistId=${anilistId}&ep=1&type=dub&source=anikoto`,
-            5000
-          ),
-        ]);
-        anikotoSubLen = Array.isArray(anikotoSub?.servers) ? anikotoSub.servers.length : 0;
-        anikotoDubLen = Array.isArray(anikotoDub?.servers) ? anikotoDub.servers.length : 0;
-        anikotoSubOk = anikotoSubLen > 0;
-        anikotoDubOk = anikotoDubLen > 0;
-      }
-
-      let subAvailable = false;
-      let dubAvailable = false;
-      let dubEpisodeCount = episodeCount;
-      let probeResolved = true;
-
-      if (megaSubOk) {
-        subAvailable = true;
-        // MegaPlay accurately distinguishes sub-only vs dubbed anime; DesiDub confirms dubbed episode counts
-        dubAvailable = megaDubOk || desidubOk;
-        if (desidubCount > 0) {
-          dubEpisodeCount = Math.min(episodeCount, desidubCount);
-        }
-      } else if (megaDubOk) {
-        subAvailable = anikotoSubOk;
-        dubAvailable = true;
-      } else if (anikotoSubOk || anikotoDubOk || desidubOk) {
-        subAvailable = anikotoSubOk || episodeCount > 0;
-        dubAvailable = desidubOk || (anikotoDubOk && anikotoSubLen === anikotoDubLen);
-        if (desidubCount > 0) {
-          dubEpisodeCount = Math.min(episodeCount, desidubCount);
-        }
-      } else {
-        // Fallback when external stream probes time out: Hoshika episodes exist as sub
-        subAvailable = episodeCount > 0;
-        dubAvailable = false;
-        probeResolved = false;
-      }
-
+      const epAvail = await checkEpisodeStreamAvailability(anilistId!, episodeNumber);
       const result = createEpisodeAvailability({
-        subAvailable,
-        dubAvailable,
-        subEpisodeCount: subAvailable ? episodeCount : 0,
-        dubEpisodeCount: dubAvailable ? dubEpisodeCount : 0,
+        subAvailable: epAvail.subAvailable,
+        dubAvailable: epAvail.dubAvailable,
+        subEpisodeCount: epAvail.subAvailable ? episodeCount : 0,
+        dubEpisodeCount: epAvail.dubAvailable ? episodeCount : 0,
       });
 
-      if (probeResolved) {
-        appCache.set(cacheKey, result, 1800);
+      if (epAvail.subAvailable || epAvail.dubAvailable) {
+        appCache.set(cacheKey, result, 600);
       }
       return result;
     } catch {
       return createEpisodeAvailability({
-        subAvailable: episodeCount > 0,
+        subAvailable: false,
         dubAvailable: false,
-        subEpisodeCount: episodeCount,
+        subEpisodeCount: 0,
         dubEpisodeCount: 0,
       });
     } finally {
-      inFlightAvailabilityMap.delete(cacheKey);
+      inFlightSeriesAvailMap.delete(cacheKey);
     }
   })();
 
-  inFlightAvailabilityMap.set(cacheKey, promise);
+  inFlightSeriesAvailMap.set(cacheKey, promise);
   return promise;
 }

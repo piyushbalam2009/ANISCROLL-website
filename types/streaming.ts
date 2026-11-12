@@ -1,27 +1,59 @@
+export type SubtitlePreference = 'off' | string;
+
 export interface SubtitleTrack {
-  url: string;
   lang: string;
+  label?: string;
   default: boolean;
+  src?: string;
+  url: string;
+}
+
+export interface ZokoAnimeQuality {
+  quality: string;
+  resolution?: string;
+  width?: number;
+  height?: number;
+  bandwidth?: number;
+  hlsProxyUrl: string;
 }
 
 export interface AniScrollStreamResponse {
+  source: string;
   anilistId: number;
   malId?: number | null;
-  title: string;
+  title?: string;
   episode: number;
   type: 'sub' | 'dub';
-  source?: string;
-  server: string;
-  availableServers: string[];
   embedUrl?: string;
   m3u8?: string;
-  hlsProxyUrl?: string;
-  playbackMode?: 'hls' | 'embed' | 'direct';
-  iframeOnly?: boolean;
+  qualities?: ZokoAnimeQuality[];
   subtitles?: SubtitleTrack[];
+  downloadUrl?: string;
+  videoId?: number | string;
+  skip?: {
+    intro?: { start: number; end: number } | null;
+    outro?: { start: number; end: number } | null;
+  } | null;
+  playbackMode?: 'hls' | 'embed' | 'direct' | string;
+  serverName?: string;
+  server?: string;
+  availableServers?: string[];
+  hlsProxyUrl?: string;
+  iframeOnly?: boolean;
   intro?: { start: number; end: number } | null;
   outro?: { start: number; end: number } | null;
   note?: string | null;
+  error?: string;
+}
+
+export interface EpisodeStreamAvailability {
+  anilistId: number;
+  episode: number;
+  subAvailable: boolean;
+  dubAvailable: boolean;
+  subStream: AniScrollStreamResponse | null;
+  dubStream: AniScrollStreamResponse | null;
+  defaultVersion: 'sub' | 'dub' | null;
 }
 
 export interface SkipInterval {

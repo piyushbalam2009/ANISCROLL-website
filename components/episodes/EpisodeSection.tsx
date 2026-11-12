@@ -33,6 +33,7 @@ interface EpisodeSectionProps {
   onChangeType?: (type: AudioLanguage) => void;
   showSubDubToggle?: boolean;
   initialAvailability?: EpisodeAvailabilityResult | null;
+  deferAvailability?: boolean;
   className?: string;
   onEpisodesLoaded?: (episodes: HoshikaEpisodeItem[]) => void;
   onAvailabilityResolved?: (availability: EpisodeAvailabilityResult) => void;
@@ -47,6 +48,7 @@ export function EpisodeSection({
   onChangeType: externalOnChangeType,
   showSubDubToggle = true,
   initialAvailability = null,
+  deferAvailability = false,
   className = '',
   onEpisodesLoaded,
   onAvailabilityResolved,
@@ -98,6 +100,7 @@ export function EpisodeSection({
   } = useEpisodeAvailability(normalizedAnimeId, {
     preferredLanguage: activeType,
     initialAvailability,
+    deferFetch: deferAvailability,
   });
 
   // Notify parent when availability resolves and auto-correct activeType if unavailable

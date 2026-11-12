@@ -30,11 +30,13 @@ export function useEpisodeAvailability(
   options?: {
     preferredLanguage?: AudioLanguage | null;
     initialAvailability?: EpisodeAvailabilityResult | null;
+    deferFetch?: boolean;
     onResolvedLanguage?: (lang: AudioLanguage) => void;
   }
 ): UseEpisodeAvailabilityReturn {
   const key = String(animeId).trim();
   const preferredLanguage = options?.preferredLanguage ?? null;
+  const deferFetch = Boolean(options?.deferFetch);
   const onResolvedLanguageRef = useRef(options?.onResolvedLanguage);
   useEffect(() => {
     onResolvedLanguageRef.current = options?.onResolvedLanguage;
@@ -50,23 +52,47 @@ export function useEpisodeAvailability(
         ),
       };
     }
-    const cached = getCachedEpisodeAvailability(key);
-    if (cached) {
-      return {
-        ...cached,
-        defaultLanguage: selectDefaultLanguage(cached, preferredLanguage),
-      };
+    if (!deferFetch) {
+      const cached = getCachedEpisodeAvailability(key);
+      if (cached) {
+        return {
+          ...cached,
+          defaultLanguage: selectDefaultLanguage(cached, preferredLanguage),
+        };
+      }
     }
     return INITIAL_LOADING_AVAILABILITY;
   });
 
   const [isLoadingAvailability, setIsLoadingAvailability] = useState<boolean>(() => {
     if (options?.initialAvailability) return false;
+    if (deferFetch) return true;
     return !getCachedEpisodeAvailability(key);
   });
 
+  const initialAvailability = options?.initialAvailability ?? null;
+
   useEffect(() => {
     let isMounted = true;
+
+    if (initialAvailability) {
+      const next: EpisodeAvailabilityResult = {
+        ...initialAvailability,
+        defaultLanguage: selectDefaultLanguage(initialAvailability, preferredLanguage),
+      };
+      setAvailability(next);
+      setIsLoadingAvailability(false);
+      if (next.defaultLanguage && onResolvedLanguageRef.current) {
+        onResolvedLanguageRef.current(next.defaultLanguage);
+      }
+      return;
+    }
+
+    if (deferFetch) {
+      setIsLoadingAvailability(true);
+      setAvailability(INITIAL_LOADING_AVAILABILITY);
+      return;
+    }
 
     const cached = getCachedEpisodeAvailability(key);
     if (cached) {
@@ -102,7 +128,7 @@ export function useEpisodeAvailability(
     return () => {
       isMounted = false;
     };
-  }, [key, preferredLanguage]);
+  }, [key, preferredLanguage, initialAvailability, deferFetch]);
 
   const refreshAvailability = useCallback(async () => {
     setIsLoadingAvailability(true);

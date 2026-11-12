@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { VideoPlayer } from './VideoPlayer';
@@ -12,7 +12,6 @@ import {
 } from '@/types/anime';
 import { AniScrollStreamResponse } from '@/types/streaming';
 import {
-  getUserPreferences,
   getSavedHistoryEntry,
   updateWatchHistoryMetadata,
 } from '@/lib/storage';
@@ -20,10 +19,45 @@ import {
   cacheEpisodes,
   getCachedEpisode,
   fetchEpisodeBatch,
-  selectDefaultLanguage,
+  createEpisodeAvailability,
+  EpisodeAvailabilityResult,
 } from '@/lib/episode-store';
-import { useEpisodeAvailability } from '@/hooks/useEpisodeAvailability';
+import { selectEpisodeAudioVersion } from '@/lib/zokoanime-stream';
 import { ChevronRight, ArrowLeft, AlertCircle, Loader2 } from 'lucide-react';
+
+const USER_AUDIO_PREF_KEY = 'aniscroll_user_selected_audio_v1';
+
+function getStoredUserAudioVersion(): 'sub' | 'dub' | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const val = window.sessionStorage.getItem(USER_AUDIO_PREF_KEY);
+    return val === 'dub' ? 'dub' : val === 'sub' ? 'sub' : null;
+  } catch {
+    return null;
+  }
+}
+
+function setStoredUserAudioVersion(version: 'sub' | 'dub' | null): void {
+  if (typeof window === 'undefined') return;
+  try {
+    if (!version) {
+      window.sessionStorage.removeItem(USER_AUDIO_PREF_KEY);
+    } else {
+      window.sessionStorage.setItem(USER_AUDIO_PREF_KEY, version);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
+
+interface CachedEpisodeStreams {
+  subAvailable: boolean;
+  dubAvailable: boolean;
+  subStream: AniScrollStreamResponse | null;
+  dubStream: AniScrollStreamResponse | null;
+}
+
+const clientEpisodeStreamCache = new Map<string, CachedEpisodeStreams>();
 
 interface WatchPageClientProps {
   anime: HoshikaAnimeItem;
@@ -38,15 +72,37 @@ export function WatchPageClient({
 }: WatchPageClientProps) {
   const router = useRouter();
 
-  const [activeType, setActiveType] = useState<'sub' | 'dub'>('sub');
+  const [userSelectedVersion, setUserSelectedVersion] = useState<'sub' | 'dub' | null>(() =>
+    getStoredUserAudioVersion()
+  );
+  const [activeType, setActiveType] = useState<'sub' | 'dub'>(() => {
+    const stored = getStoredUserAudioVersion();
+    return stored || 'sub';
+  });
+
   const [initialResumeTime, setInitialResumeTime] = useState<number>(0);
   const [idMapping, setIdMapping] = useState<IdMappingResult | null>(null);
   const [isResolvingId, setIsResolvingId] = useState<boolean>(true);
   const [idError, setIdError] = useState<string | null>(null);
 
+  // Episode-specific Sub/Dub availability & streams
+  const [episodeHasSub, setEpisodeHasSub] = useState<boolean>(false);
+  const [episodeHasDub, setEpisodeHasDub] = useState<boolean>(false);
+  const [isCheckingAvailability, setIsCheckingAvailability] = useState<boolean>(true);
+  const [episodeStreams, setEpisodeStreams] = useState<{
+    sub: AniScrollStreamResponse | null;
+    dub: AniScrollStreamResponse | null;
+  }>({ sub: null, dub: null });
+
   const [streamData, setStreamData] = useState<AniScrollStreamResponse | null>(null);
   const [isLoadingStream, setIsLoadingStream] = useState<boolean>(false);
   const [streamError, setStreamError] = useState<string | null>(null);
+  const [retryCounter, setRetryCounter] = useState<number>(0);
+
+  const userSelectedVersionRef = useRef<'sub' | 'dub' | null>(userSelectedVersion);
+  useEffect(() => {
+    userSelectedVersionRef.current = userSelectedVersion;
+  }, [userSelectedVersion]);
 
   const totalEpisodes = anime.episodes || episodes.length || 1;
 
@@ -64,24 +120,6 @@ export function WatchPageClient({
       });
     }
   }, [anime.shortId, episodes, totalEpisodes]);
-
-  // Resolve Sub/Dub availability and auto-select available language
-  const {
-    availability,
-    isLoadingAvailability,
-    hasSub,
-    hasDub,
-  } = useEpisodeAvailability(anime.shortId, {
-    preferredLanguage: activeType,
-  });
-
-  useEffect(() => {
-    if (isLoadingAvailability) return;
-    const recommended = selectDefaultLanguage(availability, activeType);
-    if (recommended && recommended !== activeType) {
-      setActiveType(recommended);
-    }
-  }, [availability, isLoadingAvailability, activeType]);
 
   const [activeEpisodeItem, setActiveEpisodeItem] = useState<HoshikaEpisodeItem | null>(() => {
     return (
@@ -134,10 +172,9 @@ export function WatchPageClient({
     undefined;
   const episodeDurationSeconds = (anime.episodeDuration || 24) * 60;
 
-  // Initialize preferred audio format (sub/dub) and saved resume time from URL query or watch history
+  // Initialize URL query params (?type=dub&t=...) and saved resume time on episode mount
   useEffect(() => {
     const savedEntry = getSavedHistoryEntry(anime.shortId, episodeNumber);
-    const prefs = getUserPreferences();
 
     let urlType: 'sub' | 'dub' | null = null;
     let urlTime: number | null = null;
@@ -158,11 +195,10 @@ export function WatchPageClient({
     }
 
     if (urlType) {
+      userSelectedVersionRef.current = urlType;
+      setUserSelectedVersion(urlType);
+      setStoredUserAudioVersion(urlType);
       setActiveType(urlType);
-    } else if (savedEntry?.audioType === 'sub' || savedEntry?.audioType === 'dub') {
-      setActiveType(savedEntry.audioType);
-    } else if (prefs.defaultAudio) {
-      setActiveType(prefs.defaultAudio);
     }
 
     if (urlTime !== null && urlTime > 0) {
@@ -174,14 +210,13 @@ export function WatchPageClient({
     }
   }, [anime.shortId, episodeNumber]);
 
-  // Whenever episode metadata or AniList ID resolves after playback has started,
-  // update the existing watch-history record without overwriting valid metadata or position.
+  // Update watch-history metadata whenever resolved
   useEffect(() => {
     updateWatchHistoryMetadata({
       hoshikaId: anime.shortId,
       episodeNumber,
       anilistId: idMapping?.anilistId ?? anime.anilistId ?? null,
-      malId: idMapping?.malId ?? anime.malId ?? null,
+      malId: idMapping?.malId ?? streamData?.malId ?? anime.malId ?? null,
       title,
       animeTitle: title,
       coverImage: anime.coverImage || undefined,
@@ -203,10 +238,11 @@ export function WatchPageClient({
     episodeThumbnail,
     idMapping?.anilistId,
     idMapping?.malId,
+    streamData?.malId,
     activeType,
   ]);
 
-  // Resolve IDs for this anime
+  // Resolve AniList & MAL IDs for this anime
   useEffect(() => {
     let isMounted = true;
     async function resolveIds() {
@@ -226,7 +262,7 @@ export function WatchPageClient({
             );
           }
         }
-      } catch (err: any) {
+      } catch {
         if (isMounted) {
           setIdError('Failed to resolve streaming identifier for this anime.');
         }
@@ -243,57 +279,178 @@ export function WatchPageClient({
     };
   }, [anime.shortId]);
 
-  // Fetch AniScroll Stream when anilistId, episodeNumber, or activeType changes
+  // Fetch Episode-Specific Sub/Dub Availability & ZokoAnime Stream in Parallel
   useEffect(() => {
-    if (!idMapping?.anilistId) return;
+    const anilistId = idMapping?.anilistId;
+    if (!anilistId) return;
 
+    const controller = new AbortController();
     let isMounted = true;
-    async function fetchStream() {
-      setIsLoadingStream(true);
+    const cacheKey = `${anilistId}:${episodeNumber}`;
+
+    async function loadEpisodeAvailabilityAndStream() {
+      // Clear previous episode stream state immediately so stale streams/qualities never persist
+      setStreamData(null);
       setStreamError(null);
 
+      // Check client cache first (unless manual retry was triggered)
+      const cached = retryCounter === 0 ? clientEpisodeStreamCache.get(cacheKey) : undefined;
+      if (cached) {
+        setEpisodeHasSub(cached.subAvailable);
+        setEpisodeHasDub(cached.dubAvailable);
+        setEpisodeStreams({ sub: cached.subStream, dub: cached.dubStream });
+        setIsCheckingAvailability(false);
+        setIsLoadingStream(false);
+
+        const chosenVersion = selectEpisodeAudioVersion({
+          subAvailable: cached.subAvailable,
+          dubAvailable: cached.dubAvailable,
+          userSelectedVersion: userSelectedVersionRef.current,
+        });
+
+        if (!chosenVersion) {
+          setStreamError(
+            `Neither Sub nor Dub is available for Episode ${episodeNumber} on ZokoAnime.`
+          );
+          return;
+        }
+
+        setActiveType(chosenVersion);
+        const chosenStream =
+          chosenVersion === 'dub' ? cached.dubStream : cached.subStream;
+        setStreamData(chosenStream);
+        return;
+      }
+
+      setIsCheckingAvailability(true);
+      setIsLoadingStream(true);
+
       try {
+        const prefParam = userSelectedVersionRef.current
+          ? `&preferredType=${userSelectedVersionRef.current}`
+          : '';
         const res = await fetch(
-          `/api/stream?anilistId=${idMapping!.anilistId}&episode=${episodeNumber}&type=${activeType}`
+          `/api/stream?anilistId=${anilistId}&episode=${episodeNumber}${prefParam}`,
+          { signal: controller.signal }
         );
         const data = await res.json();
 
-        if (!isMounted) return;
+        if (!isMounted || controller.signal.aborted) return;
 
-        if (data.ok && data.stream) {
-          setStreamData(data.stream);
-        } else {
-          const canSwitchOther =
-            (activeType === 'sub' && hasDub) || (activeType === 'dub' && hasSub);
+        const subAvailable = Boolean(data.subAvailable && data.subStream);
+        const dubAvailable = Boolean(data.dubAvailable && data.dubStream);
+        const subStream: AniScrollStreamResponse | null = data.subStream || null;
+        const dubStream: AniScrollStreamResponse | null = data.dubStream || null;
+
+        setEpisodeHasSub(subAvailable);
+        setEpisodeHasDub(dubAvailable);
+        setEpisodeStreams({ sub: subStream, dub: dubStream });
+        setIsCheckingAvailability(false);
+
+        if (subAvailable || dubAvailable) {
+          clientEpisodeStreamCache.set(cacheKey, {
+            subAvailable,
+            dubAvailable,
+            subStream,
+            dubStream,
+          });
+        }
+
+        const chosenVersion = selectEpisodeAudioVersion({
+          subAvailable,
+          dubAvailable,
+          userSelectedVersion: userSelectedVersionRef.current,
+        });
+
+        if (!chosenVersion) {
+          setStreamData(null);
           setStreamError(
             data.error ||
-              `Stream unavailable for Episode ${episodeNumber} (${activeType.toUpperCase()}).${
-                canSwitchOther
-                  ? ` Try switching to ${activeType === 'sub' ? 'DUB' : 'SUB'}.`
-                  : ''
-              }`
+              `Neither Sub nor Dub is currently available for Episode ${episodeNumber}.`
+          );
+          return;
+        }
+
+        setActiveType(chosenVersion);
+        const chosenStream =
+          chosenVersion === 'dub'
+            ? dubStream
+            : chosenVersion === 'sub'
+            ? subStream
+            : data.stream || null;
+
+        if (chosenStream) {
+          setStreamData(chosenStream);
+        } else {
+          setStreamError(
+            `Stream unavailable for Episode ${episodeNumber} (${chosenVersion.toUpperCase()}).`
           );
         }
       } catch (err: any) {
-        if (isMounted) {
-          setStreamError('Failed to connect to streaming servers. Please try again.');
-        }
+        if (!isMounted || err?.name === 'AbortError') return;
+        setIsCheckingAvailability(false);
+        setEpisodeHasSub(false);
+        setEpisodeHasDub(false);
+        setStreamError('Failed to connect to ZokoAnime streaming servers. Please try again.');
       } finally {
-        if (isMounted) {
+        if (isMounted && !controller.signal.aborted) {
           setIsLoadingStream(false);
         }
       }
     }
 
-    fetchStream();
+    loadEpisodeAvailabilityAndStream();
+
     return () => {
       isMounted = false;
+      controller.abort();
     };
-  }, [idMapping, episodeNumber, activeType, hasSub, hasDub]);
+  }, [idMapping?.anilistId, episodeNumber, retryCounter]);
+
+  // Manual user Sub/Dub switch handler
+  const handleManualChangeType = useCallback(
+    (newType: 'sub' | 'dub') => {
+      if (newType === 'sub' && !episodeHasSub) return;
+      if (newType === 'dub' && !episodeHasDub) return;
+
+      userSelectedVersionRef.current = newType;
+      setUserSelectedVersion(newType);
+      setStoredUserAudioVersion(newType);
+      setActiveType(newType);
+      setStreamError(null);
+
+      const targetStream =
+        newType === 'dub' ? episodeStreams.dub : episodeStreams.sub;
+      if (targetStream) {
+        setStreamData(targetStream);
+      }
+    },
+    [episodeHasSub, episodeHasDub, episodeStreams]
+  );
+
+  const resolvedAnilistId = idMapping?.anilistId;
+
+  const handleRetryStream = useCallback(() => {
+    if (resolvedAnilistId) {
+      clientEpisodeStreamCache.delete(`${resolvedAnilistId}:${episodeNumber}`);
+    }
+    setRetryCounter((prev) => prev + 1);
+  }, [resolvedAnilistId, episodeNumber]);
 
   const handleNavigateEpisode = (newEpisode: number) => {
     router.push(`/watch/${anime.shortId}/${newEpisode}`);
   };
+
+  // Episode-specific availability object for EpisodeSection
+  const episodeAvailabilityForSection = useMemo<EpisodeAvailabilityResult | null>(() => {
+    if (isCheckingAvailability) return null;
+    return createEpisodeAvailability({
+      subAvailable: episodeHasSub,
+      dubAvailable: episodeHasDub,
+      subEpisodeCount: episodeHasSub ? totalEpisodes : 0,
+      dubEpisodeCount: episodeHasDub ? totalEpisodes : 0,
+    });
+  }, [isCheckingAvailability, episodeHasSub, episodeHasDub, totalEpisodes]);
 
   return (
     <div className="space-y-6 pb-20">
@@ -357,16 +514,17 @@ export function WatchPageClient({
             episodeDurationSeconds={episodeDurationSeconds}
             initialResumeTime={initialResumeTime}
             totalEpisodes={totalEpisodes}
-            malId={idMapping?.malId}
+            malId={idMapping?.malId ?? streamData?.malId ?? anime.malId ?? null}
             streamData={streamData}
             isLoadingStream={isLoadingStream}
             streamError={streamError}
             activeType={activeType}
-            onChangeType={setActiveType}
+            onChangeType={handleManualChangeType}
             onNavigateEpisode={handleNavigateEpisode}
-            hasSub={hasSub}
-            hasDub={hasDub}
-            isLoadingAvailability={isLoadingAvailability}
+            onRetryStream={handleRetryStream}
+            hasSub={episodeHasSub}
+            hasDub={episodeHasDub}
+            isLoadingAvailability={isCheckingAvailability}
           />
         )}
 
@@ -377,8 +535,12 @@ export function WatchPageClient({
               <span className="font-semibold text-white uppercase tracking-wider">
                 Episode {episodeNumber}
               </span>
-              <span aria-hidden="true" className="text-[#707070]">·</span>
-              <span className="uppercase text-[11px] font-mono">{activeType}</span>
+              {(episodeHasSub || episodeHasDub) && (
+                <>
+                  <span aria-hidden="true" className="text-[#707070]">·</span>
+                  <span className="uppercase text-[11px] font-mono">{activeType}</span>
+                </>
+              )}
               {idMapping?.mappingStatus && (
                 <>
                   <span aria-hidden="true" className="text-[#707070]">·</span>
@@ -403,14 +565,14 @@ export function WatchPageClient({
             <button
               onClick={() => handleNavigateEpisode(episodeNumber - 1)}
               disabled={episodeNumber <= 1}
-              className="px-4 py-2 rounded-xl border border-[#292929] text-xs font-medium text-white hover:border-white disabled:opacity-30 disabled:pointer-events-none transition-colors"
+              className="px-4 py-2 rounded-xl border border-[#292929] text-xs font-medium text-white hover:border-white disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
             >
               Previous Episode
             </button>
             <button
               onClick={() => handleNavigateEpisode(episodeNumber + 1)}
               disabled={episodeNumber >= totalEpisodes}
-              className="px-4 py-2 rounded-xl bg-white text-black text-xs font-semibold hover:bg-neutral-200 disabled:opacity-30 disabled:pointer-events-none transition-colors"
+              className="px-4 py-2 rounded-xl bg-white text-black text-xs font-semibold hover:bg-neutral-200 disabled:opacity-30 disabled:pointer-events-none transition-colors cursor-pointer"
             >
               Next Episode
             </button>
@@ -426,8 +588,10 @@ export function WatchPageClient({
           currentEpisode={episodeNumber}
           totalEpisodes={totalEpisodes}
           activeType={activeType}
-          onChangeType={setActiveType}
+          onChangeType={handleManualChangeType}
           onEpisodesLoaded={handleEpisodesLoaded}
+          initialAvailability={episodeAvailabilityForSection}
+          deferAvailability={isResolvingId || isCheckingAvailability}
         />
       </div>
     </div>
