@@ -7,7 +7,14 @@ export async function GET(req: NextRequest) {
 
   try {
     const data = await getHoshikaHome(locale);
-    return NextResponse.json({ ok: true, ...data });
+    return NextResponse.json(
+      { ok: true, ...data },
+      {
+        headers: {
+          'Cache-Control': 'public, s-maxage=600, stale-while-revalidate=1200',
+        },
+      }
+    );
   } catch (err: any) {
     return NextResponse.json({ ok: false, error: 'Failed to fetch home feed' }, { status: 500 });
   }

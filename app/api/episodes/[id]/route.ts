@@ -105,7 +105,7 @@ export async function GET(
       (checkAvailability && !resolvedAnilistId)
     ) {
       try {
-        const idMap = await resolveAnimeIds(trimmedId);
+        const idMap = await resolveAnimeIds(trimmedId, anime);
         resolvedAnilistId = idMap?.anilistId ?? null;
         if (includeAnime && resolvedAnilistId && (!anime?.coverImage || !anime?.bannerImage)) {
           const media = await getAniListById(resolvedAnilistId);
@@ -123,6 +123,7 @@ export async function GET(
           hoshikaId: trimmedId,
           anilistId: resolvedAnilistId,
           episodeCount,
+          prefetchedAnime: anime,
         })
       : undefined;
 

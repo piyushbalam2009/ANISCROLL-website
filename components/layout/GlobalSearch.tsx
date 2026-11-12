@@ -6,6 +6,12 @@ import { Search, Loader2, X, ArrowRight, Film } from 'lucide-react';
 import Image from 'next/image';
 import { HoshikaAnimeItem } from '@/types/anime';
 
+// Client-side search cache (5 minute TTL) to prevent redundant requests on backspace/retype
+const clientSearchCache = new Map<
+  string,
+  { results: HoshikaAnimeItem[]; expiresAt: number }
+>();
+
 export function GlobalSearch() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -21,6 +27,7 @@ export function GlobalSearch() {
   const containerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   // Sync with URL query parameter
   useEffect(() => {
@@ -40,10 +47,13 @@ export function GlobalSearch() {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  // Debounced search logic (300ms)
+  // Debounced search logic (320ms) with client cache & AbortController
   useEffect(() => {
     const trimmed = query.trim();
     if (!trimmed) {
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+      }
       setResults([]);
       setIsLoading(false);
       setIsOpen(false);
@@ -51,35 +61,68 @@ export function GlobalSearch() {
       return;
     }
 
+    const cacheKey = trimmed.toLowerCase();
+    const cached = clientSearchCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) {
+      setResults(cached.results);
+      setIsLoading(false);
+      setIsOpen(true);
+      setSelectedIndex(-1);
+      setErrorMessage(null);
+      return;
+    }
+
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
+    }
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
     }
 
     setIsLoading(true);
     setErrorMessage(null);
 
     debounceTimerRef.current = setTimeout(async () => {
+      const controller = new AbortController();
+      abortControllerRef.current = controller;
+
       try {
-        const res = await fetch(`/api/search?q=${encodeURIComponent(trimmed)}&limit=7`);
+        const res = await fetch(
+          `/api/search?q=${encodeURIComponent(trimmed)}&limit=7`,
+          { signal: controller.signal }
+        );
         if (!res.ok) throw new Error('Search failed');
         const data = await res.json();
+        if (controller.signal.aborted) return;
+
         if (data.ok) {
-          setResults(data.results || []);
+          const items: HoshikaAnimeItem[] = data.results || [];
+          clientSearchCache.set(cacheKey, {
+            results: items,
+            expiresAt: Date.now() + 5 * 60 * 1000,
+          });
+          setResults(items);
           setIsOpen(true);
           setSelectedIndex(-1);
         } else {
           setErrorMessage(data.error || 'No results found');
         }
       } catch (err: any) {
+        if (err?.name === 'AbortError') return;
         setErrorMessage('Unable to reach search service');
       } finally {
-        setIsLoading(false);
+        if (!controller.signal.aborted) {
+          setIsLoading(false);
+        }
       }
-    }, 300);
+    }, 320);
 
     return () => {
       if (debounceTimerRef.current) {
         clearTimeout(debounceTimerRef.current);
+      }
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
       }
     };
   }, [query]);

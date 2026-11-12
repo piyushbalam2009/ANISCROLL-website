@@ -24,7 +24,14 @@ export async function GET(req: NextRequest) {
       minScore,
       page,
     });
-    return NextResponse.json({ ok: true, ...data });
+    return NextResponse.json(
+      { ok: true, ...data },
+      {
+        headers: {
+          'Cache-Control': 'public, s-maxage=600, stale-while-revalidate=1200',
+        },
+      }
+    );
   } catch (err: any) {
     console.error('[API /catalog] Error:', err?.message || err);
     return NextResponse.json(

@@ -7,8 +7,8 @@ interface CacheEntry<T> {
   version: number;
 }
 
-const DEFAULT_ARTWORK_TTL_MS = 5 * 60 * 1000; // 5 minutes for resolved artwork
-const DEFAULT_OVERRIDE_TTL_MS = 60 * 1000; // 60 seconds for Firestore override snapshots
+const DEFAULT_ARTWORK_TTL_MS = 45 * 60 * 1000; // 45 minutes for resolved artwork
+const DEFAULT_OVERRIDE_TTL_MS = 5 * 60 * 1000; // 5 minutes for Firestore override snapshots
 
 const resolvedArtworkCache = new Map<number, CacheEntry<AnimeArtworkResult>>();
 const firestoreOverrideCache = new Map<

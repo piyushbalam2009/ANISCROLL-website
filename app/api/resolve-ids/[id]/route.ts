@@ -29,11 +29,18 @@ export async function GET(
       );
     }
 
-    return NextResponse.json({
-      ok: true,
-      data: mapping,
-      ...mapping,
-    });
+    return NextResponse.json(
+      {
+        ok: true,
+        data: mapping,
+        ...mapping,
+      },
+      {
+        headers: {
+          'Cache-Control': 'public, s-maxage=3600, stale-while-revalidate=86400',
+        },
+      }
+    );
   } catch (error) {
     console.error('[API /resolve-ids] Error:', error);
     return NextResponse.json(

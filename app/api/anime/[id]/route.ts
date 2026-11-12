@@ -15,7 +15,14 @@ export async function GET(
     if (!anime) {
       return NextResponse.json({ ok: false, error: 'Anime not found' }, { status: 404 });
     }
-    return NextResponse.json({ ok: true, anime });
+    return NextResponse.json(
+      { ok: true, anime },
+      {
+        headers: {
+          'Cache-Control': 'public, s-maxage=1800, stale-while-revalidate=3600',
+        },
+      }
+    );
   } catch (err: any) {
     return NextResponse.json(
       { ok: false, error: 'Failed to retrieve anime details' },

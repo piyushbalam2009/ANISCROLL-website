@@ -1,7 +1,11 @@
 import { appCache } from './cache';
+import {
+  classifyUpstreamError,
+  recordUpstreamMetric,
+} from './perf-monitor';
 
 const ANILIST_GRAPHQL_URL = 'https://graphql.anilist.co';
-const ANILIST_TIMEOUT_MS = 8000;
+const ANILIST_TIMEOUT_MS = 6500;
 
 export interface AniListMedia {
   id: number;
@@ -44,8 +48,10 @@ const VALID_ANILIST_FORMATS = new Set([
 
 async function executeAniListGraphQL<T>(
   query: string,
-  variables: Record<string, unknown>
+  variables: Record<string, unknown>,
+  operationLabel: string = 'graphql'
 ): Promise<T | null> {
+  const startTime = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), ANILIST_TIMEOUT_MS);
 
@@ -60,30 +66,78 @@ async function executeAniListGraphQL<T>(
       signal: controller.signal,
     });
 
-    if (res.status === 429) {
-      console.warn('[AniList] Rate limit (429) encountered');
-      return null;
-    }
+    const durationMs = Date.now() - startTime;
 
     if (!res.ok) {
+      const err = classifyUpstreamError({
+        provider: 'anilist',
+        endpoint: operationLabel,
+        status: res.status,
+        durationMs,
+        retryAfterHeader: res.headers.get('Retry-After'),
+      });
+      recordUpstreamMetric({
+        provider: 'anilist',
+        endpoint: operationLabel,
+        durationMs,
+        status: res.status,
+        fromCache: false,
+        errorCode: err.code,
+      });
       return null;
     }
 
     const contentType = res.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
+      recordUpstreamMetric({
+        provider: 'anilist',
+        endpoint: operationLabel,
+        durationMs,
+        status: res.status,
+        fromCache: false,
+        errorCode: 'invalid_json',
+      });
       return null;
     }
 
     const json = await res.json();
     if (!json || typeof json !== 'object' || json.errors) {
+      recordUpstreamMetric({
+        provider: 'anilist',
+        endpoint: operationLabel,
+        durationMs,
+        status: res.status,
+        fromCache: false,
+        errorCode: 'bad_request',
+      });
       return null;
     }
 
+    recordUpstreamMetric({
+      provider: 'anilist',
+      endpoint: operationLabel,
+      durationMs,
+      status: res.status,
+      fromCache: false,
+    });
+
     return (json.data as T) ?? null;
   } catch (error) {
-    if ((error as Error)?.name !== 'AbortError') {
-      console.error('[AniList] GraphQL request error:', error);
-    }
+    const durationMs = Date.now() - startTime;
+    const err = classifyUpstreamError({
+      provider: 'anilist',
+      endpoint: operationLabel,
+      error,
+      durationMs,
+    });
+    recordUpstreamMetric({
+      provider: 'anilist',
+      endpoint: operationLabel,
+      durationMs,
+      status: null,
+      fromCache: false,
+      errorCode: err.code,
+    });
     return null;
   } finally {
     clearTimeout(timeout);
@@ -134,51 +188,80 @@ export async function searchAniList(
       ? format.toUpperCase()
       : undefined;
 
-  const cacheKey = `anilist:search:v2:${trimmedQuery.toLowerCase()}:${normalizedFormat || 'ALL'}:p${page}:${perPage}`;
-  const cached = appCache.get<AniListMedia[]>(cacheKey);
-  if (cached) return cached;
+  const cacheKey = `anilist:search:v2:${trimmedQuery.toLowerCase()}:${
+    normalizedFormat || 'ALL'
+  }:p${page}:${perPage}`;
 
-  const query = `
-    query ($search: String, $format: MediaFormat, $page: Int, $perPage: Int) {
-      Page(page: $page, perPage: $perPage) {
-        pageInfo {
-          hasNextPage
+  const preState = appCache.getEntryState<AniListMedia[]>(cacheKey);
+  if (preState.status !== 'miss' && preState.value) {
+    recordUpstreamMetric({
+      provider: 'anilist',
+      endpoint: `search:${trimmedQuery.toLowerCase()}`,
+      durationMs: 0,
+      status: 200,
+      fromCache: true,
+      staleRevalidated: preState.status === 'stale',
+    });
+  }
+
+  return appCache.getOrSet<AniListMedia[]>(
+    cacheKey,
+    async () => {
+      const query = `
+        query ($search: String, $format: MediaFormat, $page: Int, $perPage: Int) {
+          Page(page: $page, perPage: $perPage) {
+            pageInfo {
+              hasNextPage
+            }
+            media(search: $search, type: ANIME, format: $format, sort: [SEARCH_MATCH, POPULARITY_DESC]) {
+              ${MEDIA_FIELDS_FRAGMENT}
+            }
+          }
         }
-        media(search: $search, type: ANIME, format: $format, sort: [SEARCH_MATCH, POPULARITY_DESC]) {
-          ${MEDIA_FIELDS_FRAGMENT}
+      `;
+
+      const variables: Record<string, unknown> = {
+        search: trimmedQuery,
+        page,
+        perPage,
+      };
+      if (normalizedFormat) {
+        variables.format = normalizedFormat;
+      }
+
+      const data = await executeAniListGraphQL<{
+        Page?: {
+          pageInfo?: { hasNextPage?: boolean };
+          media?: AniListMedia[];
+        };
+      }>(query, variables, `search:${trimmedQuery.toLowerCase()}`);
+
+      const mediaList = Array.isArray(data?.Page?.media)
+        ? data!.Page!.media!
+        : [];
+
+      // Warm per-ID cache for every media item returned by search so subsequent getAniListById(id) calls cost 0ms
+      for (const item of mediaList) {
+        if (item && typeof item.id === 'number' && item.id > 0) {
+          appCache.set(`anilist:media:v2:${item.id}`, item, 24 * 3600);
         }
       }
+
+      return mediaList;
+    },
+    {
+      ttlSeconds: 12 * 3600,
+      staleWhileRevalidateSeconds: 24 * 3600,
+      shouldCache: (list) => Array.isArray(list) && list.length > 0,
+      negativeTtlSeconds: 120,
     }
-  `;
-
-  const variables: Record<string, unknown> = {
-    search: trimmedQuery,
-    page,
-    perPage,
-  };
-  if (normalizedFormat) {
-    variables.format = normalizedFormat;
-  }
-
-  const data = await executeAniListGraphQL<{
-    Page?: {
-      pageInfo?: { hasNextPage?: boolean };
-      media?: AniListMedia[];
-    };
-  }>(query, variables);
-
-  const mediaList = Array.isArray(data?.Page?.media) ? data!.Page!.media! : [];
-  if (mediaList.length > 0) {
-    // Store in memory cache for 12 hours (never in Firebase/Firestore)
-    appCache.set(cacheKey, mediaList, 12 * 3600);
-  }
-  return mediaList;
+  );
 }
 
 /**
- * Searches AniList with optional format filter, and automatically retries
- * without format restrictions if the format-filtered search returns few/no results.
- * Also supports fetching page 2 when needed and deduplicates by AniList ID.
+ * Searches AniList using a single unrestricted ANIME query first (returning top 25 candidates across all formats),
+ * and only issues a format-specific query if the unrestricted search did not include any candidate of the target format.
+ * This eliminates redundant back-to-back GraphQL requests while preserving full format fallback coverage.
  */
 export async function searchAniListWithFallback(
   searchQuery: string,
@@ -197,12 +280,24 @@ export async function searchAniListWithFallback(
     }
   };
 
+  // 1. Run unrestricted search first (1 request covers TV, ONA, OVA, MOVIE, SPECIAL)
+  const unfilteredResults = await searchAniList(trimmed, undefined, {
+    page: 1,
+    perPage: 25,
+  });
+  addAll(unfilteredResults);
+
   const normalizedFormat =
     format && VALID_ANILIST_FORMATS.has(format.toUpperCase())
       ? format.toUpperCase()
       : undefined;
 
-  if (normalizedFormat) {
+  // 2. Only run format-specific search if the unrestricted top-25 had 0 matches of normalizedFormat
+  if (
+    normalizedFormat &&
+    unfilteredResults.length >= 25 &&
+    !unfilteredResults.some((m) => m.format?.toUpperCase() === normalizedFormat)
+  ) {
     const filteredResults = await searchAniList(trimmed, normalizedFormat, {
       page: 1,
       perPage: 25,
@@ -210,48 +305,58 @@ export async function searchAniListWithFallback(
     addAll(filteredResults);
   }
 
-  // Always run an unrestricted ANIME search if format wasn't set OR if format-restricted
-  // search returned fewer than 5 candidates (since Hoshika TV vs AniList ONA/OVA often differ, e.g. Overgeared)
-  if (!normalizedFormat || byId.size < 5) {
-    const unfilteredResults = await searchAniList(trimmed, undefined, {
-      page: 1,
+  if (options?.fetchSecondPage && unfilteredResults.length >= 25) {
+    const page2 = await searchAniList(trimmed, undefined, {
+      page: 2,
       perPage: 25,
     });
-    addAll(unfilteredResults);
-
-    if (options?.fetchSecondPage && unfilteredResults.length >= 25) {
-      const page2 = await searchAniList(trimmed, undefined, {
-        page: 2,
-        perPage: 25,
-      });
-      addAll(page2);
-    }
+    addAll(page2);
   }
 
   return Array.from(byId.values());
 }
 
-export async function getAniListById(anilistId: number): Promise<AniListMedia | null> {
+export async function getAniListById(
+  anilistId: number
+): Promise<AniListMedia | null> {
   if (!Number.isFinite(anilistId) || anilistId <= 0) return null;
 
   const cacheKey = `anilist:media:v2:${anilistId}`;
-  const cached = appCache.get<AniListMedia>(cacheKey);
-  if (cached) return cached;
-
-  const query = `
-    query ($id: Int) {
-      Media(id: $id, type: ANIME) {
-        ${MEDIA_FIELDS_FRAGMENT}
-      }
-    }
-  `;
-
-  const data = await executeAniListGraphQL<{ Media?: AniListMedia }>(query, {
-    id: anilistId,
-  });
-  const media = data?.Media || null;
-  if (media) {
-    appCache.set(cacheKey, media, 24 * 3600);
+  const preState = appCache.getEntryState<AniListMedia>(cacheKey);
+  if (preState.status !== 'miss' && preState.value) {
+    recordUpstreamMetric({
+      provider: 'anilist',
+      endpoint: `media:${anilistId}`,
+      durationMs: 0,
+      status: 200,
+      fromCache: true,
+      staleRevalidated: preState.status === 'stale',
+    });
   }
-  return media;
+
+  return appCache.getOrSet<AniListMedia | null>(
+    cacheKey,
+    async () => {
+      const query = `
+        query ($id: Int) {
+          Media(id: $id, type: ANIME) {
+            ${MEDIA_FIELDS_FRAGMENT}
+          }
+        }
+      `;
+
+      const data = await executeAniListGraphQL<{ Media?: AniListMedia }>(
+        query,
+        { id: anilistId },
+        `media:${anilistId}`
+      );
+      return data?.Media || null;
+    },
+    {
+      ttlSeconds: 24 * 3600,
+      staleWhileRevalidateSeconds: 48 * 3600,
+      shouldCache: (media) => media !== null && media !== undefined,
+      negativeTtlSeconds: 180,
+    }
+  );
 }

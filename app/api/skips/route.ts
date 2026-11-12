@@ -60,7 +60,16 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ ok: true, ...data });
+    return NextResponse.json(
+      { ok: true, ...data },
+      {
+        headers: {
+          'Cache-Control': data.found
+            ? 'public, s-maxage=86400, stale-while-revalidate=172800'
+            : 'public, s-maxage=120, stale-while-revalidate=300',
+        },
+      }
+    );
   } catch (err: any) {
     return NextResponse.json(
       { ok: false, found: false, results: [], error: 'Failed to fetch skip times' },

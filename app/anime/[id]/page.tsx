@@ -1,9 +1,9 @@
 import React from 'react';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { getHoshikaAnime, getAllHoshikaEpisodes } from '@/lib/hoshika';
+import { getHoshikaAnime, getHoshikaEpisodes } from '@/lib/hoshika';
 import { resolveAnimeArtwork } from '@/lib/artwork-mapper';
-import { resolveServerAudioAvailability } from '@/lib/aniscroll';
+import { getCachedOrWarmServerAudioAvailability } from '@/lib/aniscroll';
 import { AnimeDetailsHero } from '@/components/anime/AnimeDetailsHero';
 import { EpisodeSection } from '@/components/episodes/EpisodeSection';
 import { CharacterList } from '@/components/anime/CharacterList';
@@ -13,28 +13,34 @@ interface AnimePageProps {
   params: Promise<{ id: string }>;
 }
 
-export const revalidate = 300;
+export const revalidate = 600;
 
 export default async function AnimePage({ params }: AnimePageProps) {
   const { id } = await params;
   const [anime, episodeData] = await Promise.all([
     getHoshikaAnime(id, 'en'),
-    getAllHoshikaEpisodes(id, 'en'),
+    getHoshikaEpisodes(id, 'en', undefined, 50),
   ]);
 
   if (!anime) {
     notFound();
   }
 
-  const artwork = await resolveAnimeArtwork(anime.shortId || id, anime);
+  const totalEpisodeCount =
+    episodeData.total || anime.episodes || episodeData.items.length || 0;
+
+  // Kick off ZokoAnime Sub/Dub availability check immediately (returns synchronously if warm, or warms in background)
   const initialAvailability =
-    episodeData.items.length > 0
-      ? await resolveServerAudioAvailability({
+    episodeData.items.length > 0 || totalEpisodeCount > 0
+      ? getCachedOrWarmServerAudioAvailability({
           hoshikaId: anime.shortId || id,
           anilistId: anime.anilistId ?? null,
-          episodeCount: episodeData.total || episodeData.items.length || anime.episodes || 0,
+          episodeCount: totalEpisodeCount,
+          prefetchedAnime: anime,
         })
       : null;
+
+  const artwork = await resolveAnimeArtwork(anime.shortId || id, anime);
 
   const title =
     anime.titleEnglish ||

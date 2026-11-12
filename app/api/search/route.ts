@@ -15,7 +15,14 @@ export async function GET(req: NextRequest) {
 
   try {
     const results = await searchHoshika(q, limit, format, year);
-    return NextResponse.json({ ok: true, results });
+    return NextResponse.json(
+      { ok: true, results },
+      {
+        headers: {
+          'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600',
+        },
+      }
+    );
   } catch (err: any) {
     return NextResponse.json(
       { ok: false, error: 'Failed to search anime', results: [] },

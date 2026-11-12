@@ -576,105 +576,148 @@ export interface ResolveArtworkParams {
  * 3. Verified Automatic Fanart.tv English HDTVLogo -> ClearLogo -> Japanese HDTVLogo -> ClearLogo
  * 4. Hoshika title typography fallback (never uses AniZip for logos)
  */
+const inFlightArtworkMap = new Map<number, Promise<AnimeArtworkResult>>();
+
 export async function resolveAnimeArtwork(
   input: string | number | ResolveArtworkParams,
   animeItem?: HoshikaAnimeItem | null
 ): Promise<AnimeArtworkResult> {
-  let resolvedItem = animeItem;
-  if ((typeof input === 'number' || typeof input === 'string') && !resolvedItem) {
-    const numericId = Number(input);
-    if (Number.isFinite(numericId) && numericId > 0 && numericId !== 99999) {
-      resolvedItem = await getHoshikaAnime(numericId, 'en');
-    }
-  }
-
-  const params: ResolveArtworkParams =
+  const initialHoshikaId =
     typeof input === 'number' || typeof input === 'string'
-      ? {
-          hoshikaId: Number(input),
-          anilistId: resolvedItem?.anilistId || null,
-          malId: resolvedItem?.malId || null,
-          tvdbId: parseNumericId(resolvedItem?.thetvdbId),
-          tmdbId: parseNumericId(resolvedItem?.themoviedbId),
-          title: resolvedItem?.titleEnglish || resolvedItem?.titleRomaji || null,
-          titleRomaji: resolvedItem?.titleRomaji || null,
-          format: resolvedItem?.format || null,
-          hoshikaBanner: resolvedItem?.bannerImage || null,
-          hoshikaCover: resolvedItem?.coverImage || null,
-        }
-      : input;
+      ? Number(input)
+      : input.hoshikaId;
+  const bypassCacheFlag =
+    typeof input === 'object' && input !== null ? Boolean(input.bypassCache) : false;
 
-  const {
-    hoshikaId,
-    anilistId: initialAnilistId,
-    malId,
-    tvdbId: initialTvdbId,
-    tmdbId: initialTmdbId,
-    title,
-    titleRomaji,
-    format,
-    hoshikaBanner: rawHoshikaBanner,
-    hoshikaCover: rawHoshikaCover,
-    preferEnglish = true,
-    bypassCache = false,
-  } = params;
-
-  const hoshikaBanner = rawHoshikaBanner || resolvedItem?.bannerImage || null;
-  const hoshikaCover = rawHoshikaCover || resolvedItem?.coverImage || null;
-
-  if (!bypassCache) {
-    const cached = getCachedArtwork(hoshikaId);
+  if (!bypassCacheFlag && Number.isFinite(initialHoshikaId) && initialHoshikaId > 0) {
+    const cached = getCachedArtwork(initialHoshikaId);
     if (cached && cached.backgroundUrl) {
       return cached;
     }
-  }
 
-  let firestoreOverride = bypassCache
-    ? undefined
-    : getCachedArtworkOverride(hoshikaId);
-
-  if (firestoreOverride === undefined && hoshikaId !== 99999) {
-    firestoreOverride = await fetchPublicArtworkOverrideRest(hoshikaId);
-    if (firestoreOverride !== undefined) {
-      setCachedArtworkOverride(hoshikaId, firestoreOverride);
+    const existingInFlight = inFlightArtworkMap.get(initialHoshikaId);
+    if (existingInFlight) {
+      return existingInFlight;
     }
   }
 
-  let anilistId = initialAnilistId || null;
-  const canonicalTvdbId =
-    HOSHIKA_TO_TVDB_MAP[hoshikaId] ||
-    (anilistId ? HOSHIKA_TO_TVDB_MAP[anilistId] : null) ||
-    matchTitleToTvdbId(title) ||
-    matchTitleToTvdbId(titleRomaji) ||
-    null;
-
-  let tvdbId: number | null =
-    canonicalTvdbId ||
-    initialTvdbId ||
-    firestoreOverride?.tvdbId ||
-    null;
-
-  let tmdbId: number | null = firestoreOverride?.tmdbId || initialTmdbId || null;
-  let anilistBanner: string | null = null;
-
-  // Step 1: Resolve AniList ID via multi-title resolver so we always have accurate AniList ID and landscape banner fallback
-  if (!anilistId && hoshikaId !== 99999) {
-    try {
-      const idRes = await resolveAnimeIds(hoshikaId, resolvedItem);
-      if (idRes?.aniListId) {
-        anilistId = idRes.aniListId;
-        if (HOSHIKA_TO_TVDB_MAP[anilistId]) {
-          tvdbId = HOSHIKA_TO_TVDB_MAP[anilistId];
-        }
+  const workPromise = (async (): Promise<AnimeArtworkResult> => {
+    let resolvedItem = animeItem;
+    if ((typeof input === 'number' || typeof input === 'string') && !resolvedItem) {
+      const numericId = Number(input);
+      if (Number.isFinite(numericId) && numericId > 0 && numericId !== 99999) {
+        resolvedItem = await getHoshikaAnime(numericId, 'en');
       }
-    } catch {
-      // Non-fatal fallback to resolveAnilistMetadata
     }
-  }
 
-  // Step 2: Query AniList metadata for bannerImage fallback (and anilistId if still missing)
-  if (hoshikaId !== 99999 && (anilistId || malId || title)) {
-    const anilistMeta = await resolveAnilistMetadata({ anilistId, malId, title });
+    const params: ResolveArtworkParams =
+      typeof input === 'number' || typeof input === 'string'
+        ? {
+            hoshikaId: Number(input),
+            anilistId: resolvedItem?.anilistId || null,
+            malId: resolvedItem?.malId || null,
+            tvdbId: parseNumericId(resolvedItem?.thetvdbId),
+            tmdbId: parseNumericId(resolvedItem?.themoviedbId),
+            title: resolvedItem?.titleEnglish || resolvedItem?.titleRomaji || null,
+            titleRomaji: resolvedItem?.titleRomaji || null,
+            format: resolvedItem?.format || null,
+            hoshikaBanner: resolvedItem?.bannerImage || null,
+            hoshikaCover: resolvedItem?.coverImage || null,
+          }
+        : input;
+
+    const {
+      hoshikaId,
+      anilistId: initialAnilistId,
+      malId,
+      tvdbId: initialTvdbId,
+      tmdbId: initialTmdbId,
+      title,
+      titleRomaji,
+      format,
+      hoshikaBanner: rawHoshikaBanner,
+      hoshikaCover: rawHoshikaCover,
+      preferEnglish = true,
+      bypassCache = false,
+    } = params;
+
+    const hoshikaBanner = rawHoshikaBanner || resolvedItem?.bannerImage || null;
+    const hoshikaCover = rawHoshikaCover || resolvedItem?.coverImage || null;
+
+    if (!bypassCache) {
+      const cached = getCachedArtwork(hoshikaId);
+      if (cached && cached.backgroundUrl) {
+        return cached;
+      }
+    }
+
+    let firestoreOverride = bypassCache
+      ? undefined
+      : getCachedArtworkOverride(hoshikaId);
+
+    const overridePromise =
+      firestoreOverride === undefined && hoshikaId !== 99999
+        ? fetchPublicArtworkOverrideRest(hoshikaId).then((doc) => {
+            if (doc !== undefined) {
+              setCachedArtworkOverride(hoshikaId, doc);
+            }
+            return doc;
+          })
+        : Promise.resolve(firestoreOverride);
+
+    let anilistId = initialAnilistId || null;
+    const canonicalTvdbId =
+      HOSHIKA_TO_TVDB_MAP[hoshikaId] ||
+      (anilistId ? HOSHIKA_TO_TVDB_MAP[anilistId] : null) ||
+      matchTitleToTvdbId(title) ||
+      matchTitleToTvdbId(titleRomaji) ||
+      null;
+
+    // Run Firestore override lookup and initial AniList ID resolution in parallel if needed
+    const [resolvedOverride, idRes] = await Promise.all([
+      overridePromise,
+      !anilistId && hoshikaId !== 99999
+        ? resolveAnimeIds(hoshikaId, resolvedItem).catch(() => null)
+        : Promise.resolve(null),
+    ]);
+
+    firestoreOverride = resolvedOverride;
+
+    if (!anilistId && idRes?.aniListId) {
+      anilistId = idRes.aniListId;
+    }
+
+    let tvdbId: number | null =
+      canonicalTvdbId ||
+      (anilistId ? HOSHIKA_TO_TVDB_MAP[anilistId] : null) ||
+      initialTvdbId ||
+      firestoreOverride?.tvdbId ||
+      null;
+
+    let tmdbId: number | null = firestoreOverride?.tmdbId || initialTmdbId || null;
+    let anilistBanner: string | null = null;
+
+    // Run AniList banner fallback query (only if hoshikaBanner is missing or anilistId is still missing)
+    // and ani.zip external ID mapping (only if tvdbId/tmdbId is still missing) IN PARALLEL!
+    const needsAnilistBannerOrId =
+      hoshikaId !== 99999 &&
+      (!hoshikaBanner || !anilistId) &&
+      Boolean(anilistId || malId || title);
+
+    const needsExternalIds =
+      (!tvdbId || (!tmdbId && format === 'MOVIE')) &&
+      Boolean(anilistId) &&
+      hoshikaId !== 99999;
+
+    const [anilistMeta, externalIdsResult] = await Promise.all([
+      needsAnilistBannerOrId
+        ? resolveAnilistMetadata({ anilistId, malId, title })
+        : Promise.resolve({ anilistId, bannerImage: null }),
+      needsExternalIds && anilistId
+        ? resolveExternalIdsFromAnilist(anilistId)
+        : Promise.resolve({ tvdbId, tmdbId, malId: malId || null }),
+    ]);
+
     if (!anilistId && anilistMeta.anilistId) {
       anilistId = anilistMeta.anilistId;
       if (HOSHIKA_TO_TVDB_MAP[anilistId]) {
@@ -682,76 +725,82 @@ export async function resolveAnimeArtwork(
       }
     }
     anilistBanner = anilistMeta.bannerImage;
-  }
 
-  // Step 3: Resolve TVDB / TMDB IDs via ani.zip if we have an AniList ID
-  let externalIds = { tvdbId, tmdbId, malId: malId || null };
-  if ((!tvdbId || !tmdbId) && anilistId && hoshikaId !== 99999) {
-    externalIds = await resolveExternalIdsFromAnilist(anilistId);
+    let externalIds = externalIdsResult;
+    // If anilistId was just discovered via anilistMeta and we still need tvdbId/tmdbId, resolve external IDs
+    if (!needsExternalIds && (!tvdbId || (!tmdbId && format === 'MOVIE')) && anilistId && hoshikaId !== 99999) {
+      externalIds = await resolveExternalIdsFromAnilist(anilistId);
+    }
+
     tvdbId = canonicalTvdbId || externalIds.tvdbId || tvdbId || null;
     tmdbId = tmdbId || externalIds.tmdbId || null;
-  }
 
-  let backgroundUrl: string | null = null;
-  let backgroundSource: AnimeArtworkResult['backgroundSource'] = 'none';
-  let posterUrl: string | null = hoshikaCover || null;
-  let source: AnimeArtworkResult['source'] = 'hoshika';
+    let backgroundUrl: string | null = null;
+    let backgroundSource: AnimeArtworkResult['backgroundSource'] = 'none';
+    let posterUrl: string | null = hoshikaCover || null;
+    let source: AnimeArtworkResult['source'] = 'hoshika';
 
-  const isMovie = format === 'MOVIE' && !tvdbId && Boolean(tmdbId);
-  let fanartAvailableLogos: FanartLogoItem[] = [];
-  const verifiedFanartBackdrops: string[] = [];
+    const isMovie = format === 'MOVIE' && !tvdbId && Boolean(tmdbId);
+    let fanartAvailableLogos: FanartLogoItem[] = [];
+    const verifiedFanartBackdrops: string[] = [];
 
-  // Step 4: Fetch Fanart.tv artwork (Movies via TMDB ID or TV via TVDB ID)
-  const fanartData =
-    isMovie && tmdbId
-      ? await fetchFanartArtwork(tmdbId, 'movies')
-      : tvdbId
-      ? await fetchFanartArtwork(tvdbId, 'tv')
-      : null;
+    // Step 4: Fetch Fanart.tv artwork (Movies via TMDB ID or TV via TVDB ID)
+    const fanartData =
+      isMovie && tmdbId
+        ? await fetchFanartArtwork(tmdbId, 'movies')
+        : tvdbId
+        ? await fetchFanartArtwork(tvdbId, 'tv')
+        : null;
 
-  if (fanartData) {
-    fanartAvailableLogos = extractAllFanartLogos(
-      fanartData,
-      toSafeArtworkUrl,
-      preferEnglish
-    );
+    if (fanartData) {
+      fanartAvailableLogos = extractAllFanartLogos(
+        fanartData,
+        toSafeArtworkUrl,
+        preferEnglish
+      );
 
-    const rawBackdrops = extractAllFanartBackdrops(
-      fanartData,
-      undefined,
-      preferEnglish ? 'en' : 'ja'
-    );
+      const rawBackdrops = extractAllFanartBackdrops(
+        fanartData,
+        undefined,
+        preferEnglish ? 'en' : 'ja'
+      );
 
-    // Probe top Fanart.tv backdrop candidates (max 3) so dead 404 URLs are never chosen over live Hoshika/AniList banners
-    for (const rawBgUrl of rawBackdrops.slice(0, 3)) {
-      if (!isValidBackdropCandidateUrl(rawBgUrl, hoshikaId)) continue;
-      const isReachable =
-        hoshikaId === 99999 ? true : await verifyUpstreamArtworkUrl(rawBgUrl);
-      if (isReachable) {
-        const safeBg = toSafeArtworkUrl(rawBgUrl);
+      // Probe top Fanart.tv backdrop candidates (max 3) IN PARALLEL so dead 404 URLs are never chosen over live Hoshika/AniList banners
+      const validBackdropCandidates = rawBackdrops
+        .slice(0, 3)
+        .filter((rawBgUrl) => isValidBackdropCandidateUrl(rawBgUrl, hoshikaId));
+
+      const reachabilityResults = await Promise.all(
+        validBackdropCandidates.map(async (rawBgUrl) => {
+          const isReachable =
+            hoshikaId === 99999 ? true : await verifyUpstreamArtworkUrl(rawBgUrl);
+          return isReachable ? toSafeArtworkUrl(rawBgUrl) : null;
+        })
+      );
+
+      for (const safeBg of reachabilityResults) {
         if (safeBg) {
           verifiedFanartBackdrops.push(safeBg);
         }
       }
-    }
 
-    if (verifiedFanartBackdrops.length > 0) {
-      backgroundUrl = verifiedFanartBackdrops[0];
-      backgroundSource = 'fanart';
-      source = 'fanart';
-    }
+      if (verifiedFanartBackdrops.length > 0) {
+        backgroundUrl = verifiedFanartBackdrops[0];
+        backgroundSource = 'fanart';
+        source = 'fanart';
+      }
 
-    const poster = isMovie
-      ? pickBestFanartImage(fanartData.movieposter, 'en')
-      : pickBestFanartImage(fanartData.tvposter, 'en');
-    if (poster?.url && !posterUrl && !isDeadLegacyFanartUrl(poster.url, hoshikaId)) {
-      const isPosterReachable =
-        hoshikaId === 99999 ? true : await verifyUpstreamArtworkUrl(poster.url);
-      if (isPosterReachable) {
-        posterUrl = toSafeArtworkUrl(poster.url);
+      const poster = isMovie
+        ? pickBestFanartImage(fanartData.movieposter, 'en')
+        : pickBestFanartImage(fanartData.tvposter, 'en');
+      if (poster?.url && !posterUrl && !isDeadLegacyFanartUrl(poster.url, hoshikaId)) {
+        const isPosterReachable =
+          hoshikaId === 99999 ? true : await verifyUpstreamArtworkUrl(poster.url);
+        if (isPosterReachable) {
+          posterUrl = toSafeArtworkUrl(poster.url);
+        }
       }
     }
-  }
 
   // Merge Fanart.tv available logos with stored Firestore availableLogos, filtering out dead /fanart/tv/ URLs
   const storedLogos: FanartLogoItem[] = (
@@ -966,10 +1015,20 @@ export async function resolveAnimeArtwork(
     diagnostics,
   };
 
-  if (backgroundUrl) {
-    setCachedArtwork(hoshikaId, finalResult);
+    if (backgroundUrl) {
+      setCachedArtwork(hoshikaId, finalResult);
+    }
+    return finalResult;
+  })();
+
+  if (!bypassCacheFlag && Number.isFinite(initialHoshikaId) && initialHoshikaId > 0) {
+    inFlightArtworkMap.set(initialHoshikaId, workPromise);
+    workPromise.finally(() => {
+      inFlightArtworkMap.delete(initialHoshikaId);
+    });
   }
-  return finalResult;
+
+  return workPromise;
 }
 
 function parseRestValue(valObj: Record<string, any>): any {
