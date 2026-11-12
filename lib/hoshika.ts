@@ -279,36 +279,124 @@ export async function getHoshikaBrowse(sort: 'trending' | 'recent' | 'top' = 'tr
 
 export async function getHoshikaCatalog(params: {
   q?: string;
-  genre?: string;
+  genre?: string | string[];
   format?: string;
   status?: string;
-  year?: string;
+  year?: string | number;
   sort?: string;
-  page?: number;
-}) {
-  const searchParams = new URLSearchParams({ type: 'anime' });
-  if (params.q) searchParams.append('q', params.q);
-  if (params.genre) searchParams.append('genre', params.genre);
-  if (params.format) searchParams.append('format', params.format);
-  if (params.status) searchParams.append('status', params.status);
-  if (params.year) searchParams.append('year', params.year);
-  if (params.sort) searchParams.append('sort', params.sort);
-  if (params.page) searchParams.append('page', String(params.page));
+  minScore?: number | string;
+  page?: number | string;
+}): Promise<{
+  items: HoshikaAnimeItem[];
+  total: number;
+  page: number;
+  pages: number;
+  hasMore: boolean;
+}> {
+  const {
+    normalizeCatalogQuery,
+    buildCatalogCacheKey,
+    deduplicateAnimeList,
+    processCatalogItems,
+  } = await import('./explore-catalog');
 
-  const data = await fetchFromHoshika<{
-    ok: boolean;
-    items?: HoshikaAnimeItem[];
-    total?: number;
-    page?: number;
-    pages?: number;
-  }>(`/catalog?${searchParams.toString()}`, 300);
+  const normalized = normalizeCatalogQuery(params);
+  const cacheKey = buildCatalogCacheKey(normalized);
+  const cached = appCache.get<{
+    items: HoshikaAnimeItem[];
+    total: number;
+    page: number;
+    pages: number;
+    hasMore: boolean;
+  }>(cacheKey);
 
-  return {
-    items: data?.items || [],
-    total: data?.total ?? (data?.items?.length || 0),
-    page: data?.page ?? 1,
-    pages: data?.pages ?? 1,
+  if (cached) {
+    return cached;
+  }
+
+  const buildUpstreamQuery = (pageNum: number) => {
+    const searchParams = new URLSearchParams({ type: 'anime' });
+    if (normalized.q) searchParams.append('q', normalized.q);
+    if (normalized.genre) searchParams.append('genre', normalized.genre);
+    if (normalized.format) searchParams.append('format', normalized.format);
+    if (normalized.status) searchParams.append('status', normalized.status);
+    if (normalized.year) searchParams.append('year', normalized.year);
+    searchParams.append('sort', normalized.upstreamSort);
+    if (pageNum > 1) searchParams.append('page', String(pageNum));
+    return `/catalog?${searchParams.toString()}`;
   };
+
+  const fetchSinglePage = async (pageNum: number) => {
+    return fetchFromHoshika<{
+      ok: boolean;
+      items?: HoshikaAnimeItem[];
+      total?: number;
+      page?: number;
+      pages?: number;
+      hasMore?: boolean;
+    }>(buildUpstreamQuery(pageNum), 300);
+  };
+
+  // Fetch requested page
+  const data = await fetchSinglePage(normalized.page);
+
+  if (!data) {
+    throw new Error('Failed to fetch catalogue from upstream Hoshika API');
+  }
+
+  let rawItems = Array.isArray(data.items) ? data.items : [];
+  const total = typeof data.total === 'number' ? data.total : rawItems.length;
+  const currentPage = typeof data.page === 'number' ? data.page : normalized.page;
+  const pageSize = 24;
+  const computedPages = Math.max(1, Math.ceil(total / pageSize));
+  let hasMore =
+    typeof data.hasMore === 'boolean'
+      ? data.hasMore
+      : currentPage < computedPages && rawItems.length >= pageSize;
+
+  let filteredItems = processCatalogItems(rawItems, {
+    requestedSort: normalized.requestedSort,
+    minScore: normalized.minScore,
+  });
+
+  // If client-side filter (like minScore) reduced the page below 12 items while upstream has more pages,
+  // fetch up to 2 supplemental pages with controlled pagination so results are not starved.
+  let scannedPage = currentPage;
+  let extraFetches = 0;
+  while (
+    normalized.minScore &&
+    filteredItems.length < 12 &&
+    hasMore &&
+    extraFetches < 2
+  ) {
+    extraFetches++;
+    scannedPage++;
+    const nextData = await fetchSinglePage(scannedPage);
+    if (!nextData || !Array.isArray(nextData.items) || nextData.items.length === 0) {
+      hasMore = false;
+      break;
+    }
+    const nextFiltered = processCatalogItems(nextData.items, {
+      requestedSort: normalized.requestedSort,
+      minScore: normalized.minScore,
+    });
+    filteredItems = deduplicateAnimeList(filteredItems, nextFiltered);
+    hasMore =
+      typeof nextData.hasMore === 'boolean'
+        ? nextData.hasMore
+        : scannedPage < computedPages;
+  }
+
+  const result = {
+    items: filteredItems,
+    total,
+    page: scannedPage,
+    pages: computedPages,
+    hasMore,
+  };
+
+  appCache.set(cacheKey, result, 300);
+  return result;
 }
 
 export async function getHoshikaSchedule(locale: string = 'en'): Promise<ScheduleItem[]> {
@@ -326,23 +414,53 @@ export async function getHoshikaGenres(): Promise<string[]> {
     genres?: string[];
   }>('/genres', 86400);
 
-  return (
-    data?.genres || [
-      'Action',
-      'Adventure',
-      'Award Winning',
-      'Comedy',
-      'Drama',
-      'Fantasy',
-      'Horror',
-      'Mystery',
-      'Romance',
-      'Sci-Fi',
-      'Slice of Life',
-      'Sports',
-      'Supernatural',
-      'Suspense',
-    ]
+  const baseGenres = data?.genres || [
+    'Action',
+    'Adventure',
+    'Avant Garde',
+    'Award Winning',
+    'Boys Love',
+    'Comedy',
+    'Drama',
+    'Ecchi',
+    'Fantasy',
+    'Girls Love',
+    'Gourmet',
+    'Horror',
+    'Mystery',
+    'Romance',
+    'Sci-Fi',
+    'Slice of Life',
+    'Sports',
+    'Supernatural',
+    'Suspense',
+    'Thriller',
+  ];
+
+  // Include popular Hoshika-supported catalogue themes/demographics so users can filter by Isekai, Mecha, Psychological, etc.
+  const extraSupportedThemes = [
+    'Isekai',
+    'Mecha',
+    'Psychological',
+    'Historical',
+    'Military',
+    'Music',
+    'School',
+    'Shounen',
+    'Seinen',
+    'Shoujo',
+    'Josei',
+    'Mahou Shoujo',
+    'Martial Arts',
+    'Parody',
+    'Space',
+    'Time Travel',
+    'Vampire',
+    'Reincarnation',
+  ];
+
+  return Array.from(new Set([...baseGenres, ...extraSupportedThemes])).sort((a, b) =>
+    a.localeCompare(b)
   );
 }
 
