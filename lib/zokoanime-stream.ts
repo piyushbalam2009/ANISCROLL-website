@@ -1,5 +1,7 @@
 import {
   AniScrollStreamResponse,
+  HlsManifestQualityLevel,
+  StreamingProvider,
   SubtitlePreference,
   SubtitleTrack,
   ZokoAnimeQuality,
@@ -229,13 +231,16 @@ export function resolveSubtitleTrackForPreference(
     const exactUrlMatch = tracks.find((t) => t.url === preference);
     if (exactUrlMatch) return exactUrlMatch.url;
 
-    // 2. Match by label or language across episodes
+    // 2. Match by label or language across episodes (including 'en' <-> 'English')
     const normalizedPref = preference.trim().toLowerCase();
-    const labelMatch = tracks.find(
-      (t) =>
-        (t.label && t.label.trim().toLowerCase() === normalizedPref) ||
-        t.lang.trim().toLowerCase() === normalizedPref
-    );
+    const labelMatch = tracks.find((t) => {
+      const lbl = t.label ? t.label.trim().toLowerCase() : '';
+      const lng = t.lang.trim().toLowerCase();
+      if (lbl === normalizedPref || lng === normalizedPref) return true;
+      if (normalizedPref === 'en' && (lbl === 'english' || lng === 'english')) return true;
+      if (normalizedPref === 'english' && (lbl === 'en' || lng === 'en')) return true;
+      return false;
+    });
     if (labelMatch) return labelMatch.url;
   }
 
@@ -245,7 +250,8 @@ export function resolveSubtitleTrackForPreference(
     tracks.find(
       (t) =>
         (t.label && t.label.toLowerCase().includes('english') && !t.label.toLowerCase().includes('forced')) ||
-        t.lang.toLowerCase() === 'en'
+        t.lang.toLowerCase() === 'en' ||
+        t.lang.toLowerCase() === 'english'
     ) ||
     tracks[0];
 
@@ -253,12 +259,17 @@ export function resolveSubtitleTrackForPreference(
 }
 
 /**
- * Validates a raw AniScroll ZokoAnime API response.
- * Returns a normalized `AniScrollStreamResponse` if and only if the response is valid,
- * matches the requested episode/version, and has at least one usable playable source.
+ * Validates and normalizes a raw AniScroll streaming provider response
+ * (`megaplay` for anime series, `zokoanime` for anime movies).
+ *
+ * MegaPlay returns a single master HLS proxy URL (`hlsProxyUrl`) with `qualities` absent/empty
+ * and `server` / `availableServers` fields.
+ * ZokoAnime returns `qualities[]` and/or `hlsProxyUrl` and `serverName`.
+ * Both ignore upstream `intro`/`outro` skip markers so AniSkip remains independent.
  */
-export function validateZokoAnimeResponse(
+export function validateProviderStreamResponse(
   raw: unknown,
+  provider: StreamingProvider,
   expectedAnilistId?: number,
   expectedEpisode?: number,
   expectedType?: 'sub' | 'dub'
@@ -312,9 +323,9 @@ export function validateZokoAnimeResponse(
       ? 'embed'
       : 'hls';
 
-  // Check playability:
-  // - If iframeOnly or embed mode: requires a valid embedUrl
-  // - For HLS playback: requires at least one usable HLS source in qualities[] or top-level hlsProxyUrl
+  // Playability validation:
+  // - Embed mode requires embedUrl (or usable HLS fallback)
+  // - HLS mode requires either qualities[] (ZokoAnime) or top-level master hlsProxyUrl (MegaPlay / ZokoAnime fallback)
   const hasUsableHls = qualities.length > 0 || Boolean(topLevelHlsProxyUrl);
   if (iframeOnly || playbackMode === 'embed') {
     if (!embedUrl && !hasUsableHls) return null;
@@ -325,8 +336,22 @@ export function validateZokoAnimeResponse(
   const selectedInitialQuality = selectInitialQuality(qualities);
   const primaryHlsUrl = selectedInitialQuality?.hlsProxyUrl || topLevelHlsProxyUrl;
 
+  const defaultServerLabel = provider === 'megaplay' ? 'MegaPlay Direct' : 'ZokoAnime';
+  const resolvedServerName =
+    typeof obj.serverName === 'string' && obj.serverName.trim()
+      ? obj.serverName.trim()
+      : typeof obj.server === 'string' && obj.server.trim()
+      ? obj.server.trim()
+      : defaultServerLabel;
+
+  const resolvedAvailableServers =
+    Array.isArray(obj.availableServers) && obj.availableServers.length > 0
+      ? obj.availableServers.filter((s): s is string => typeof s === 'string' && s.trim() !== '')
+      : [resolvedServerName];
+
   return {
-    source: typeof obj.source === 'string' ? obj.source : 'zokoanime',
+    source: typeof obj.source === 'string' && obj.source.trim() ? obj.source.trim() : provider,
+    provider,
     anilistId,
     malId:
       typeof obj.malId === 'number' && Number.isFinite(obj.malId) ? obj.malId : null,
@@ -342,15 +367,140 @@ export function validateZokoAnimeResponse(
       typeof obj.videoId === 'number' || typeof obj.videoId === 'string'
         ? obj.videoId
         : undefined,
-    // Preserve raw skip only for typing completeness; AniSkip is used exclusively for intro/outro skipping
+    // Always null so AniSkip stays independent of upstream streaming providers
     skip: null,
     playbackMode,
-    serverName: typeof obj.serverName === 'string' ? obj.serverName : 'ZokoAnime',
-    server: typeof obj.serverName === 'string' ? obj.serverName : 'ZokoAnime',
-    availableServers: ['ZokoAnime'],
+    serverName: resolvedServerName,
+    server: resolvedServerName,
+    availableServers:
+      resolvedAvailableServers.length > 0 ? resolvedAvailableServers : [resolvedServerName],
     hlsProxyUrl: topLevelHlsProxyUrl || primaryHlsUrl,
     iframeOnly,
   };
+}
+
+export function validateZokoAnimeResponse(
+  raw: unknown,
+  expectedAnilistId?: number,
+  expectedEpisode?: number,
+  expectedType?: 'sub' | 'dub'
+): AniScrollStreamResponse | null {
+  return validateProviderStreamResponse(
+    raw,
+    'zokoanime',
+    expectedAnilistId,
+    expectedEpisode,
+    expectedType
+  );
+}
+
+export function validateMegaPlayResponse(
+  raw: unknown,
+  expectedAnilistId?: number,
+  expectedEpisode?: number,
+  expectedType?: 'sub' | 'dub'
+): AniScrollStreamResponse | null {
+  return validateProviderStreamResponse(
+    raw,
+    'megaplay',
+    expectedAnilistId,
+    expectedEpisode,
+    expectedType
+  );
+}
+
+/**
+ * Normalizes HLS.js parsed master playlist levels (`hls.levels`) into unique,
+ * descending-resolution options while preserving exact `levelIndex` references for `hls.currentLevel`.
+ * Used for MegaPlay master HLS playlists (which do not provide separate per-quality API URLs).
+ */
+export function normalizeHlsMasterLevels(
+  rawLevels: ReadonlyArray<{
+    height?: number;
+    width?: number;
+    bitrate?: number;
+    name?: string;
+  }> | null | undefined
+): HlsManifestQualityLevel[] {
+  if (!Array.isArray(rawLevels) || rawLevels.length === 0) return [];
+
+  const candidates: HlsManifestQualityLevel[] = [];
+
+  rawLevels.forEach((lvl, idx) => {
+    if (!lvl || typeof lvl !== 'object') return;
+    let height =
+      typeof lvl.height === 'number' && Number.isFinite(lvl.height) && lvl.height > 0
+        ? Math.round(lvl.height)
+        : 0;
+    const width =
+      typeof lvl.width === 'number' && Number.isFinite(lvl.width) && lvl.width > 0
+        ? Math.round(lvl.width)
+        : undefined;
+    const bandwidth =
+      typeof lvl.bitrate === 'number' && Number.isFinite(lvl.bitrate) && lvl.bitrate > 0
+        ? Math.round(lvl.bitrate)
+        : undefined;
+
+    if (height === 0 && typeof lvl.name === 'string') {
+      const m = lvl.name.match(/(\d{3,4})\s*p?/i);
+      if (m) {
+        const parsed = parseInt(m[1], 10);
+        if (Number.isFinite(parsed) && parsed > 0) height = parsed;
+      }
+    }
+
+    if (height <= 0) return;
+
+    const label = `${height}p`;
+    const resolution = width && height ? `${width}x${height}` : undefined;
+    candidates.push({
+      levelIndex: idx,
+      label,
+      height,
+      width,
+      resolution,
+      bandwidth,
+    });
+  });
+
+  if (candidates.length === 0) return [];
+
+  // Deduplicate identical heights (keep highest bitrate variant for each resolution)
+  const byHeight = new Map<number, HlsManifestQualityLevel>();
+  for (const item of candidates) {
+    const existing = byHeight.get(item.height);
+    if (!existing || (item.bandwidth || 0) > (existing.bandwidth || 0)) {
+      byHeight.set(item.height, item);
+    }
+  }
+
+  return Array.from(byHeight.values()).sort((a, b) => {
+    const diff = b.height - a.height;
+    if (diff !== 0) return diff;
+    return (b.bandwidth || 0) - (a.bandwidth || 0);
+  });
+}
+
+/**
+ * Selects the preferred initial HLS.js level index from parsed master playlist levels:
+ * 1. Exact 1080p if present
+ * 2. Exact 720p, 480p, 360p in priority order
+ * 3. Highest usable resolution <= 1080p
+ * 4. Highest available resolution, or `-1` (Auto) if none detected
+ */
+export function selectInitialHlsLevelIndex(
+  levels: ReadonlyArray<HlsManifestQualityLevel> | null | undefined
+): number {
+  if (!Array.isArray(levels) || levels.length === 0) return -1;
+
+  for (const targetHeight of QUALITY_PRIORITY_ORDER) {
+    const match = levels.find((l) => l.height === targetHeight);
+    if (match) return match.levelIndex;
+  }
+
+  const sorted = [...levels].sort((a, b) => b.height - a.height);
+  const highestAtOrBelow1080 = sorted.find((l) => l.height > 0 && l.height <= 1080);
+  return highestAtOrBelow1080 ? highestAtOrBelow1080.levelIndex : sorted[0].levelIndex;
 }
 
 /**

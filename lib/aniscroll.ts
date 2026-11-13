@@ -6,6 +6,7 @@ import {
 import {
   AniScrollStreamResponse,
   EpisodeStreamAvailability,
+  StreamingProvider,
 } from '@/types/streaming';
 import { HoshikaAnimeItem } from '@/types/anime';
 import { resolveAnimeIds } from './id-mapper';
@@ -14,33 +15,46 @@ import {
   createEpisodeAvailability,
 } from './episode-store';
 import {
-  validateZokoAnimeResponse,
+  validateProviderStreamResponse,
   selectEpisodeAudioVersion,
 } from './zokoanime-stream';
+import {
+  buildProviderWatchUrl,
+  resolveStreamingProviderForAnime,
+  selectStreamingProvider,
+  normalizeAnimeFormat,
+} from './stream-provider';
 
-const ANISCROLL_ZOKOANIME_BASE = 'https://api.aniscroll.in/api/watch/zokoanime';
-const ZOKO_TIMEOUT_MS = 7500;
+const STREAM_TIMEOUT_MS = 8500;
 
 const inFlightStreamMap = new Map<string, Promise<AniScrollStreamResponse | null>>();
 const inFlightEpisodeAvailMap = new Map<string, Promise<EpisodeStreamAvailability>>();
 const inFlightSeriesAvailMap = new Map<string, Promise<EpisodeAvailabilityResult>>();
 
-interface FetchZokoResult {
+interface FetchStreamResult {
   stream: AniScrollStreamResponse | null;
   definitiveUnavailable: boolean;
 }
 
-async function fetchZokoAnimeEndpoint(
+export interface StreamRoutingOptions {
+  provider?: StreamingProvider;
+  format?: string | null;
+  isStandaloneMovie?: boolean;
+  hoshikaId?: string | number | null;
+}
+
+async function fetchProviderWatchEndpoint(
+  provider: StreamingProvider,
   anilistId: number,
   episode: number,
   type: 'sub' | 'dub',
-  timeoutMs: number = ZOKO_TIMEOUT_MS
-): Promise<FetchZokoResult> {
+  timeoutMs: number = STREAM_TIMEOUT_MS
+): Promise<FetchStreamResult> {
   const startTime = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const endpoint = `/${anilistId}/${episode}/${type}`;
-  const url = `${ANISCROLL_ZOKOANIME_BASE}${endpoint}`;
+  const endpoint = `/${provider}/${anilistId}/${episode}/${type}`;
+  const url = buildProviderWatchUrl(provider, anilistId, episode, type);
 
   try {
     const res = await fetch(url, {
@@ -49,13 +63,14 @@ async function fetchZokoAnimeEndpoint(
         'User-Agent': 'AniScroll-Player/1.0',
       },
       signal: controller.signal,
+      cache: 'no-store',
     });
 
     const durationMs = Date.now() - startTime;
 
     if (res.status === 404 || res.status === 400) {
       recordUpstreamMetric({
-        provider: 'zokoanime',
+        provider,
         endpoint,
         durationMs,
         status: res.status,
@@ -64,15 +79,43 @@ async function fetchZokoAnimeEndpoint(
       return { stream: null, definitiveUnavailable: true };
     }
 
+    const contentType = res.headers.get('content-type') || '';
+
+    // MegaPlay returns HTTP 502 JSON (`{ error: "MegaPlay failed to resolve a stream ...", source: "megaplay" }`)
+    // when a specific audio version (e.g. dub on a sub-only show) or episode is unavailable.
+    if (res.status === 502 && contentType.includes('application/json')) {
+      try {
+        const errPayload = (await res.json()) as Record<string, unknown>;
+        const errText =
+          typeof errPayload?.error === 'string' ? errPayload.error.toLowerCase() : '';
+        if (
+          errPayload?.source === 'megaplay' &&
+          (errText.includes('failed to resolve') || errText.includes('not found'))
+        ) {
+          recordUpstreamMetric({
+            provider,
+            endpoint,
+            durationMs,
+            status: res.status,
+            fromCache: false,
+            errorCode: 'not_found',
+          });
+          return { stream: null, definitiveUnavailable: true };
+        }
+      } catch {
+        // Fall through to transient error handling
+      }
+    }
+
     if (!res.ok) {
       const err = classifyUpstreamError({
-        provider: 'zokoanime',
+        provider,
         endpoint,
         status: res.status,
         durationMs,
       });
       recordUpstreamMetric({
-        provider: 'zokoanime',
+        provider,
         endpoint,
         durationMs,
         status: res.status,
@@ -82,10 +125,9 @@ async function fetchZokoAnimeEndpoint(
       return { stream: null, definitiveUnavailable: false };
     }
 
-    const contentType = res.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) {
       recordUpstreamMetric({
-        provider: 'zokoanime',
+        provider,
         endpoint,
         durationMs,
         status: res.status,
@@ -96,9 +138,15 @@ async function fetchZokoAnimeEndpoint(
     }
 
     const raw = await res.json();
-    const validated = validateZokoAnimeResponse(raw, anilistId, episode, type);
+    const validated = validateProviderStreamResponse(
+      raw,
+      provider,
+      anilistId,
+      episode,
+      type
+    );
     recordUpstreamMetric({
-      provider: 'zokoanime',
+      provider,
       endpoint,
       durationMs,
       status: res.status,
@@ -114,13 +162,13 @@ async function fetchZokoAnimeEndpoint(
   } catch (error) {
     const durationMs = Date.now() - startTime;
     const err = classifyUpstreamError({
-      provider: 'zokoanime',
+      provider,
       endpoint,
       error,
       durationMs,
     });
     recordUpstreamMetric({
-      provider: 'zokoanime',
+      provider,
       endpoint,
       durationMs,
       status: null,
@@ -134,13 +182,15 @@ async function fetchZokoAnimeEndpoint(
 }
 
 /**
- * Fetches and validates the ZokoAnime stream for a specific (anilistId, episode, type).
- * Deduplicates concurrent requests and caches valid stream responses for 5 minutes (300s).
+ * Fetches and validates a stream for `(anilistId, episode, type)` using the content-appropriate
+ * provider (`megaplay` for series, `zokoanime` for movies).
+ * Never silently falls back across providers.
  */
 export async function getAniScrollStream(
   anilistId: number,
   episode: number = 1,
-  type: 'sub' | 'dub' = 'sub'
+  type: 'sub' | 'dub' = 'sub',
+  options?: StreamRoutingOptions
 ): Promise<AniScrollStreamResponse | null> {
   if (
     !Number.isFinite(anilistId) ||
@@ -151,27 +201,48 @@ export async function getAniScrollStream(
     return null;
   }
 
+  let provider: StreamingProvider;
+  let resolvedFormat: string | null = options?.format ?? null;
+
+  if (options?.provider) {
+    provider = options.provider;
+  } else {
+    const routed = await resolveStreamingProviderForAnime({
+      format: options?.format,
+      isStandaloneMovie: options?.isStandaloneMovie,
+      hoshikaId: options?.hoshikaId,
+      anilistId,
+    });
+    provider = routed.provider;
+    resolvedFormat = routed.format !== 'UNKNOWN' ? routed.format : resolvedFormat;
+  }
+
   const normalizedType: 'sub' | 'dub' = type === 'dub' ? 'dub' : 'sub';
-  const cacheKey = `zokoanime:stream:${anilistId}:${episode}:${normalizedType}`;
-  const missCacheKey = `zokoanime:miss:${anilistId}:${episode}:${normalizedType}`;
+  const cacheKey = `${provider}:stream:${anilistId}:${episode}:${normalizedType}`;
+  const missCacheKey = `${provider}:miss:${anilistId}:${episode}:${normalizedType}`;
+  const metricEndpoint = `/${provider}/${anilistId}/${episode}/${normalizedType}`;
 
   const cached = appCache.get<AniScrollStreamResponse>(cacheKey);
   if (cached) {
     recordUpstreamMetric({
-      provider: 'zokoanime',
-      endpoint: `/${anilistId}/${episode}/${normalizedType}`,
+      provider,
+      endpoint: metricEndpoint,
       durationMs: 0,
       status: 200,
       fromCache: true,
     });
-    return cached;
+    return {
+      ...cached,
+      provider,
+      format: cached.format ?? resolvedFormat,
+    };
   }
 
   const recentMiss = appCache.get<boolean>(missCacheKey);
   if (recentMiss) {
     recordUpstreamMetric({
-      provider: 'zokoanime',
-      endpoint: `/${anilistId}/${episode}/${normalizedType}`,
+      provider,
+      endpoint: metricEndpoint,
       durationMs: 0,
       status: 404,
       fromCache: true,
@@ -182,8 +253,8 @@ export async function getAniScrollStream(
   const existingInFlight = inFlightStreamMap.get(cacheKey);
   if (existingInFlight) {
     recordUpstreamMetric({
-      provider: 'zokoanime',
-      endpoint: `/${anilistId}/${episode}/${normalizedType}`,
+      provider,
+      endpoint: metricEndpoint,
       durationMs: 0,
       status: 200,
       fromCache: false,
@@ -194,36 +265,44 @@ export async function getAniScrollStream(
 
   const promise = (async (): Promise<AniScrollStreamResponse | null> => {
     try {
-      let attemptResult = await fetchZokoAnimeEndpoint(
+      let attemptResult = await fetchProviderWatchEndpoint(
+        provider,
         anilistId,
         episode,
         normalizedType,
-        ZOKO_TIMEOUT_MS
+        STREAM_TIMEOUT_MS
       );
 
-      // Retry once on transient network/timeout failure
+      // Retry once on transient network/timeout failure (same provider only — no cross-provider fallback)
       if (!attemptResult.stream && !attemptResult.definitiveUnavailable) {
         await new Promise((r) => setTimeout(r, 250));
-        attemptResult = await fetchZokoAnimeEndpoint(
+        attemptResult = await fetchProviderWatchEndpoint(
+          provider,
           anilistId,
           episode,
           normalizedType,
-          ZOKO_TIMEOUT_MS
+          STREAM_TIMEOUT_MS
         );
       }
 
       if (attemptResult.stream) {
+        const enriched: AniScrollStreamResponse = {
+          ...attemptResult.stream,
+          provider,
+          format: resolvedFormat,
+        };
         // Cache playable streams for 5 minutes (300s) so signed stream tokens remain fresh
-        appCache.set(cacheKey, attemptResult.stream, {
+        appCache.set(cacheKey, enriched, {
           ttlSeconds: 300,
           staleWhileRevalidateSeconds: 180,
         });
-        return attemptResult.stream;
+        return enriched;
       }
 
       if (attemptResult.definitiveUnavailable) {
+        // Short negative cache (45s MegaPlay / 60s ZokoAnime) so retry works smoothly while shielding rapid dub probes
         appCache.set(missCacheKey, true, {
-          ttlSeconds: 90,
+          ttlSeconds: provider === 'megaplay' ? 45 : 60,
           staleWhileRevalidateSeconds: 0,
         });
       }
@@ -238,14 +317,15 @@ export async function getAniScrollStream(
 }
 
 /**
- * Dynamically checks both Sub and Dub endpoints in parallel for a specific episode:
- * - GET https://api.aniscroll.in/api/watch/zokoanime/{anilist_id}/{episode}/sub
- * - GET https://api.aniscroll.in/api/watch/zokoanime/{anilist_id}/{episode}/dub
+ * Dynamically checks both Sub and Dub endpoints in parallel on the selected provider:
+ * - Series (`TV`, `TV_SHORT`, `OVA`, `ONA`, `SPECIAL`) -> `https://api.aniscroll.in/api/watch/megaplay/{anilist_id}/{episode}/{sub|dub}`
+ * - Movies (`MOVIE`, standalone movie `SPECIAL`, or unknown fallback) -> `https://api.aniscroll.in/api/watch/zokoanime/{anilist_id}/{episode}/{sub|dub}`
  */
 export async function checkEpisodeStreamAvailability(
   anilistId: number,
   episode: number = 1,
-  userSelectedVersion?: 'sub' | 'dub' | null
+  userSelectedVersion?: 'sub' | 'dub' | null,
+  options?: StreamRoutingOptions
 ): Promise<EpisodeStreamAvailability> {
   if (
     !Number.isFinite(anilistId) ||
@@ -256,6 +336,8 @@ export async function checkEpisodeStreamAvailability(
     return {
       anilistId,
       episode,
+      provider: options?.provider ?? 'zokoanime',
+      format: options?.format ?? null,
       subAvailable: false,
       dubAvailable: false,
       subStream: null,
@@ -264,7 +346,23 @@ export async function checkEpisodeStreamAvailability(
     };
   }
 
-  const availKey = `zokoanime:ep_avail:${anilistId}:${episode}`;
+  let provider: StreamingProvider;
+  let resolvedFormat: string | null = options?.format ?? null;
+
+  if (options?.provider) {
+    provider = options.provider;
+  } else {
+    const routed = await resolveStreamingProviderForAnime({
+      format: options?.format,
+      isStandaloneMovie: options?.isStandaloneMovie,
+      hoshikaId: options?.hoshikaId,
+      anilistId,
+    });
+    provider = routed.provider;
+    resolvedFormat = routed.format !== 'UNKNOWN' ? routed.format : resolvedFormat;
+  }
+
+  const availKey = `${provider}:ep_avail:${anilistId}:${episode}`;
   const existing = inFlightEpisodeAvailMap.get(availKey);
 
   const basePromise =
@@ -272,8 +370,14 @@ export async function checkEpisodeStreamAvailability(
     (async (): Promise<EpisodeStreamAvailability> => {
       try {
         const [subStream, dubStream] = await Promise.all([
-          getAniScrollStream(anilistId, episode, 'sub'),
-          getAniScrollStream(anilistId, episode, 'dub'),
+          getAniScrollStream(anilistId, episode, 'sub', {
+            provider,
+            format: resolvedFormat,
+          }),
+          getAniScrollStream(anilistId, episode, 'dub', {
+            provider,
+            format: resolvedFormat,
+          }),
         ]);
 
         const subAvailable = Boolean(subStream);
@@ -282,6 +386,8 @@ export async function checkEpisodeStreamAvailability(
         return {
           anilistId,
           episode,
+          provider,
+          format: resolvedFormat,
           subAvailable,
           dubAvailable,
           subStream,
@@ -304,6 +410,8 @@ export async function checkEpisodeStreamAvailability(
   const resolved = await basePromise;
   return {
     ...resolved,
+    provider,
+    format: resolved.format ?? resolvedFormat,
     defaultVersion: selectEpisodeAudioVersion({
       subAvailable: resolved.subAvailable,
       dubAvailable: resolved.dubAvailable,
@@ -313,8 +421,8 @@ export async function checkEpisodeStreamAvailability(
 }
 
 /**
- * Resolves Sub and Dub availability for an anime series (checking Episode 1 via ZokoAnime).
- * Accepts optional `prefetchedAnime` to avoid re-fetching Hoshika metadata when resolving AniList IDs.
+ * Resolves Sub and Dub availability for an anime series/movie using the routed provider.
+ * Accepts optional `prefetchedAnime` and `format` to avoid redundant metadata lookups.
  */
 export async function resolveServerAudioAvailability(params: {
   hoshikaId: string | number;
@@ -322,8 +430,17 @@ export async function resolveServerAudioAvailability(params: {
   episodeCount: number;
   episodeNumber?: number;
   prefetchedAnime?: HoshikaAnimeItem | null;
+  format?: string | null;
+  isStandaloneMovie?: boolean;
 }): Promise<EpisodeAvailabilityResult> {
-  const { hoshikaId, episodeCount, episodeNumber = 1, prefetchedAnime } = params;
+  const {
+    hoshikaId,
+    episodeCount,
+    episodeNumber = 1,
+    prefetchedAnime,
+    format,
+    isStandaloneMovie,
+  } = params;
 
   if (episodeCount <= 0) {
     return createEpisodeAvailability({
@@ -335,12 +452,19 @@ export async function resolveServerAudioAvailability(params: {
   }
 
   let anilistId = params.anilistId ?? prefetchedAnime?.anilistId ?? null;
-  if (!anilistId && hoshikaId) {
+  let resolvedFormat = format ?? prefetchedAnime?.format ?? null;
+
+  if ((!anilistId || normalizeAnimeFormat(resolvedFormat) === 'UNKNOWN') && hoshikaId) {
     try {
       const idMap = await resolveAnimeIds(String(hoshikaId), prefetchedAnime);
-      anilistId = idMap?.anilistId ?? null;
+      if (!anilistId) {
+        anilistId = idMap?.anilistId ?? null;
+      }
+      if (normalizeAnimeFormat(resolvedFormat) === 'UNKNOWN' && idMap?.format) {
+        resolvedFormat = idMap.format;
+      }
     } catch {
-      anilistId = null;
+      anilistId = anilistId ?? null;
     }
   }
 
@@ -353,7 +477,16 @@ export async function resolveServerAudioAvailability(params: {
     });
   }
 
-  const cacheKey = `zokoanime:series_avail:${anilistId}:${episodeNumber}:${episodeCount}`;
+  const routed = await resolveStreamingProviderForAnime({
+    format: resolvedFormat,
+    isStandaloneMovie,
+    prefetchedAnime,
+    hoshikaId,
+    anilistId,
+  });
+  const provider = routed.provider;
+
+  const cacheKey = `${provider}:series_avail:${anilistId}:${episodeNumber}:${episodeCount}`;
   const cached = appCache.get<EpisodeAvailabilityResult>(cacheKey);
   if (cached) return cached;
 
@@ -362,10 +495,10 @@ export async function resolveServerAudioAvailability(params: {
 
   const promise = (async (): Promise<EpisodeAvailabilityResult> => {
     try {
-      const epAvail = await checkEpisodeStreamAvailability(
-        anilistId!,
-        episodeNumber
-      );
+      const epAvail = await checkEpisodeStreamAvailability(anilistId!, episodeNumber, null, {
+        provider,
+        format: routed.format !== 'UNKNOWN' ? routed.format : resolvedFormat,
+      });
       const result = createEpisodeAvailability({
         subAvailable: epAvail.subAvailable,
         dubAvailable: epAvail.dubAvailable,
@@ -399,8 +532,7 @@ export async function resolveServerAudioAvailability(params: {
 /**
  * Non-blocking SSR helper for Anime Detail page:
  * - Returns cached Sub/Dub availability immediately (0ms) if already in memory cache.
- * - Otherwise, kicks off `resolveServerAudioAvailability` in the background (warming `inFlightSeriesAvailMap`
- *   and `appCache`) and returns `null` so the Anime Detail page HTML renders without waiting 4s for ZokoAnime.
+ * - Otherwise, kicks off `resolveServerAudioAvailability` in the background.
  */
 export function getCachedOrWarmServerAudioAvailability(params: {
   hoshikaId: string | number;
@@ -408,13 +540,23 @@ export function getCachedOrWarmServerAudioAvailability(params: {
   episodeCount: number;
   episodeNumber?: number;
   prefetchedAnime?: HoshikaAnimeItem | null;
+  format?: string | null;
+  isStandaloneMovie?: boolean;
 }): EpisodeAvailabilityResult | null {
-  const { episodeCount, episodeNumber = 1, prefetchedAnime } = params;
+  const {
+    episodeCount,
+    episodeNumber = 1,
+    prefetchedAnime,
+    format,
+    isStandaloneMovie,
+  } = params;
   if (episodeCount <= 0) return null;
 
   const anilistId = params.anilistId ?? prefetchedAnime?.anilistId ?? null;
-  if (anilistId) {
-    const cacheKey = `zokoanime:series_avail:${anilistId}:${episodeNumber}:${episodeCount}`;
+  const rawFormat = format ?? prefetchedAnime?.format ?? null;
+  if (anilistId && normalizeAnimeFormat(rawFormat) !== 'UNKNOWN') {
+    const provider = selectStreamingProvider({ format: rawFormat, isStandaloneMovie });
+    const cacheKey = `${provider}:series_avail:${anilistId}:${episodeNumber}:${episodeCount}`;
     const cached = appCache.get<EpisodeAvailabilityResult>(cacheKey);
     if (cached) return cached;
   }

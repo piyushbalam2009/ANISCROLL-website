@@ -703,7 +703,7 @@ export async function resolveAnimeIds(
   prefetchedAnime?: HoshikaAnimeItem | null
 ): Promise<IdMappingResult> {
   const dedupeKey = String(hoshikaId);
-  const cacheKey = `id-map:v3:${dedupeKey}`;
+  const cacheKey = `id-map:v4:${dedupeKey}`;
   const cached = appCache.get<IdMappingResult>(cacheKey);
   if (cached) {
     return { ...cached, cached: true };
@@ -724,6 +724,7 @@ export async function resolveAnimeIds(
           aniListId: null,
           anilistId: null,
           malId: null,
+          format: null,
           title: 'Unknown',
           matchedTitle: null,
           matchType: 'none',
@@ -759,6 +760,7 @@ export async function resolveAnimeIds(
               aniListId: directMedia.id,
               anilistId: directMedia.id,
               malId: directMedia.idMal || anime.malId || null,
+              format: directMedia.format || anime.format || null,
               title: primaryTitle,
               matchedTitle: directSummary.englishTitle || directSummary.romajiTitle || primaryTitle,
               matchType: directSummary.matchType,
@@ -785,6 +787,7 @@ export async function resolveAnimeIds(
           aniListId: null,
           anilistId: null,
           malId: anime.malId || null,
+          format: anime.format || null,
           title: primaryTitle,
           matchedTitle: null,
           matchType: 'none',
@@ -812,6 +815,7 @@ export async function resolveAnimeIds(
           aniListId: null,
           anilistId: null,
           malId: anime.malId || null,
+          format: anime.format || null,
           title: primaryTitle,
           matchedTitle: null,
           matchType: 'none',
@@ -834,6 +838,7 @@ export async function resolveAnimeIds(
         aniListId: best.id,
         anilistId: best.id,
         malId: best.malId || anime.malId || null,
+        format: best.format || anime.format || null,
         title: primaryTitle,
         matchedTitle:
           best.englishTitle || best.romajiTitle || best.nativeTitle || primaryTitle,

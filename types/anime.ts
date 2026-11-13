@@ -129,6 +129,7 @@ export interface IdMappingResult {
   aniListId: number | null;
   anilistId: number | null;
   malId: number | null;
+  format?: string | null;
   title?: string;
   mappingStatus: 'verified' | 'provisional' | 'failed';
   status?: 'verified' | 'provisional' | 'failed';

@@ -26,6 +26,7 @@ import {
 import {
   AniScrollStreamResponse,
   AniSkipResult,
+  HlsManifestQualityLevel,
   SubtitlePreference,
   SubtitlePreferences,
   ParsedSubtitleCue,
@@ -44,7 +45,9 @@ import {
 import { parseSubtitles } from '@/lib/subtitle-parser';
 import {
   normalizeAndSortQualities,
+  normalizeHlsMasterLevels,
   normalizeSubtitleTracks,
+  selectInitialHlsLevelIndex,
   selectInitialQuality,
   selectNextFallbackQuality,
   resolveSubtitleTrackForPreference,
@@ -158,11 +161,23 @@ export function VideoPlayer({
   const [showSubtitleSettings, setShowSubtitleSettings] = useState(false);
   const [showQualityMenu, setShowQualityMenu] = useState(false);
 
-  // Quality state (1080p-first + manual switching + automatic lower-quality fallback)
+  // Quality state:
+  // - ZokoAnime movies provide discrete `qualities[]` URLs
+  // - MegaPlay series provide a single master HLS URL whose variants are parsed via HLS.js `hls.levels`
   const availableQualities = useMemo<ZokoAnimeQuality[]>(
     () => normalizeAndSortQualities(streamData?.qualities),
     [streamData?.qualities]
   );
+  const isMasterPlaylistMode =
+    availableQualities.length === 0 && Boolean(streamData?.hlsProxyUrl);
+  const providerDisplayName =
+    streamData?.provider === 'megaplay' || streamData?.source === 'megaplay'
+      ? 'MegaPlay'
+      : 'ZokoAnime';
+
+  const [hlsMasterLevels, setHlsMasterLevels] = useState<HlsManifestQualityLevel[]>([]);
+  const [selectedHlsLevel, setSelectedHlsLevel] = useState<number>(-1);
+  const [activeHlsAutoHeight, setActiveHlsAutoHeight] = useState<number | null>(null);
   const [selectedQualityLabel, setSelectedQualityLabel] = useState<string>('');
   const [activeHlsUrl, setActiveHlsUrl] = useState<string | null>(null);
   const [isSwitchingQuality, setIsSwitchingQuality] = useState<boolean>(false);
@@ -175,6 +190,26 @@ export function VideoPlayer({
     targetTime: number;
     wasPlaying: boolean;
   } | null>(null);
+  const isMasterPlaylistModeRef = useRef<boolean>(isMasterPlaylistMode);
+  const selectedHlsLevelRef = useRef<number>(selectedHlsLevel);
+  const hlsMasterLevelsRef = useRef<HlsManifestQualityLevel[]>(hlsMasterLevels);
+  const providerDisplayNameRef = useRef<string>(providerDisplayName);
+
+  useEffect(() => {
+    isMasterPlaylistModeRef.current = isMasterPlaylistMode;
+  }, [isMasterPlaylistMode]);
+
+  useEffect(() => {
+    selectedHlsLevelRef.current = selectedHlsLevel;
+  }, [selectedHlsLevel]);
+
+  useEffect(() => {
+    hlsMasterLevelsRef.current = hlsMasterLevels;
+  }, [hlsMasterLevels]);
+
+  useEffect(() => {
+    providerDisplayNameRef.current = providerDisplayName;
+  }, [providerDisplayName]);
 
   // Explicit SubtitlePreference state:
   // - null: uninitialized (use API default track)
@@ -627,12 +662,15 @@ export function VideoPlayer({
     }
   }, [streamData, subtitleTracks, disableAllNativeAndHlsSubtitles, loadSubtitleContent]);
 
-  // Initialize 1080p-first quality selection when streamData changes
+  // Initialize quality selection when streamData changes
   useEffect(() => {
     failedQualityUrlsRef.current.clear();
     hasTriedMasterFallbackRef.current = false;
     setLocalPlaybackError(null);
     setIsSwitchingQuality(false);
+    setHlsMasterLevels([]);
+    setSelectedHlsLevel(-1);
+    setActiveHlsAutoHeight(null);
 
     if (!streamData) {
       setSelectedQualityLabel('');
@@ -651,6 +689,7 @@ export function VideoPlayer({
       setSelectedQualityLabel(initialQuality.quality);
       setActiveHlsUrl(initialQuality.hlsProxyUrl);
     } else if (streamData.hlsProxyUrl) {
+      // Master HLS playlist mode (e.g., MegaPlay): load single master URL and parse hls.levels
       setSelectedQualityLabel('Auto');
       setActiveHlsUrl(streamData.hlsProxyUrl);
       hasTriedMasterFallbackRef.current = true;
@@ -661,7 +700,7 @@ export function VideoPlayer({
     }
   }, [streamData, availableQualities]);
 
-  // Manual quality switch handler (preserves position, play/pause state, and subtitle Off state)
+  // Manual quality switch handler for discrete quality URLs (ZokoAnime movies)
   const handleSelectQuality = useCallback(
     (qualityItem: ZokoAnimeQuality) => {
       setShowQualityMenu(false);
@@ -688,6 +727,40 @@ export function VideoPlayer({
       setActiveHlsUrl(qualityItem.hlsProxyUrl);
     },
     [activeHlsUrl, currentTime, isPlaying, localPlaybackError]
+  );
+
+  // Manual quality switch handler for HLS.js master playlist levels (MegaPlay series)
+  // Uses `hls.currentLevel` without reloading the stream or re-calling the MegaPlay API.
+  const handleSelectHlsLevel = useCallback(
+    (levelIndex: number) => {
+      setShowQualityMenu(false);
+      setShowSettingsMenu(false);
+
+      const hls = hlsRef.current;
+      if (!hls) return;
+
+      setLocalPlaybackError(null);
+      selectedHlsLevelRef.current = levelIndex;
+      setSelectedHlsLevel(levelIndex);
+
+      if (levelIndex === -1) {
+        setSelectedQualityLabel('Auto');
+      } else {
+        const matched = hlsMasterLevels.find((l) => l.levelIndex === levelIndex);
+        setSelectedQualityLabel(matched ? matched.label : 'Auto');
+      }
+
+      try {
+        hls.currentLevel = levelIndex;
+      } catch {
+        // Fallback to Auto ABR if level switch fails
+        selectedHlsLevelRef.current = -1;
+        setSelectedHlsLevel(-1);
+        setSelectedQualityLabel('Auto');
+        hls.currentLevel = -1;
+      }
+    },
+    [hlsMasterLevels]
   );
 
   const masterHlsProxyUrl = streamData?.hlsProxyUrl;
@@ -862,6 +935,8 @@ export function VideoPlayer({
     }
 
     let mediaRecoverAttempts = 0;
+    let networkRecoverAttempts = 0;
+    let levelFallbackToAutoAttempted = false;
 
     if (Hls.isSupported()) {
       const hls = new Hls({
@@ -883,7 +958,44 @@ export function VideoPlayer({
         hls.subtitleDisplay = false;
         hls.subtitleTrack = -1;
         disableAllNativeAndHlsSubtitlesRef.current();
+
+        // When playing a master playlist directly (MegaPlay), detect actual resolutions from HLS.js levels
+        if (isMasterPlaylistModeRef.current) {
+          const parsedLevels = normalizeHlsMasterLevels(hls.levels);
+          hlsMasterLevelsRef.current = parsedLevels;
+          setHlsMasterLevels(parsedLevels);
+
+          if (parsedLevels.length > 0) {
+            const preferredIdx = selectInitialHlsLevelIndex(parsedLevels);
+            if (preferredIdx >= 0) {
+              hls.currentLevel = preferredIdx;
+              const matched = parsedLevels.find((l) => l.levelIndex === preferredIdx);
+              selectedHlsLevelRef.current = preferredIdx;
+              setSelectedHlsLevel(preferredIdx);
+              setSelectedQualityLabel(matched ? matched.label : 'Auto');
+              setActiveHlsAutoHeight(matched?.height ?? null);
+            } else {
+              hls.currentLevel = -1;
+              selectedHlsLevelRef.current = -1;
+              setSelectedHlsLevel(-1);
+              setSelectedQualityLabel('Auto');
+            }
+          } else {
+            selectedHlsLevelRef.current = -1;
+            setSelectedHlsLevel(-1);
+            setSelectedQualityLabel('Auto');
+          }
+        }
+
         restorePlaybackPositionOnVideoRef.current(video);
+      };
+
+      const handleLevelSwitched = (_event: any, data: { level: number }) => {
+        const levelObj = hls.levels?.[data.level];
+        if (levelObj && typeof levelObj.height === 'number' && levelObj.height > 0) {
+          setActiveHlsAutoHeight(Math.round(levelObj.height));
+        }
+        setIsSwitchingQuality(false);
       };
 
       const handleSubtitleTracksUpdated = () => {
@@ -901,6 +1013,32 @@ export function VideoPlayer({
           return;
         }
 
+        // In master playlist mode (MegaPlay), gracefully recover a failed manual level by falling back to Auto ABR
+        if (
+          isMasterPlaylistModeRef.current &&
+          data.type === Hls.ErrorTypes.NETWORK_ERROR
+        ) {
+          if (
+            selectedHlsLevelRef.current >= 0 &&
+            hlsMasterLevelsRef.current.length > 1 &&
+            !levelFallbackToAutoAttempted
+          ) {
+            levelFallbackToAutoAttempted = true;
+            selectedHlsLevelRef.current = -1;
+            setSelectedHlsLevel(-1);
+            setSelectedQualityLabel('Auto');
+            hls.currentLevel = -1;
+            hls.startLoad();
+            return;
+          }
+
+          if (networkRecoverAttempts < 1) {
+            networkRecoverAttempts += 1;
+            hls.startLoad();
+            return;
+          }
+        }
+
         try {
           hls.stopLoad();
           hls.detachMedia();
@@ -911,15 +1049,27 @@ export function VideoPlayer({
         if (hlsRef.current === hls) {
           hlsRef.current = null;
         }
+
+        if (isMasterPlaylistModeRef.current) {
+          setIsSwitchingQuality(false);
+          qualitySwitchStateRef.current = null;
+          setLocalPlaybackError(
+            `Failed to load the ${providerDisplayNameRef.current} HLS stream. Please retry playback or switch audio version.`
+          );
+          return;
+        }
+
         attemptNextQualityFallbackRef.current(activeHlsUrl);
       };
 
       hls.on(Hls.Events.MANIFEST_PARSED, handleManifestParsed);
+      hls.on(Hls.Events.LEVEL_SWITCHED, handleLevelSwitched);
       hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, handleSubtitleTracksUpdated);
       hls.on(Hls.Events.ERROR, handleHlsError);
 
       return () => {
         hls.off(Hls.Events.MANIFEST_PARSED, handleManifestParsed);
+        hls.off(Hls.Events.LEVEL_SWITCHED, handleLevelSwitched);
         hls.off(Hls.Events.SUBTITLE_TRACKS_UPDATED, handleSubtitleTracksUpdated);
         hls.off(Hls.Events.ERROR, handleHlsError);
         try {
@@ -934,11 +1084,21 @@ export function VideoPlayer({
         }
       };
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
+      // Native HLS playback (e.g., Safari/iOS): uses native ABR without displaying fake manual quality options
+      setHlsMasterLevels([]);
       video.src = activeHlsUrl;
       disableAllNativeAndHlsSubtitlesRef.current();
       restorePlaybackPositionOnVideoRef.current(video);
 
       const handleNativeError = () => {
+        if (isMasterPlaylistModeRef.current) {
+          setIsSwitchingQuality(false);
+          qualitySwitchStateRef.current = null;
+          setLocalPlaybackError(
+            `Failed to load the ${providerDisplayNameRef.current} HLS stream. Please retry playback or switch audio version.`
+          );
+          return;
+        }
         attemptNextQualityFallbackRef.current(activeHlsUrl);
       };
       video.addEventListener('error', handleNativeError);
@@ -1767,8 +1927,8 @@ export function VideoPlayer({
                   )}
                 </div>
 
-                {/* Quality Selector Button & Dropdown (Displays actual API qualities) */}
-                {availableQualities.length > 0 && (
+                {/* Quality Selector Button & Dropdown (Discrete URLs for ZokoAnime movies OR HLS.js Master Levels for MegaPlay series) */}
+                {(availableQualities.length > 0 || hlsMasterLevels.length > 0) && (
                   <div className="relative">
                     <button
                       type="button"
@@ -1784,7 +1944,9 @@ export function VideoPlayer({
                     >
                       <Layers size={13} className="text-[#A0A0A0]" />
                       <span>
-                        {selectedQualityLabel || availableQualities[0].quality}
+                        {selectedQualityLabel ||
+                          availableQualities[0]?.quality ||
+                          'Auto'}
                       </span>
                     </button>
 
@@ -1799,32 +1961,77 @@ export function VideoPlayer({
                             <Loader2 size={11} className="animate-spin text-white" />
                           )}
                         </div>
-                        {availableQualities.map((qItem) => {
-                          const isSelected =
-                            activeHlsUrl === qItem.hlsProxyUrl ||
-                            selectedQualityLabel === qItem.quality;
-                          return (
+                        {availableQualities.length > 0 ? (
+                          availableQualities.map((qItem) => {
+                            const isSelected =
+                              activeHlsUrl === qItem.hlsProxyUrl ||
+                              selectedQualityLabel === qItem.quality;
+                            return (
+                              <button
+                                key={qItem.quality}
+                                type="button"
+                                data-testid={`quality-option-${qItem.quality}`}
+                                onClick={() => handleSelectQuality(qItem)}
+                                className="w-full text-left px-2 py-1.5 rounded hover:bg-[#1B1B1B] flex items-center justify-between cursor-pointer"
+                              >
+                                <div className="flex items-center gap-2">
+                                  <span className="font-medium text-white">
+                                    {qItem.quality}
+                                  </span>
+                                  {qItem.resolution && (
+                                    <span className="text-[10px] font-mono text-[#707070]">
+                                      {qItem.resolution}
+                                    </span>
+                                  )}
+                                </div>
+                                {isSelected && <Check size={13} />}
+                              </button>
+                            );
+                          })
+                        ) : (
+                          <>
                             <button
-                              key={qItem.quality}
                               type="button"
-                              data-testid={`quality-option-${qItem.quality}`}
-                              onClick={() => handleSelectQuality(qItem)}
+                              data-testid="quality-option-Auto"
+                              onClick={() => handleSelectHlsLevel(-1)}
                               className="w-full text-left px-2 py-1.5 rounded hover:bg-[#1B1B1B] flex items-center justify-between cursor-pointer"
                             >
                               <div className="flex items-center gap-2">
-                                <span className="font-medium text-white">
-                                  {qItem.quality}
-                                </span>
-                                {qItem.resolution && (
+                                <span className="font-medium text-white">Auto</span>
+                                {selectedHlsLevel === -1 && activeHlsAutoHeight && (
                                   <span className="text-[10px] font-mono text-[#707070]">
-                                    {qItem.resolution}
+                                    {activeHlsAutoHeight}p
                                   </span>
                                 )}
                               </div>
-                              {isSelected && <Check size={13} />}
+                              {selectedHlsLevel === -1 && <Check size={13} />}
                             </button>
-                          );
-                        })}
+                            {hlsMasterLevels.map((lvl) => {
+                              const isSelected = selectedHlsLevel === lvl.levelIndex;
+                              return (
+                                <button
+                                  key={`${lvl.levelIndex}-${lvl.label}`}
+                                  type="button"
+                                  data-testid={`quality-option-${lvl.label}`}
+                                  onClick={() => handleSelectHlsLevel(lvl.levelIndex)}
+                                  className="w-full text-left px-2 py-1.5 rounded hover:bg-[#1B1B1B] flex items-center justify-between cursor-pointer"
+                                >
+                                  <div className="flex items-center gap-2">
+                                    <span className="font-medium text-white">
+                                      {lvl.label}
+                                    </span>
+                                    {lvl.resolution && (
+                                      <span className="text-[10px] font-mono text-[#707070]">
+                                        {lvl.resolution}
+                                      </span>
+                                    )}
+                                  </div>
+                                  {isSelected && <Check size={13} />}
+                                </button>
+                              );
+                            })}
+                          </>
+                        )}
                       </div>
                     )}
                   </div>
@@ -1852,27 +2059,59 @@ export function VideoPlayer({
                       data-testid="settings-menu-dropdown"
                       className="absolute bottom-full right-0 mb-2 w-52 max-h-80 overflow-y-auto bg-[#141414] border border-[#292929] rounded-xl shadow-xl p-2 z-50 text-xs"
                     >
-                      {availableQualities.length > 0 && (
+                      {(availableQualities.length > 0 || hlsMasterLevels.length > 0) && (
                         <>
                           <div className="px-2 py-1 text-[10px] uppercase font-semibold text-[#707070] tracking-wider">
                             Quality
                           </div>
-                          {availableQualities.map((qItem) => {
-                            const isSelected =
-                              activeHlsUrl === qItem.hlsProxyUrl ||
-                              selectedQualityLabel === qItem.quality;
-                            return (
+                          {availableQualities.length > 0 ? (
+                            availableQualities.map((qItem) => {
+                              const isSelected =
+                                activeHlsUrl === qItem.hlsProxyUrl ||
+                                selectedQualityLabel === qItem.quality;
+                              return (
+                                <button
+                                  key={`settings-q-${qItem.quality}`}
+                                  type="button"
+                                  onClick={() => handleSelectQuality(qItem)}
+                                  className="w-full text-left px-2 py-1.5 rounded hover:bg-[#1B1B1B] flex items-center justify-between cursor-pointer"
+                                >
+                                  <span>{qItem.quality}</span>
+                                  {isSelected && <Check size={13} />}
+                                </button>
+                              );
+                            })
+                          ) : (
+                            <>
                               <button
-                                key={`settings-q-${qItem.quality}`}
                                 type="button"
-                                onClick={() => handleSelectQuality(qItem)}
+                                onClick={() => handleSelectHlsLevel(-1)}
                                 className="w-full text-left px-2 py-1.5 rounded hover:bg-[#1B1B1B] flex items-center justify-between cursor-pointer"
                               >
-                                <span>{qItem.quality}</span>
-                                {isSelected && <Check size={13} />}
+                                <span>
+                                  Auto
+                                  {selectedHlsLevel === -1 && activeHlsAutoHeight
+                                    ? ` (${activeHlsAutoHeight}p)`
+                                    : ''}
+                                </span>
+                                {selectedHlsLevel === -1 && <Check size={13} />}
                               </button>
-                            );
-                          })}
+                              {hlsMasterLevels.map((lvl) => {
+                                const isSelected = selectedHlsLevel === lvl.levelIndex;
+                                return (
+                                  <button
+                                    key={`settings-hls-q-${lvl.levelIndex}-${lvl.label}`}
+                                    type="button"
+                                    onClick={() => handleSelectHlsLevel(lvl.levelIndex)}
+                                    className="w-full text-left px-2 py-1.5 rounded hover:bg-[#1B1B1B] flex items-center justify-between cursor-pointer"
+                                  >
+                                    <span>{lvl.label}</span>
+                                    {isSelected && <Check size={13} />}
+                                  </button>
+                                );
+                              })}
+                            </>
+                          )}
                           <div className="border-t border-[#292929] my-1" />
                         </>
                       )}

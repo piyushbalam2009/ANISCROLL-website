@@ -23,6 +23,10 @@ import {
   EpisodeAvailabilityResult,
 } from '@/lib/episode-store';
 import { selectEpisodeAudioVersion } from '@/lib/zokoanime-stream';
+import {
+  getStreamingProviderDisplayName,
+  selectStreamingProvider,
+} from '@/lib/stream-provider-core';
 import { ChevronRight, ArrowLeft, AlertCircle, Loader2 } from 'lucide-react';
 
 const USER_AUDIO_PREF_KEY = 'aniscroll_user_selected_audio_v1';
@@ -279,14 +283,21 @@ export function WatchPageClient({
     };
   }, [anime.shortId]);
 
-  // Fetch Episode-Specific Sub/Dub Availability & ZokoAnime Stream in Parallel
+  const effectiveFormat = idMapping?.format || anime.format || null;
+  const expectedProvider = selectStreamingProvider({ format: effectiveFormat });
+  const expectedProviderLabel = getStreamingProviderDisplayName(expectedProvider);
+
+  // Fetch Episode-Specific Sub/Dub Availability & Routed Provider Stream (MegaPlay for Series, ZokoAnime for Movies)
   useEffect(() => {
     const anilistId = idMapping?.anilistId;
     if (!anilistId) return;
 
     const controller = new AbortController();
     let isMounted = true;
-    const cacheKey = `${anilistId}:${episodeNumber}`;
+    const resolvedFormat = idMapping?.format || anime.format || null;
+    const routedProvider = selectStreamingProvider({ format: resolvedFormat });
+    const routedProviderLabel = getStreamingProviderDisplayName(routedProvider);
+    const cacheKey = `${routedProvider}:${anilistId}:${episodeNumber}`;
 
     async function loadEpisodeAvailabilityAndStream() {
       // Clear previous episode stream state immediately so stale streams/qualities never persist
@@ -310,7 +321,7 @@ export function WatchPageClient({
 
         if (!chosenVersion) {
           setStreamError(
-            `Neither Sub nor Dub is available for Episode ${episodeNumber} on ZokoAnime.`
+            `Neither Sub nor Dub is available for Episode ${episodeNumber} on ${routedProviderLabel}.`
           );
           return;
         }
@@ -329,8 +340,11 @@ export function WatchPageClient({
         const prefParam = userSelectedVersionRef.current
           ? `&preferredType=${userSelectedVersionRef.current}`
           : '';
+        const formatQuery = resolvedFormat
+          ? `&format=${encodeURIComponent(resolvedFormat)}`
+          : '';
         const res = await fetch(
-          `/api/stream?anilistId=${anilistId}&episode=${episodeNumber}${prefParam}`,
+          `/api/stream?anilistId=${anilistId}&episode=${episodeNumber}&hoshikaId=${anime.shortId}${formatQuery}${prefParam}`,
           { signal: controller.signal }
         );
         const data = await res.json();
@@ -366,7 +380,7 @@ export function WatchPageClient({
           setStreamData(null);
           setStreamError(
             data.error ||
-              `Neither Sub nor Dub is currently available for Episode ${episodeNumber}.`
+              `Neither Sub nor Dub is currently available for Episode ${episodeNumber} on ${routedProviderLabel}.`
           );
           return;
         }
@@ -383,7 +397,7 @@ export function WatchPageClient({
           setStreamData(chosenStream);
         } else {
           setStreamError(
-            `Stream unavailable for Episode ${episodeNumber} (${chosenVersion.toUpperCase()}).`
+            `Stream unavailable for Episode ${episodeNumber} (${chosenVersion.toUpperCase()}) on ${routedProviderLabel}.`
           );
         }
       } catch (err: any) {
@@ -391,7 +405,9 @@ export function WatchPageClient({
         setIsCheckingAvailability(false);
         setEpisodeHasSub(false);
         setEpisodeHasDub(false);
-        setStreamError('Failed to connect to ZokoAnime streaming servers. Please try again.');
+        setStreamError(
+          `Failed to connect to ${expectedProviderLabel} streaming servers. Please try again.`
+        );
       } finally {
         if (isMounted && !controller.signal.aborted) {
           setIsLoadingStream(false);
@@ -405,7 +421,15 @@ export function WatchPageClient({
       isMounted = false;
       controller.abort();
     };
-  }, [idMapping?.anilistId, episodeNumber, retryCounter]);
+  }, [
+    idMapping?.anilistId,
+    idMapping?.format,
+    anime.format,
+    anime.shortId,
+    episodeNumber,
+    retryCounter,
+    expectedProviderLabel,
+  ]);
 
   // Manual user Sub/Dub switch handler
   const handleManualChangeType = useCallback(
@@ -432,10 +456,10 @@ export function WatchPageClient({
 
   const handleRetryStream = useCallback(() => {
     if (resolvedAnilistId) {
-      clientEpisodeStreamCache.delete(`${resolvedAnilistId}:${episodeNumber}`);
+      clientEpisodeStreamCache.delete(`${expectedProvider}:${resolvedAnilistId}:${episodeNumber}`);
     }
     setRetryCounter((prev) => prev + 1);
-  }, [resolvedAnilistId, episodeNumber]);
+  }, [expectedProvider, resolvedAnilistId, episodeNumber]);
 
   const handleNavigateEpisode = (newEpisode: number) => {
     router.push(`/watch/${anime.shortId}/${newEpisode}`);

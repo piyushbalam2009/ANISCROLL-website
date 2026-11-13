@@ -1,3 +1,24 @@
+export type StreamingProvider = 'megaplay' | 'zokoanime';
+
+export type AnimeContentFormat =
+  | 'TV'
+  | 'TV_SHORT'
+  | 'OVA'
+  | 'ONA'
+  | 'SPECIAL'
+  | 'MOVIE'
+  | 'MUSIC'
+  | 'UNKNOWN';
+
+export interface HlsManifestQualityLevel {
+  levelIndex: number;
+  label: string;
+  height: number;
+  width?: number;
+  resolution?: string;
+  bandwidth?: number;
+}
+
 export type SubtitlePreference = 'off' | string;
 
 export interface SubtitleTrack {
@@ -19,6 +40,8 @@ export interface ZokoAnimeQuality {
 
 export interface AniScrollStreamResponse {
   source: string;
+  provider?: StreamingProvider;
+  format?: string | null;
   anilistId: number;
   malId?: number | null;
   title?: string;
@@ -49,6 +72,8 @@ export interface AniScrollStreamResponse {
 export interface EpisodeStreamAvailability {
   anilistId: number;
   episode: number;
+  provider?: StreamingProvider;
+  format?: string | null;
   subAvailable: boolean;
   dubAvailable: boolean;
   subStream: AniScrollStreamResponse | null;

@@ -69,6 +69,7 @@ export async function GET(
             hoshikaId: trimmedId,
             anilistId: idMap?.anilistId ?? null,
             episodeCount,
+            format: idMap?.format ?? null,
           })
         : undefined;
 
@@ -114,18 +115,25 @@ export async function GET(
     let anilistCover: string | null = null;
     let anilistBanner: string | null = null;
     let resolvedAnilistId: number | null = anime?.anilistId ?? null;
+    let resolvedFormat: string | null = anime?.format ?? null;
 
     if (
       (includeAnime && (!anime?.coverImage || !anime?.bannerImage || !resolvedAnilistId)) ||
-      (checkAvailability && !resolvedAnilistId)
+      (checkAvailability && (!resolvedAnilistId || !resolvedFormat))
     ) {
       try {
         const idMap = await resolveAnimeIds(trimmedId, anime);
         resolvedAnilistId = idMap?.anilistId ?? null;
+        if (!resolvedFormat && idMap?.format) {
+          resolvedFormat = idMap.format;
+        }
         if (includeAnime && resolvedAnilistId && (!anime?.coverImage || !anime?.bannerImage)) {
           const media = await getAniListById(resolvedAnilistId);
           anilistCover = media?.coverImage?.extraLarge || media?.coverImage?.large || null;
           anilistBanner = media?.bannerImage || null;
+          if (!resolvedFormat && media?.format) {
+            resolvedFormat = media.format;
+          }
         }
       } catch {
         // Optional AniList fallback
@@ -139,6 +147,7 @@ export async function GET(
           anilistId: resolvedAnilistId,
           episodeCount,
           prefetchedAnime: anime,
+          format: resolvedFormat,
         })
       : undefined;
 
@@ -170,6 +179,7 @@ export async function GET(
           ? {
               shortId: anime.shortId,
               anilistId: resolvedAnilistId,
+              format: resolvedFormat || anime.format || null,
               titleEnglish: anime.titleEnglish,
               titleRomaji: anime.titleRomaji,
               titleLocalized: anime.titleLocalized,

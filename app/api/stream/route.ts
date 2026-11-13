@@ -4,6 +4,10 @@ import {
   getAniScrollStream,
 } from '@/lib/aniscroll';
 import { selectEpisodeAudioVersion } from '@/lib/zokoanime-stream';
+import {
+  getStreamingProviderDisplayName,
+  resolveStreamingProviderForAnime,
+} from '@/lib/stream-provider';
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -12,6 +16,9 @@ export async function GET(req: NextRequest) {
   const typeParam = searchParams.get('type');
   const preferredTypeParam = searchParams.get('preferredType');
   const checkBoth = searchParams.get('checkBoth') !== 'false';
+  const formatParam = searchParams.get('format');
+  const hoshikaIdParam = searchParams.get('hoshikaId');
+  const isStandaloneMovie = searchParams.get('standaloneMovie') === 'true';
 
   if (!anilistIdStr) {
     return NextResponse.json(
@@ -39,12 +46,30 @@ export async function GET(req: NextRequest) {
       ? 'sub'
       : requestedType;
 
+  // Always resolve authoritative content format server-side when omitted/unknown
+  // so movies are never accidentally routed to MegaPlay.
+  const routed = await resolveStreamingProviderForAnime({
+    format: formatParam,
+    isStandaloneMovie,
+    hoshikaId: hoshikaIdParam,
+    anilistId,
+  });
+  const provider = routed.provider;
+  const providerLabel = getStreamingProviderDisplayName(provider);
+  const resolvedFormat = routed.format !== 'UNKNOWN' ? routed.format : formatParam || null;
+
   try {
     if (checkBoth) {
       const availability = await checkEpisodeStreamAvailability(
         anilistId,
         episode,
-        preferredType
+        preferredType,
+        {
+          provider,
+          format: resolvedFormat,
+          isStandaloneMovie,
+          hoshikaId: hoshikaIdParam,
+        }
       );
 
       const effectiveType =
@@ -69,7 +94,9 @@ export async function GET(req: NextRequest) {
         return NextResponse.json(
           {
             ok: false,
-            error: `No playable Sub or Dub stream is available for Episode ${episode}.`,
+            provider,
+            format: resolvedFormat,
+            error: `No playable Sub or Dub stream is available for Episode ${episode} on ${providerLabel}.`,
             subAvailable: availability.subAvailable,
             dubAvailable: availability.dubAvailable,
             selectedType: null,
@@ -83,6 +110,8 @@ export async function GET(req: NextRequest) {
 
       return NextResponse.json({
         ok: true,
+        provider,
+        format: resolvedFormat,
         subAvailable: availability.subAvailable,
         dubAvailable: availability.dubAvailable,
         selectedType: effectiveType,
@@ -93,12 +122,19 @@ export async function GET(req: NextRequest) {
     }
 
     const singleType: 'sub' | 'dub' = requestedType || 'sub';
-    const stream = await getAniScrollStream(anilistId, episode, singleType);
+    const stream = await getAniScrollStream(anilistId, episode, singleType, {
+      provider,
+      format: resolvedFormat,
+      isStandaloneMovie,
+      hoshikaId: hoshikaIdParam,
+    });
     if (!stream) {
       return NextResponse.json(
         {
           ok: false,
-          error: `Streaming source currently unavailable for Episode ${episode} (${singleType.toUpperCase()}).`,
+          provider,
+          format: resolvedFormat,
+          error: `Streaming source currently unavailable for Episode ${episode} (${singleType.toUpperCase()}) on ${providerLabel}.`,
         },
         { status: 404 }
       );
@@ -106,12 +142,19 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       ok: true,
+      provider,
+      format: resolvedFormat,
       selectedType: singleType,
       stream,
     });
   } catch {
     return NextResponse.json(
-      { ok: false, error: 'Failed to retrieve stream from ZokoAnime provider.' },
+      {
+        ok: false,
+        provider,
+        format: resolvedFormat,
+        error: `Failed to retrieve stream from ${providerLabel} provider.`,
+      },
       { status: 500 }
     );
   }
