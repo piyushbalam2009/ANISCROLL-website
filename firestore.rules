@@ -72,19 +72,94 @@ service cloud.firestore {
       return isOwnerRole() || (hasAdminDoc() && getAdminDoc().status == 'active' && getAdminDoc().permissions.manageSettings == true);
     }
 
+    function canAdminModifyTargetRole(existingData, incomingData) {
+      return isOwnerRole()
+        ? (existingData.uid != 'ClYKhPNBohZuDPPS3upXVyQvUEq2' || incomingData.role == 'owner')
+        : (
+            canManageUsers()
+            && (!('role' in existingData) || !(existingData.role in ['owner', 'admin', 'administrator']))
+            && (!('role' in incomingData) || !(incomingData.role in ['owner', 'admin', 'administrator']))
+            && existingData.uid != 'ClYKhPNBohZuDPPS3upXVyQvUEq2'
+          );
+    }
+
+    function expectedCallerRole() {
+      return isBootstrappedOwner()
+        ? 'owner'
+        : (
+            hasAdminDoc() && getAdminDoc().status == 'active'
+              ? (getAdminDoc().role == 'owner' ? 'owner' : (getAdminDoc().role == 'administrator' ? 'admin' : 'mod'))
+              : 'member'
+          );
+    }
+
     // Entity Blueprint 1: UserProfile (/users/{uid}/profile/{docId})
     function isValidUserProfile(data) {
       return data.keys().hasAll(['uid', 'displayName', 'email', 'photoURL', 'provider', 'createdAt', 'updatedAt'])
-        && data.keys().hasOnly(['uid', 'displayName', 'email', 'photoURL', 'provider', 'status', 'accountStatus', 'role', 'migrationCompleted', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'uid', 'displayName', 'username', 'bio', 'email', 'photoURL',
+          'avatarCharacterId', 'avatarCharacterName', 'avatarAnimeName',
+          'provider', 'status', 'accountStatus', 'role', 'privacy',
+          'favouriteAnime', 'stats', 'recentActivity', 'migrationCompleted',
+          'createdAt', 'updatedAt'
+        ])
         && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
         && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && (!('username' in data) || (data.username is string && data.username.size() <= 24))
+        && (!('bio' in data) || (data.bio is string && data.bio.size() <= 300))
         && data.email is string && data.email.size() >= 3 && data.email.size() <= 256
         && data.photoURL is string && data.photoURL.size() <= 1024
+        && (!('avatarCharacterId' in data) || data.avatarCharacterId == null || data.avatarCharacterId is number)
+        && (!('avatarCharacterName' in data) || data.avatarCharacterName == null || (data.avatarCharacterName is string && data.avatarCharacterName.size() <= 120))
+        && (!('avatarAnimeName' in data) || data.avatarAnimeName == null || (data.avatarAnimeName is string && data.avatarAnimeName.size() <= 200))
         && data.provider is string && (data.provider == 'password' || data.provider == 'google')
         && (!('status' in data) || (data.status is string && data.status in ['active', 'disabled', 'banned']))
         && (!('accountStatus' in data) || (data.accountStatus is string && data.accountStatus in ['active', 'disabled', 'banned']))
-        && (!('role' in data) || (data.role is string && data.role in ['user', 'admin', 'owner']))
+        && (!('role' in data) || (data.role is string && data.role in ['member', 'mod', 'admin', 'owner', 'user']))
+        && (!('privacy' in data) || data.privacy == null || data.privacy is map)
+        && (!('favouriteAnime' in data) || (data.favouriteAnime is list && data.favouriteAnime.size() <= 12))
+        && (!('stats' in data) || data.stats == null || data.stats is map)
+        && (!('recentActivity' in data) || (data.recentActivity is list && data.recentActivity.size() <= 12))
         && (!('migrationCompleted' in data) || data.migrationCompleted is bool)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Entity Blueprint 1b: PublicProfile (/publicProfiles/{uid}) — Strictly PII-Free
+    function isValidPublicProfile(data) {
+      return data.keys().hasAll(['uid', 'username', 'displayName', 'role', 'status', 'privacy', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'uid', 'username', 'displayName', 'bio', 'photoURL',
+          'avatarCharacterId', 'avatarCharacterName', 'avatarAnimeName',
+          'role', 'status', 'privacy', 'favouriteAnime', 'stats', 'recentActivity',
+          'joinedAt', 'createdAt', 'updatedAt'
+        ])
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
+        && data.username is string && data.username.size() >= 3 && data.username.size() <= 24
+        && data.displayName is string && data.displayName.size() >= 1 && data.displayName.size() <= 120
+        && (!('bio' in data) || (data.bio is string && data.bio.size() <= 300))
+        && (!('photoURL' in data) || (data.photoURL is string && data.photoURL.size() <= 1024))
+        && (!('avatarCharacterId' in data) || data.avatarCharacterId == null || data.avatarCharacterId is number)
+        && (!('avatarCharacterName' in data) || data.avatarCharacterName == null || (data.avatarCharacterName is string && data.avatarCharacterName.size() <= 120))
+        && (!('avatarAnimeName' in data) || data.avatarAnimeName == null || (data.avatarAnimeName is string && data.avatarAnimeName.size() <= 200))
+        && data.role is string && data.role in ['member', 'mod', 'admin', 'owner', 'user']
+        && data.status is string && data.status in ['active', 'disabled', 'banned']
+        && data.privacy is map
+        && data.privacy.profileVisibility is string && data.privacy.profileVisibility in ['public', 'members', 'private']
+        && (!('favouriteAnime' in data) || (data.favouriteAnime is list && data.favouriteAnime.size() <= 12))
+        && (!('stats' in data) || data.stats == null || data.stats is map)
+        && (!('recentActivity' in data) || (data.recentActivity is list && data.recentActivity.size() <= 12))
+        && (!('joinedAt' in data) || (data.joinedAt is string && data.joinedAt.size() <= 64))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Entity Blueprint 1c: UsernameReservation (/usernames/{username})
+    function isValidUsernameReservation(data) {
+      return data.keys().hasAll(['uid', 'username', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['uid', 'username', 'createdAt', 'updatedAt'])
+        && data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128
+        && data.username is string && data.username.size() >= 3 && data.username.size() <= 24 && data.username.matches('^[a-z0-9_]+$')
         && data.createdAt is timestamp
         && data.updatedAt is timestamp;
     }
@@ -383,6 +458,7 @@ service cloud.firestore {
         && incoming().uid == request.auth.uid
         && (!('status' in incoming()) || incoming().status == 'active')
         && (!('accountStatus' in incoming()) || incoming().accountStatus == 'active')
+        && (!('role' in incoming()) || incoming().role in ['member', 'user'] || incoming().role == expectedCallerRole())
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
       allow update: if isSignedIn() && isValidId(uid) && isValidId(docId)
@@ -391,13 +467,20 @@ service cloud.firestore {
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
         && (
-          // Action 1: Owner updates own profile
-          (isOwner(uid) && incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'email', 'photoURL', 'provider', 'migrationCompleted', 'updatedAt']))
+          // Action 1: Owner updates own profile fields (cannot self-escalate role or unban self)
+          (isOwner(uid) && incoming().diff(existing()).affectedKeys().hasOnly([
+            'displayName', 'username', 'bio', 'email', 'photoURL',
+            'avatarCharacterId', 'avatarCharacterName', 'avatarAnimeName',
+            'provider', 'privacy', 'favouriteAnime', 'stats', 'recentActivity',
+            'migrationCompleted', 'updatedAt'
+          ]))
           ||
-          // Action 2: Admin moderates user status
-          (canManageUsers() && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'accountStatus', 'role', 'updatedAt']))
+          // Action 2: Authorized Staff moderates status/role with hierarchy enforcement
+          (canManageUsers()
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'accountStatus', 'role', 'updatedAt'])
+            && canAdminModifyTargetRole(existing(), incoming()))
         );
-      allow delete: if (isOwner(uid) || canManageUsers()) && isValidId(uid) && isValidId(docId);
+      allow delete: if (isOwner(uid) || (canManageUsers() && existing().role != 'owner' && uid != 'ClYKhPNBohZuDPPS3upXVyQvUEq2')) && isValidId(uid) && isValidId(docId);
     }
 
     // CollectionGroup query support for Admin User Management (/users/*/profile/*)
@@ -493,6 +576,11 @@ service cloud.firestore {
         && (
           isOwnerRole()
           || (
+            canManageUsers()
+            && adminUid != 'ClYKhPNBohZuDPPS3upXVyQvUEq2'
+            && incoming().role == 'editor'
+          )
+          || (
             request.auth.uid == adminUid
             && incoming().uid == request.auth.uid
             && incoming().email == 'balampiyush2009@gmail.com'
@@ -505,11 +593,21 @@ service cloud.firestore {
         && incoming().uid == existing().uid
         && incoming().createdAt == existing().createdAt
         && incoming().updatedAt == request.time
-        && (isOwnerRole() || (request.auth.uid == adminUid && existing().role == 'owner'))
+        && (
+          isOwnerRole()
+          || (
+            canManageUsers()
+            && adminUid != 'ClYKhPNBohZuDPPS3upXVyQvUEq2'
+            && existing().role == 'editor'
+            && incoming().role == 'editor'
+          )
+          || (request.auth.uid == adminUid && existing().role == 'owner')
+        )
         && incoming().diff(existing()).affectedKeys().hasOnly(['email', 'displayName', 'role', 'status', 'permissions', 'addedBy', 'addedAt', 'lastLogin', 'invitedBy', 'updatedAt']);
       allow delete: if isSignedIn() && isValidId(adminUid)
         && existing().role != 'owner'
-        && isOwnerRole();
+        && adminUid != 'ClYKhPNBohZuDPPS3upXVyQvUEq2'
+        && (isOwnerRole() || (canManageUsers() && existing().role == 'editor'));
     }
 
     // Collection 7: Anime Artwork (/animeArtwork/{animeId})
@@ -635,6 +733,66 @@ service cloud.firestore {
         && isValidStreamingMonitorLog(incoming())
         && incoming().createdAt == request.time;
       allow update, delete: if false;
+    }
+
+    // Collection 14: Public User Profiles (/publicProfiles/{uid}) — Privacy Enforced, PII-Free
+    match /publicProfiles/{uid} {
+      allow get: if isValidId(uid) && (
+        isOwner(uid)
+        || canManageUsers()
+        || resource.data.privacy.profileVisibility == 'public'
+        || (isSignedIn() && resource.data.privacy.profileVisibility == 'members')
+      );
+      allow list: if isOwner(uid)
+        || canManageUsers()
+        || resource.data.privacy.profileVisibility == 'public'
+        || (isSignedIn() && resource.data.privacy.profileVisibility == 'members');
+      allow create: if isSignedIn() && isValidId(uid)
+        && isValidPublicProfile(incoming())
+        && incoming().uid == uid
+        && (isOwner(uid) || canManageUsers())
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time
+        && (isOwnerRole() || incoming().role in ['member', 'user'] || incoming().role == expectedCallerRole());
+      allow update: if isSignedIn() && isValidId(uid)
+        && isValidPublicProfile(incoming())
+        && incoming().uid == existing().uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && (
+          (isOwner(uid) && incoming().diff(existing()).affectedKeys().hasOnly([
+            'username', 'displayName', 'bio', 'photoURL',
+            'avatarCharacterId', 'avatarCharacterName', 'avatarAnimeName',
+            'privacy', 'favouriteAnime', 'stats', 'recentActivity', 'joinedAt', 'updatedAt'
+          ]))
+          ||
+          (canManageUsers()
+            && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'status', 'updatedAt'])
+            && canAdminModifyTargetRole(existing(), incoming()))
+        );
+      allow delete: if isSignedIn() && isValidId(uid)
+        && (isOwner(uid) || (canManageUsers() && existing().role != 'owner' && uid != 'ClYKhPNBohZuDPPS3upXVyQvUEq2'));
+    }
+
+    // Collection 15: Unique Username Reservations (/usernames/{username})
+    match /usernames/{username} {
+      allow get: if isValidId(username);
+      allow list: if false;
+      allow create: if isSignedIn() && isValidId(username)
+        && isValidUsernameReservation(incoming())
+        && incoming().username == username
+        && incoming().uid == request.auth.uid
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isSignedIn() && isValidId(username)
+        && isValidUsernameReservation(incoming())
+        && incoming().username == username
+        && existing().uid == request.auth.uid
+        && incoming().uid == request.auth.uid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time;
+      allow delete: if isSignedIn() && isValidId(username)
+        && (existing().uid == request.auth.uid || isOwnerRole());
     }
   }
 }

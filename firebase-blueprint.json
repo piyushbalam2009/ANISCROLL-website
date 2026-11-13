@@ -47,9 +47,49 @@
         },
         "role": {
           "type": "string",
-          "enum": ["user", "admin", "owner"],
+          "enum": ["member", "mod", "admin", "owner", "user"],
           "maxLength": 32,
-          "description": "Display role label"
+          "description": "Authoritative user role label"
+        },
+        "username": {
+          "type": "string",
+          "maxLength": 24,
+          "description": "Unique lowercase public handle"
+        },
+        "bio": {
+          "type": "string",
+          "maxLength": 300,
+          "description": "Public profile biography"
+        },
+        "avatarCharacterId": {
+          "type": "number",
+          "description": "Selected AniList character ID for avatar attribution"
+        },
+        "avatarCharacterName": {
+          "type": "string",
+          "maxLength": 120,
+          "description": "Selected AniList character name"
+        },
+        "avatarAnimeName": {
+          "type": "string",
+          "maxLength": 200,
+          "description": "Anime series of selected avatar character"
+        },
+        "privacy": {
+          "type": "object",
+          "description": "Profile visibility and watch activity privacy settings"
+        },
+        "favouriteAnime": {
+          "type": "array",
+          "description": "Curated favourite anime list (max 12)"
+        },
+        "stats": {
+          "type": "object",
+          "description": "Aggregated anime watch statistics"
+        },
+        "recentActivity": {
+          "type": "array",
+          "description": "Recent anime episode watch summary for public profile"
         },
         "migrationCompleted": {
           "type": "boolean",
@@ -67,6 +107,51 @@
         }
       },
       "required": ["uid", "displayName", "email", "photoURL", "provider", "createdAt", "updatedAt"]
+    },
+    "PublicProfile": {
+      "title": "PublicProfile",
+      "description": "PII-free public profile projection stored under /publicProfiles/{uid}",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "username": { "type": "string", "maxLength": 24 },
+        "displayName": { "type": "string", "maxLength": 120 },
+        "bio": { "type": "string", "maxLength": 300 },
+        "photoURL": { "type": "string", "maxLength": 1024 },
+        "avatarCharacterId": { "type": "number" },
+        "avatarCharacterName": { "type": "string", "maxLength": 120 },
+        "avatarAnimeName": { "type": "string", "maxLength": 200 },
+        "role": {
+          "type": "string",
+          "enum": ["member", "mod", "admin", "owner", "user"],
+          "maxLength": 32
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active", "disabled", "banned"],
+          "maxLength": 32
+        },
+        "privacy": { "type": "object" },
+        "favouriteAnime": { "type": "array" },
+        "stats": { "type": "object" },
+        "recentActivity": { "type": "array" },
+        "joinedAt": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "username", "displayName", "role", "status", "privacy", "createdAt", "updatedAt"]
+    },
+    "UsernameReservation": {
+      "title": "UsernameReservation",
+      "description": "Unique lowercase username reservation stored under /usernames/{username}",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "maxLength": 128 },
+        "username": { "type": "string", "maxLength": 24 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "username", "createdAt", "updatedAt"]
     },
     "WatchlistItem": {
       "title": "WatchlistItem",
@@ -456,6 +541,14 @@
     "/streamingLogs/{logId}": {
       "schema": "StreamingMonitorLog",
       "description": "Real streaming health check and error logs"
+    },
+    "/publicProfiles/{uid}": {
+      "schema": "PublicProfile",
+      "description": "PII-free public profile projection keyed by Firebase UID"
+    },
+    "/usernames/{username}": {
+      "schema": "UsernameReservation",
+      "description": "Unique username handle reservations keyed by lowercase username"
     }
   }
 }

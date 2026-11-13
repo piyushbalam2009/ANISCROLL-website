@@ -22,9 +22,11 @@ import {
   LogOut,
   UserPlus,
   Shield,
+  Users,
 } from 'lucide-react';
 import { HoshikaAnimeItem } from '@/types/anime';
 import { useAuth } from '@/hooks/useAuth';
+import { RoleBadge } from '@/components/ui/RoleBadge';
 
 interface FloatingHeaderProps {
   collapsed: boolean;
@@ -36,7 +38,7 @@ export function FloatingHeader({
   onOpenMobile,
 }: FloatingHeaderProps) {
   const router = useRouter();
-  const { user, profile, isAdmin, signOutUser } = useAuth();
+  const { user, profile, effectiveRole, isAdmin, signOutUser } = useAuth();
 
   // Search State
   const [query, setQuery] = useState('');
@@ -463,7 +465,7 @@ export function FloatingHeader({
                   alt={displayName}
                   fill
                   sizes="40px"
-                  className="object-cover"
+                  className="object-cover object-top"
                   fallback={<span>{initials}</span>}
                 />
               ) : user ? (
@@ -475,21 +477,26 @@ export function FloatingHeader({
 
             {/* Profile Quick Menu */}
             {isProfileOpen && (
-              <div className="absolute right-0 top-full mt-2 w-60 rounded-2xl bg-[#0D0D0D]/95 backdrop-blur-2xl border border-[#292929] shadow-2xl py-2 z-50 text-xs animate-in fade-in zoom-in-95 duration-150 divide-y divide-[#202020]">
+              <div className="absolute right-0 top-full mt-2 w-64 rounded-2xl bg-[#0D0D0D]/95 backdrop-blur-2xl border border-[#292929] shadow-2xl py-2 z-50 text-xs animate-in fade-in zoom-in-95 duration-150 divide-y divide-[#202020]">
                 {user ? (
                   <>
-                    <div className="px-4 py-3">
-                      <div className="font-semibold text-white truncate">
-                        {displayName}
+                    <div className="px-4 py-3 space-y-1.5">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-semibold text-white truncate">
+                          {displayName}
+                        </span>
+                        <RoleBadge role={effectiveRole} size="xs" />
                       </div>
+                      {profile?.username && (
+                        <div className="text-[11px] font-mono text-[#A0A0A0] truncate">
+                          @{profile.username}
+                        </div>
+                      )}
                       {email && (
-                        <div className="text-[11px] text-[#707070] truncate mt-0.5">
+                        <div className="text-[11px] text-[#707070] truncate">
                           {email}
                         </div>
                       )}
-                      <div className="inline-block mt-1.5 text-[10px] font-mono uppercase px-1.5 py-0.5 rounded bg-white/10 text-white/90">
-                        Cloud Synced
-                      </div>
                     </div>
 
                     <div className="py-1">
@@ -510,6 +517,14 @@ export function FloatingHeader({
                       >
                         <User size={15} />
                         <span>Account Profile</span>
+                      </Link>
+                      <Link
+                        href="/members"
+                        onClick={() => setIsProfileOpen(false)}
+                        className="flex items-center gap-2.5 px-4 py-2 text-white/80 hover:text-white hover:bg-white/10 transition-colors"
+                      >
+                        <Users size={15} />
+                        <span>Community Members</span>
                       </Link>
                       <Link
                         href="/watchlist"

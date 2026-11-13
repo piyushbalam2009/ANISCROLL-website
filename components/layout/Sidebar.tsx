@@ -17,11 +17,14 @@ import {
   History,
   Settings,
   User,
+  Users,
   LogIn,
   LogOut,
   Shield,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
+import { ResilientImage } from '@/components/ui/ResilientImage';
+import { RoleBadge } from '@/components/ui/RoleBadge';
 
 interface SidebarProps {
   collapsed: boolean;
@@ -38,7 +41,7 @@ export function Sidebar({
 }: SidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { user, profile, isAdmin, signOutUser } = useAuth();
+  const { user, profile, effectiveRole, isAdmin, signOutUser } = useAuth();
 
   const mainNav = [
     { label: 'Home', href: '/', icon: Home },
@@ -48,6 +51,7 @@ export function Sidebar({
     { label: 'Recently Updated', href: '/recent', icon: Clock },
     { label: 'Schedule', href: '/schedule', icon: Calendar },
     { label: 'Genres', href: '/genres', icon: Layers },
+    { label: 'Community', href: '/members', icon: Users },
   ];
 
   const libraryNav = [
@@ -72,6 +76,7 @@ export function Sidebar({
     user?.displayName ||
     user?.email?.split('@')[0] ||
     'Profile';
+  const photoURL = profile?.photoURL || user?.photoURL || '';
 
   const navContent = (
     <div className="flex flex-col h-full bg-[#0A0A0A] border-r border-[#292929] select-none">
@@ -248,15 +253,33 @@ export function Sidebar({
             <Link
               href="/profile"
               onClick={onCloseMobile}
-              className={`group relative flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
+              className={`group relative flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm font-medium transition-all ${
                 isActive('/profile')
                   ? 'bg-white text-black font-semibold'
                   : 'text-[#A0A0A0] hover:text-white hover:bg-[#141414]'
               } ${collapsed ? 'justify-center px-0' : ''}`}
               title={collapsed ? displayName : undefined}
             >
-              <User size={19} className="shrink-0" />
-              {!collapsed && <span className="truncate">{displayName}</span>}
+              <div className="relative w-6 h-6 rounded-md overflow-hidden bg-[#141414] border border-white/15 flex items-center justify-center shrink-0">
+                {photoURL ? (
+                  <ResilientImage
+                    src={photoURL}
+                    alt={displayName}
+                    fill
+                    sizes="24px"
+                    className="object-cover object-top"
+                    fallback={<User size={14} />}
+                  />
+                ) : (
+                  <User size={14} />
+                )}
+              </div>
+              {!collapsed && (
+                <div className="flex-1 min-w-0 flex items-center justify-between gap-1.5">
+                  <span className="truncate">{displayName}</span>
+                  <RoleBadge role={effectiveRole} size="xs" showIcon={false} hideMember />
+                </div>
+              )}
               {collapsed && (
                 <div className="hidden md:group-hover:block absolute left-full ml-3 px-2.5 py-1 bg-[#1B1B1B] text-white text-xs rounded-md shadow-lg border border-[#292929] whitespace-nowrap z-50">
                   {displayName}

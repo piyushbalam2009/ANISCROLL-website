@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { ROLE_LABELS } from '@/lib/admin/admin-permissions';
+import { RoleBadge } from '@/components/ui/RoleBadge';
 
 interface AdminSidebarProps {
   mobileOpen: boolean;
@@ -98,7 +99,7 @@ export const ADMIN_NAV_ITEMS = [
 export function AdminSidebar({ mobileOpen, onCloseMobile }: AdminSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { adminRecord, signOutUser } = useAuth();
+  const { adminRecord, effectiveRole, signOutUser } = useAuth();
 
   const isActive = (href: string, exact?: boolean) => {
     if (exact) return pathname === href;
@@ -201,9 +202,7 @@ export function AdminSidebar({ mobileOpen, onCloseMobile }: AdminSidebarProps) {
               <span className="text-xs font-bold text-white truncate">
                 {adminRecord.displayName}
               </span>
-              <span className="px-1.5 py-0.5 rounded bg-white text-black font-mono text-[9px] font-bold uppercase tracking-wider shrink-0">
-                {adminRecord.role}
-              </span>
+              <RoleBadge role={effectiveRole} size="xs" />
             </div>
             <div className="text-[11px] font-mono text-[#707070] truncate mt-0.5">
               {adminRecord.email}

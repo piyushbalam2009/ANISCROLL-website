@@ -236,3 +236,43 @@ export function subscribeToUserCloudData(uid: string): () => void {
     unsubscribers.forEach((unsub) => unsub());
   };
 }
+
+export function buildPublicActivityProjection(
+  watchlist: WatchlistEntry[],
+  history: WatchHistoryEntry[]
+) {
+  const completedCount = watchlist.filter((w) => w.status === 'completed').length;
+  const recentMap = new Map<
+    number,
+    {
+      hoshikaId: number;
+      title: string;
+      coverImage?: string;
+      episodeNumber: number;
+      timestamp: number;
+    }
+  >();
+
+  for (const h of history) {
+    if (!h.hoshikaId || recentMap.has(h.hoshikaId)) continue;
+    recentMap.set(h.hoshikaId, {
+      hoshikaId: h.hoshikaId,
+      title: h.animeTitle || h.title || `Anime #${h.hoshikaId}`,
+      coverImage: h.animeCover || h.coverImage,
+      episodeNumber: h.episodeNumber || 1,
+      timestamp: h.timestamp || Date.now(),
+    });
+    if (recentMap.size >= 8) break;
+  }
+
+  return {
+    stats: {
+      watchedEpisodes: history.length,
+      watchlistCount: watchlist.length,
+      completedCount,
+      updatedAt: Date.now(),
+    },
+    recentActivity: Array.from(recentMap.values()),
+  };
+}
+

@@ -7,13 +7,13 @@ import {
   Menu,
   Search,
   RefreshCw,
-  Shield,
   ExternalLink,
   CheckCircle2,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { getAdminAuthHeaders } from '@/lib/admin/admin-auth';
 import { ADMIN_NAV_ITEMS } from './AdminSidebar';
+import { RoleBadge } from '@/components/ui/RoleBadge';
 
 interface AdminHeaderProps {
   onOpenMobile: () => void;
@@ -22,7 +22,7 @@ interface AdminHeaderProps {
 export function AdminHeader({ onOpenMobile }: AdminHeaderProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { adminRecord } = useAuth();
+  const { adminRecord, effectiveRole } = useAuth();
   const [quickSearch, setQuickSearch] = useState('');
   const [flushing, setFlushing] = useState(false);
   const [flushedNotice, setFlushedNotice] = useState(false);
@@ -130,9 +130,8 @@ export function AdminHeader({ onOpenMobile }: AdminHeaderProps) {
 
         {/* Role Pill */}
         {adminRecord && (
-          <div className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-[#141414] border border-[#292929] text-[11px] font-mono text-white">
-            <Shield size={12} />
-            <span className="uppercase">{adminRecord.role}</span>
+          <div className="hidden xl:flex items-center">
+            <RoleBadge role={effectiveRole} size="md" />
           </div>
         )}
       </div>

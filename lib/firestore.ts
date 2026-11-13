@@ -70,12 +70,38 @@ export function handleFirestoreError(
   throw new Error(JSON.stringify(errInfo));
 }
 
+import {
+  DEFAULT_PRIVACY_SETTINGS,
+  FavouriteAnimeItem,
+  PublicProfileStats,
+  PublicRecentActivityItem,
+  UserPrivacySettings,
+  generateDefaultUsername,
+  sanitizeBio,
+  sanitizeFavouriteAnimeList,
+  sanitizePrivacySettings,
+  sanitizeRecentActivityList,
+} from './profile-privacy';
+import { UserRole, normalizeUserRole } from './roles';
+import { isBootstrappedOwnerIdentity } from './admin/admin-permissions';
+
 export interface CloudUserProfile {
   uid: string;
   displayName: string;
+  username?: string;
+  bio?: string;
   email: string;
   photoURL: string;
+  avatarCharacterId?: number | null;
+  avatarCharacterName?: string | null;
+  avatarAnimeName?: string | null;
   provider: 'password' | 'google';
+  status?: 'active' | 'disabled' | 'banned';
+  role?: UserRole | 'user';
+  privacy?: UserPrivacySettings;
+  favouriteAnime?: FavouriteAnimeItem[];
+  stats?: PublicProfileStats;
+  recentActivity?: PublicRecentActivityItem[];
   migrationCompleted?: boolean;
   createdAt?: Timestamp | null;
   updatedAt?: Timestamp | null;
@@ -90,6 +116,104 @@ function sanitizeString(val: string | undefined | null, maxLen: number, fallback
 
 function sanitizeDocId(id: string | number): string {
   return String(id).replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+}
+
+function formatCreatedAtIso(createdAt: unknown): string {
+  if (typeof createdAt === 'string' && createdAt.trim()) return createdAt;
+  if (createdAt && typeof (createdAt as any).toDate === 'function') {
+    return (createdAt as any).toDate().toISOString();
+  }
+  if (createdAt && typeof (createdAt as any).seconds === 'number') {
+    return new Date((createdAt as any).seconds * 1000).toISOString();
+  }
+  return new Date().toISOString();
+}
+
+export async function ensurePublicProfileSync(
+  profile: CloudUserProfile,
+  authoritativeRole?: UserRole
+): Promise<void> {
+  if (!profile?.uid) return;
+  const pubRef = doc(db, 'publicProfiles', profile.uid);
+  const role: UserRole =
+    authoritativeRole ||
+    (isBootstrappedOwnerIdentity(profile.uid, profile.email)
+      ? 'owner'
+      : normalizeUserRole(profile.role));
+
+  const username =
+    (profile.username && profile.username.trim().toLowerCase()) ||
+    generateDefaultUsername({
+      displayName: profile.displayName,
+      email: profile.email,
+      uid: profile.uid,
+    });
+
+  const privacy = sanitizePrivacySettings(profile.privacy);
+  const basePublic = {
+    uid: profile.uid,
+    username,
+    displayName: sanitizeString(profile.displayName, 120, 'AniScroll Member'),
+    bio: sanitizeBio(profile.bio),
+    photoURL: sanitizeString(profile.photoURL, 1024, ''),
+    avatarCharacterId: profile.avatarCharacterId ?? null,
+    avatarCharacterName: profile.avatarCharacterName ?? null,
+    avatarAnimeName: profile.avatarAnimeName ?? null,
+    status: profile.status || 'active',
+    privacy,
+    favouriteAnime: sanitizeFavouriteAnimeList(profile.favouriteAnime),
+    stats: profile.stats || {
+      watchedEpisodes: 0,
+      watchlistCount: 0,
+      completedCount: 0,
+      updatedAt: Date.now(),
+    },
+    recentActivity: sanitizeRecentActivityList(profile.recentActivity),
+    joinedAt: formatCreatedAtIso(profile.createdAt),
+  };
+
+  try {
+    const [pubSnap, usernameSnap] = await Promise.all([
+      getDoc(pubRef),
+      getDoc(doc(db, 'usernames', username)),
+    ]);
+
+    if (!usernameSnap.exists()) {
+      await setDoc(doc(db, 'usernames', username), {
+        uid: profile.uid,
+        username,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      }).catch(() => {});
+    }
+
+    if (!pubSnap.exists()) {
+      await setDoc(pubRef, {
+        ...basePublic,
+        role,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    } else {
+      await updateDoc(pubRef, {
+        username: basePublic.username,
+        displayName: basePublic.displayName,
+        bio: basePublic.bio,
+        photoURL: basePublic.photoURL,
+        avatarCharacterId: basePublic.avatarCharacterId,
+        avatarCharacterName: basePublic.avatarCharacterName,
+        avatarAnimeName: basePublic.avatarAnimeName,
+        privacy: basePublic.privacy,
+        favouriteAnime: basePublic.favouriteAnime,
+        stats: basePublic.stats,
+        recentActivity: basePublic.recentActivity,
+        joinedAt: basePublic.joinedAt,
+        updatedAt: serverTimestamp(),
+      });
+    }
+  } catch {
+    // Non-fatal: server PATCH /api/profile also syncs publicProfiles
+  }
 }
 
 // 1. USER PROFILE (/users/{uid}/profile/details)
@@ -111,6 +235,7 @@ export async function upsertUserProfileDoc(profile: {
   photoURL?: string | null;
   provider: 'password' | 'google';
   migrationCompleted?: boolean;
+  forcePhotoUpdate?: boolean;
 }): Promise<CloudUserProfile> {
   const path = `users/${profile.uid}/profile/details`;
   const ref = doc(db, 'users', profile.uid, 'profile', 'details');
@@ -128,45 +253,127 @@ export async function upsertUserProfileDoc(profile: {
   try {
     const existingSnap = await getDoc(ref);
     if (!existingSnap.exists()) {
+      const initialRole: UserRole = isBootstrappedOwnerIdentity(
+        profile.uid,
+        safeEmail
+      )
+        ? 'owner'
+        : 'member';
+      const username = generateDefaultUsername({
+        displayName: safeDisplayName,
+        email: safeEmail,
+        uid: profile.uid,
+      });
+
       const createPayload: Record<string, any> = {
         uid: profile.uid,
         displayName: safeDisplayName,
+        username,
+        bio: '',
         email: safeEmail,
         photoURL: safePhotoURL,
         provider: safeProvider,
+        status: 'active',
+        role: initialRole,
+        privacy: { ...DEFAULT_PRIVACY_SETTINGS },
+        favouriteAnime: [],
+        stats: {
+          watchedEpisodes: 0,
+          watchlistCount: 0,
+          completedCount: 0,
+          updatedAt: Date.now(),
+        },
+        recentActivity: [],
         migrationCompleted: Boolean(profile.migrationCompleted),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       };
       await setDoc(ref, createPayload);
-      return {
+
+      const createdProfile: CloudUserProfile = {
         uid: profile.uid,
         displayName: safeDisplayName,
+        username,
+        bio: '',
         email: safeEmail,
         photoURL: safePhotoURL,
         provider: safeProvider,
+        status: 'active',
+        role: initialRole,
+        privacy: { ...DEFAULT_PRIVACY_SETTINGS },
+        favouriteAnime: [],
+        stats: createPayload.stats,
+        recentActivity: [],
         migrationCompleted: Boolean(profile.migrationCompleted),
       };
+      await ensurePublicProfileSync(createdProfile, initialRole);
+      return createdProfile;
     } else {
       const existingData = existingSnap.data() as CloudUserProfile;
+      // Preserve custom anime avatar or existing displayName unless explicitly updated
+      const preservedPhotoURL = profile.forcePhotoUpdate
+        ? safePhotoURL
+        : existingData.photoURL || safePhotoURL || '';
+      const preservedDisplayName = existingData.displayName || safeDisplayName;
+      const ensuredUsername =
+        existingData.username ||
+        generateDefaultUsername({
+          displayName: preservedDisplayName,
+          email: safeEmail,
+          uid: profile.uid,
+        });
+      const ensuredPrivacy = sanitizePrivacySettings(existingData.privacy);
+
       const updatePayload: Record<string, any> = {
-        displayName: safeDisplayName || existingData.displayName,
+        displayName: preservedDisplayName,
+        username: ensuredUsername,
         email: safeEmail || existingData.email,
-        photoURL: safePhotoURL || existingData.photoURL || '',
+        photoURL: preservedPhotoURL,
         provider: safeProvider,
+        privacy: ensuredPrivacy,
         updatedAt: serverTimestamp(),
       };
       if (profile.migrationCompleted !== undefined) {
         updatePayload.migrationCompleted = Boolean(profile.migrationCompleted);
       }
       await updateDoc(ref, updatePayload);
-      return {
+      const merged: CloudUserProfile = {
         ...existingData,
         ...updatePayload,
+        role: isBootstrappedOwnerIdentity(profile.uid, safeEmail)
+          ? 'owner'
+          : normalizeUserRole(existingData.role),
       };
+      await ensurePublicProfileSync(merged);
+      return merged;
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.WRITE, path);
+  }
+}
+
+export async function syncUserActivityProjection(params: {
+  uid: string;
+  stats: PublicProfileStats;
+  recentActivity: PublicRecentActivityItem[];
+}): Promise<void> {
+  if (!params.uid) return;
+  const cleanRecent = sanitizeRecentActivityList(params.recentActivity);
+  try {
+    await Promise.all([
+      updateDoc(doc(db, 'users', params.uid, 'profile', 'details'), {
+        stats: params.stats,
+        recentActivity: cleanRecent,
+        updatedAt: serverTimestamp(),
+      }).catch(() => {}),
+      updateDoc(doc(db, 'publicProfiles', params.uid), {
+        stats: params.stats,
+        recentActivity: cleanRecent,
+        updatedAt: serverTimestamp(),
+      }).catch(() => {}),
+    ]);
+  } catch {
+    // Non-fatal background projection sync
   }
 }
 

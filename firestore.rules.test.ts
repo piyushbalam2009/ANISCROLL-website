@@ -167,6 +167,12 @@ test('firestore.rules file contains all required match blocks and validation blu
   assert.ok(rulesText.includes('isValidContinueWatchingItem'));
   assert.ok(rulesText.includes('isValidWatchHistoryItem'));
   assert.ok(rulesText.includes('isValidUserPreferencesDoc'));
+  assert.ok(rulesText.includes('isValidPublicProfile'));
+  assert.ok(rulesText.includes('isValidUsernameReservation'));
+  assert.ok(rulesText.includes('canAdminModifyTargetRole'));
+  assert.ok(rulesText.includes('expectedCallerRole'));
+  assert.ok(rulesText.includes('match /publicProfiles/{uid}'));
+  assert.ok(rulesText.includes('match /usernames/{username}'));
   assert.ok(rulesText.includes('isValidAdminRecord'));
   assert.ok(rulesText.includes('isValidAnimeArtworkDoc'));
   assert.ok(rulesText.includes('isValidArtworkAuditLog'));

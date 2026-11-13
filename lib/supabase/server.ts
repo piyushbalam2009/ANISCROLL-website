@@ -396,3 +396,167 @@ export async function deleteCustomLogoFromSupabase(
     throw new Error(`Supabase Storage delete failed: ${error.message}`);
   }
 }
+
+export const MAX_USER_AVATAR_BYTES = 2 * 1024 * 1024; // 2 MB
+export const ALLOWED_AVATAR_MIME_TYPES = new Set([
+  'image/png',
+  'image/webp',
+  'image/jpeg',
+]);
+
+export interface ValidatedAvatarImageInfo {
+  valid: boolean;
+  error?: string;
+  detectedMimeType?: 'image/png' | 'image/webp' | 'image/jpeg';
+  extension?: 'png' | 'webp' | 'jpg';
+  fileSize?: number;
+}
+
+export function validateAvatarUploadBuffer(params: {
+  buffer: Buffer | Uint8Array;
+  declaredMimeType?: string | null;
+  maxBytes?: number;
+}): ValidatedAvatarImageInfo {
+  const maxBytes = params.maxBytes ?? MAX_USER_AVATAR_BYTES;
+  const bytes =
+    params.buffer instanceof Buffer
+      ? params.buffer
+      : Buffer.from(params.buffer);
+
+  if (!bytes || bytes.byteLength === 0) {
+    return { valid: false, error: 'Uploaded avatar file is empty.' };
+  }
+  if (bytes.byteLength > maxBytes) {
+    return {
+      valid: false,
+      error: `Avatar exceeds maximum size of ${(maxBytes / (1024 * 1024)).toFixed(0)} MB.`,
+    };
+  }
+  if (bytes.byteLength < 12) {
+    return { valid: false, error: 'Invalid or corrupted image file.' };
+  }
+
+  const headText = bytes
+    .subarray(0, Math.min(512, bytes.byteLength))
+    .toString('utf8')
+    .toLowerCase();
+  if (
+    headText.includes('<svg') ||
+    headText.includes('<!doctype html') ||
+    headText.includes('<html') ||
+    headText.includes('<script') ||
+    headText.includes('<?xml')
+  ) {
+    return {
+      valid: false,
+      error: 'SVG, HTML, XML, or script payloads are not allowed.',
+    };
+  }
+
+  const isPng =
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a;
+
+  const isWebp =
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50;
+
+  const isJpeg = bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+
+  if (!isPng && !isWebp && !isJpeg) {
+    return {
+      valid: false,
+      error: 'Only genuine PNG, WebP, or JPEG images are allowed.',
+    };
+  }
+
+  if (params.declaredMimeType) {
+    const cleanMime = params.declaredMimeType.trim().toLowerCase();
+    const normalizedMime = cleanMime === 'image/jpg' ? 'image/jpeg' : cleanMime;
+    if (normalizedMime && !ALLOWED_AVATAR_MIME_TYPES.has(normalizedMime)) {
+      return {
+        valid: false,
+        error: `Unsupported image type "${cleanMime}". Use PNG, WebP, or JPEG.`,
+      };
+    }
+  }
+
+  const detectedMimeType: 'image/png' | 'image/webp' | 'image/jpeg' = isPng
+    ? 'image/png'
+    : isWebp
+    ? 'image/webp'
+    : 'image/jpeg';
+  const extension: 'png' | 'webp' | 'jpg' = isPng
+    ? 'png'
+    : isWebp
+    ? 'webp'
+    : 'jpg';
+
+  return {
+    valid: true,
+    detectedMimeType,
+    extension,
+    fileSize: bytes.byteLength,
+  };
+}
+
+export function buildSupabaseAvatarStoragePath(params: {
+  uid: string;
+  extension: 'png' | 'webp' | 'jpg';
+  uniqueId?: string;
+}): string {
+  const safeUid = params.uid.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 128);
+  const rawUuid = params.uniqueId || crypto.randomUUID();
+  const safeUuid = rawUuid.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 48);
+  return `user-avatars/${safeUid}/${safeUuid}.${params.extension}`;
+}
+
+export async function uploadUserAvatarToSupabase(params: {
+  buffer: Buffer;
+  mimeType: 'image/png' | 'image/webp' | 'image/jpeg';
+  storagePath: string;
+}): Promise<SupabaseUploadResult> {
+  const { bucket } = getSupabaseStorageConfig();
+  const supabase = getSupabaseServerClient();
+
+  const { error: uploadError } = await supabase.storage
+    .from(bucket)
+    .upload(params.storagePath, params.buffer, {
+      contentType: params.mimeType,
+      upsert: false,
+      cacheControl: '31536000',
+    });
+
+  if (uploadError) {
+    throw new Error(`Supabase Storage upload failed: ${uploadError.message}`);
+  }
+
+  const { data: publicUrlData } = supabase.storage
+    .from(bucket)
+    .getPublicUrl(params.storagePath);
+
+  if (!publicUrlData?.publicUrl) {
+    await supabase.storage.from(bucket).remove([params.storagePath]).catch(() => {});
+    throw new Error('Failed to retrieve public URL from Supabase Storage.');
+  }
+
+  return {
+    storageProvider: 'supabase',
+    storageBucket: bucket,
+    storagePath: params.storagePath,
+    publicUrl: publicUrlData.publicUrl,
+  };
+}
+

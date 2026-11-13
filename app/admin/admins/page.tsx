@@ -24,6 +24,9 @@ import {
   removeAdminRecord,
   saveAdminRecord,
 } from '@/lib/admin/admin-firestore';
+import { getAdminAuthHeaders } from '@/lib/admin/admin-auth';
+import { adminRoleToUserRole } from '@/lib/roles';
+import { RoleBadge } from '@/components/ui/RoleBadge';
 
 const PERMISSION_KEYS: { key: keyof AdminPermissions; label: string }[] = [
   { key: 'manageAdmins', label: 'Manage Admins' },
@@ -59,6 +62,31 @@ export default function AdminManagementPage() {
     setTimeout(() => setToast(null), 3500);
   };
 
+  const syncUserRoleProjection = async (
+    uid: string,
+    adminRole: AdminRole | 'member',
+    email: string,
+    displayName: string
+  ) => {
+    try {
+      const headers = await getAdminAuthHeaders();
+      await fetch('/api/admin/users', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          action: 'set_role',
+          uid,
+          role:
+            adminRole === 'member' ? 'member' : adminRoleToUserRole(adminRole),
+          email,
+          displayName,
+        }),
+      });
+    } catch {
+      // Non-fatal fallback sync
+    }
+  };
+
   const loadAdmins = useCallback(async () => {
     setLoading(true);
     try {
@@ -89,6 +117,12 @@ export default function AdminManagementPage() {
         permissions: { ...DEFAULT_ROLE_PERMISSIONS[newRole] },
         status: 'active',
       });
+      await syncUserRoleProjection(
+        saved.uid,
+        newRole,
+        saved.email,
+        saved.displayName
+      );
       setAdmins((prev) => {
         const exists = prev.some((a) => a.uid === saved.uid);
         if (exists) return prev.map((a) => (a.uid === saved.uid ? saved : a));
@@ -124,6 +158,12 @@ export default function AdminManagementPage() {
         permissions: { ...DEFAULT_ROLE_PERMISSIONS[role] },
         status: target.status,
       });
+      await syncUserRoleProjection(
+        target.uid,
+        role,
+        target.email,
+        target.displayName
+      );
       setAdmins((prev) => prev.map((a) => (a.uid === saved.uid ? saved : a)));
       showToast(`Updated ${target.email} role to ${role.toUpperCase()}.`);
     } catch (err) {
@@ -169,6 +209,12 @@ export default function AdminManagementPage() {
 
     try {
       await removeAdminRecord(target.uid, target.email);
+      await syncUserRoleProjection(
+        target.uid,
+        'member',
+        target.email,
+        target.displayName
+      );
       setAdmins((prev) => prev.filter((a) => a.uid !== target.uid));
       showToast(`Revoked administrator access for ${target.email}.`);
     } catch (err) {
@@ -336,9 +382,7 @@ export default function AdminManagementPage() {
                       <span className="text-sm font-bold text-white">
                         {adm.displayName}
                       </span>
-                      <span className="px-2 py-0.5 rounded bg-white text-black font-mono text-[10px] font-bold uppercase">
-                        {adm.role}
-                      </span>
+                      <RoleBadge role={adminRoleToUserRole(adm.role)} size="sm" />
                       <span className="px-2 py-0.5 rounded bg-black border border-[#292929] font-mono text-[10px] text-[#A0A0A0] uppercase">
                         {adm.status}
                       </span>

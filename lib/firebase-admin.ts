@@ -193,6 +193,285 @@ export async function fetchFirestoreDocumentRest(
 
 export const fetchFirestoreDocumentServer = fetchFirestoreDocumentRest;
 
+/**
+ * Lists documents in a Firestore collection using the Admin SDK if available or REST API fallback.
+ */
+export async function listFirestoreCollectionRest(
+  collectionPath: string,
+  pageSize = 100,
+  idToken?: string
+): Promise<Array<{ id: string; data: Record<string, any> }>> {
+  const adminApp = getFirebaseAdminApp();
+  if (adminApp) {
+    try {
+      const adminDb = getFirestore(adminApp, DATABASE_ID);
+      const snap = await adminDb.collection(collectionPath).limit(pageSize).get();
+      return snap.docs.map((d) => ({ id: d.id, data: d.data() || {} }));
+    } catch {
+      // Fallback to REST below
+    }
+  }
+
+  if (!PROJECT_ID) return [];
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      PROJECT_ID
+    )}/databases/${encodeURIComponent(
+      DATABASE_ID
+    )}/documents/${collectionPath}?pageSize=${Math.min(300, Math.max(1, pageSize))}`;
+
+    const headers: Record<string, string> = {
+      Accept: 'application/json',
+    };
+    if (idToken) {
+      headers.Authorization = `Bearer ${idToken}`;
+    }
+
+    const res = await fetch(url, {
+      method: 'GET',
+      headers,
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+
+    if (!res.ok) return [];
+    const payload = await res.json();
+    const docs = Array.isArray(payload?.documents) ? payload.documents : [];
+    return docs.map((rawDoc: any) => {
+      const nameParts = String(rawDoc.name || '').split('/');
+      const id = nameParts[nameParts.length - 1] || '';
+      return {
+        id,
+        data: parseFirestoreRestFields(rawDoc.fields || {}),
+      };
+    });
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Queries /publicProfiles satisfying Firestore security rule constraints
+ * (privacy.profileVisibility == 'public' | 'members').
+ */
+export async function queryPublicProfilesRest(
+  visibilities: Array<'public' | 'members'>,
+  pageSize = 120,
+  idToken?: string
+): Promise<Array<{ id: string; data: Record<string, any> }>> {
+  const uniqueVis = Array.from(new Set(visibilities));
+  if (uniqueVis.length === 0) return [];
+
+  const adminApp = getFirebaseAdminApp();
+  if (adminApp) {
+    try {
+      const adminDb = getFirestore(adminApp, DATABASE_ID);
+      const snap = await adminDb
+        .collection('publicProfiles')
+        .where('privacy.profileVisibility', 'in', uniqueVis)
+        .limit(pageSize)
+        .get();
+      return snap.docs.map((d) => ({ id: d.id, data: d.data() || {} }));
+    } catch {
+      // Fallback to REST below
+    }
+  }
+
+  if (!PROJECT_ID) return [];
+
+  const runSingleVisibility = async (
+    visibility: 'public' | 'members'
+  ): Promise<Array<{ id: string; data: Record<string, any> }>> => {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 5000);
+    try {
+      const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+        PROJECT_ID
+      )}/databases/${encodeURIComponent(DATABASE_ID)}/documents:runQuery`;
+
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        Accept: 'application/json',
+      };
+      if (idToken) {
+        headers.Authorization = `Bearer ${idToken}`;
+      }
+
+      const res = await fetch(url, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          structuredQuery: {
+            from: [{ collectionId: 'publicProfiles' }],
+            where: {
+              fieldFilter: {
+                field: { fieldPath: 'privacy.profileVisibility' },
+                op: 'EQUAL',
+                value: { stringValue: visibility },
+              },
+            },
+            limit: Math.min(300, Math.max(1, pageSize)),
+          },
+        }),
+        cache: 'no-store',
+        signal: controller.signal,
+      });
+
+      if (!res.ok) return [];
+      const rows = await res.json();
+      if (!Array.isArray(rows)) return [];
+      const out: Array<{ id: string; data: Record<string, any> }> = [];
+      for (const row of rows) {
+        if (!row?.document?.name) continue;
+        const nameParts = String(row.document.name).split('/');
+        const id = nameParts[nameParts.length - 1] || '';
+        out.push({
+          id,
+          data: parseFirestoreRestFields(row.document.fields || {}),
+        });
+      }
+      return out;
+    } catch {
+      return [];
+    } finally {
+      clearTimeout(timeout);
+    }
+  };
+
+  const results = await Promise.all(uniqueVis.map(runSingleVisibility));
+  const merged = new Map<string, { id: string; data: Record<string, any> }>();
+  for (const list of results) {
+    for (const item of list) {
+      if (item.id && !merged.has(item.id)) {
+        merged.set(item.id, item);
+      }
+    }
+  }
+  return Array.from(merged.values());
+}
+
+/**
+ * Runs a collectionGroup query via Admin SDK or Firestore REST API.
+ */
+export async function runCollectionGroupQueryRest(
+  collectionId: string,
+  pageSize = 200,
+  idToken?: string
+): Promise<Array<{ id: string; path: string; data: Record<string, any> }>> {
+  const adminApp = getFirebaseAdminApp();
+  if (adminApp) {
+    try {
+      const adminDb = getFirestore(adminApp, DATABASE_ID);
+      const snap = await adminDb
+        .collectionGroup(collectionId)
+        .limit(pageSize)
+        .get();
+      return snap.docs.map((d) => ({
+        id: d.id,
+        path: d.ref.path,
+        data: d.data() || {},
+      }));
+    } catch {
+      // Fallback to REST below
+    }
+  }
+
+  if (!PROJECT_ID) return [];
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  try {
+    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      PROJECT_ID
+    )}/databases/${encodeURIComponent(DATABASE_ID)}/documents:runQuery`;
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    };
+    if (idToken) {
+      headers.Authorization = `Bearer ${idToken}`;
+    }
+
+    const res = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        structuredQuery: {
+          from: [{ collectionId, allDescendants: true }],
+          limit: Math.min(300, Math.max(1, pageSize)),
+        },
+      }),
+      cache: 'no-store',
+      signal: controller.signal,
+    });
+
+    if (!res.ok) return [];
+    const rows = await res.json();
+    if (!Array.isArray(rows)) return [];
+    const out: Array<{ id: string; path: string; data: Record<string, any> }> = [];
+    for (const row of rows) {
+      if (!row?.document?.name) continue;
+      const fullPath = String(row.document.name);
+      const nameParts = fullPath.split('/');
+      const id = nameParts[nameParts.length - 1] || '';
+      out.push({
+        id,
+        path: fullPath,
+        data: parseFirestoreRestFields(row.document.fields || {}),
+      });
+    }
+    return out;
+  } catch {
+    return [];
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+/**
+ * Deletes a Firestore document via Admin SDK or REST API fallback.
+ */
+export async function deleteFirestoreDocumentServer(params: {
+  collectionPath: string;
+  docId: string;
+  idToken?: string;
+}): Promise<boolean> {
+  const adminApp = getFirebaseAdminApp();
+  if (adminApp) {
+    try {
+      const adminDb = getFirestore(adminApp, DATABASE_ID);
+      await adminDb.collection(params.collectionPath).doc(params.docId).delete();
+      return true;
+    } catch {
+      // Fall through to REST
+    }
+  }
+
+  if (!PROJECT_ID || !params.idToken) return false;
+  try {
+    const url = `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
+      PROJECT_ID
+    )}/databases/${encodeURIComponent(
+      DATABASE_ID
+    )}/documents/${params.collectionPath}/${encodeURIComponent(params.docId)}`;
+
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        Authorization: `Bearer ${params.idToken}`,
+      },
+      cache: 'no-store',
+    });
+    return res.ok || res.status === 404;
+  } catch {
+    return false;
+  }
+}
+
 export function parseFirestoreRestValue(valObj: Record<string, any>): any {
   if (!valObj || typeof valObj !== 'object') return null;
   if ('stringValue' in valObj) return valObj.stringValue;

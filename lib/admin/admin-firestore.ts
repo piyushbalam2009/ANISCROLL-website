@@ -188,11 +188,12 @@ export interface StreamingMonitorLogEntry {
 export interface AdminManagedUserRecord {
   uid: string;
   displayName: string;
+  username?: string;
   email: string;
   photoURL: string;
   provider: 'password' | 'google';
   status: 'active' | 'disabled' | 'banned';
-  role: 'user' | 'admin' | 'owner';
+  role: 'member' | 'mod' | 'admin' | 'owner' | 'user';
   migrationCompleted?: boolean;
   createdAt?: unknown;
   updatedAt?: unknown;
@@ -998,12 +999,13 @@ export async function listManagedUsers(): Promise<AdminManagedUserRecord[]> {
         if (d && d.uid && d.email) {
           users.push({
             uid: d.uid,
-            displayName: d.displayName || 'AniScroll User',
+            displayName: d.displayName || 'AniScroll Member',
+            username: d.username || '',
             email: d.email,
             photoURL: d.photoURL || '',
             provider: d.provider || 'password',
             status: d.status || 'active',
-            role: d.role || 'user',
+            role: d.role || 'member',
             migrationCompleted: d.migrationCompleted,
             createdAt: d.createdAt,
             updatedAt: d.updatedAt,

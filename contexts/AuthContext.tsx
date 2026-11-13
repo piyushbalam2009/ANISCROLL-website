@@ -1,10 +1,19 @@
 'use client';
 
-import React, { createContext, useEffect, useState, useCallback } from 'react';
+import React, {
+  createContext,
+  useEffect,
+  useState,
+  useCallback,
+  useMemo,
+} from 'react';
 import { onAuthStateChanged, updateProfile, User } from 'firebase/auth';
 import { auth } from '@/lib/firebase';
 import {
   CloudUserProfile,
+  ensurePublicProfileSync,
+  getUserProfileDoc,
+  syncUserActivityProjection,
   upsertUserProfileDoc,
 } from '@/lib/firestore';
 import {
@@ -15,6 +24,7 @@ import {
   logoutUser,
 } from '@/lib/auth';
 import {
+  buildPublicActivityProjection,
   migrateLocalDataToFirestore,
   subscribeToUserCloudData,
 } from '@/lib/sync';
@@ -26,12 +36,29 @@ import {
   buildOwnerAdminRecord,
   isBootstrappedOwnerIdentity,
 } from '@/lib/admin/admin-permissions';
+import { resolveEffectiveUserRole, UserRole } from '@/lib/roles';
+import { FavouriteAnimeItem, UserPrivacySettings } from '@/lib/profile-privacy';
+import { getWatchHistory, getWatchlist } from '@/lib/storage';
+
+export interface ProfileUpdatePatch {
+  displayName?: string;
+  username?: string;
+  bio?: string;
+  photoURL?: string;
+  avatarCharacterId?: number | null;
+  avatarCharacterName?: string | null;
+  avatarAnimeName?: string | null;
+  privacy?: UserPrivacySettings;
+  favouriteAnime?: FavouriteAnimeItem[];
+}
 
 export interface AuthContextValue {
   user: User | null;
   profile: CloudUserProfile | null;
   adminRecord: AdminRecord | null;
+  effectiveRole: UserRole;
   isAdmin: boolean;
+  isModerator: boolean;
   loading: boolean;
   adminLoading: boolean;
   signUpWithEmail: (
@@ -44,6 +71,8 @@ export interface AuthContextValue {
   resetPassword: (email: string) => Promise<void>;
   signOutUser: () => Promise<void>;
   updateUserDisplayName: (displayName: string) => Promise<void>;
+  updateUserProfile: (patch: ProfileUpdatePatch) => Promise<CloudUserProfile>;
+  refreshProfile: () => Promise<void>;
   refreshAdminRecord: () => Promise<void>;
 }
 
@@ -58,6 +87,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState<boolean>(true);
   const [adminLoading, setAdminLoading] = useState<boolean>(true);
 
+  const effectiveRole: UserRole = useMemo(
+    () =>
+      resolveEffectiveUserRole({
+        uid: user?.uid || profile?.uid,
+        email: user?.email || profile?.email,
+        profileRole: profile?.role,
+        adminRecord,
+      }),
+    [user?.uid, user?.email, profile?.uid, profile?.email, profile?.role, adminRecord]
+  );
+
   const refreshAdminRecord = useCallback(async () => {
     const currentUser = auth.currentUser;
     if (!currentUser) {
@@ -66,6 +106,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
     const resolved = await resolveClientAdminRecord(currentUser);
     setAdminRecord(resolved);
+  }, []);
+
+  const refreshProfile = useCallback(async () => {
+    const currentUser = auth.currentUser;
+    if (!currentUser) {
+      setProfile(null);
+      return;
+    }
+    const fresh = await getUserProfileDoc(currentUser.uid).catch(() => null);
+    if (fresh) {
+      setProfile(fresh);
+    }
   }, []);
 
   useEffect(() => {
@@ -124,13 +176,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           resolveClientAdminRecord(firebaseUser),
         ]);
 
+        const computedRole = resolveEffectiveUserRole({
+          uid: firebaseUser.uid,
+          email: firebaseUser.email,
+          profileRole: cloudProfile.role,
+          adminRecord: resolvedAdmin,
+        });
+
+        await ensurePublicProfileSync(cloudProfile, computedRole);
+
         if (isMounted) {
-          setProfile(cloudProfile);
+          setProfile({ ...cloudProfile, role: computedRole });
           setAdminRecord(resolvedAdmin);
           setAdminLoading(false);
         }
 
         await migrateLocalDataToFirestore(firebaseUser.uid, cloudProfile);
+
+        // Project initial watchlist/history stats into publicProfiles
+        const proj = buildPublicActivityProjection(
+          getWatchlist(),
+          getWatchHistory()
+        );
+        syncUserActivityProjection({
+          uid: firebaseUser.uid,
+          ...proj,
+        }).catch(() => {});
 
         if (isMounted) {
           unsubCloudData = subscribeToUserCloudData(firebaseUser.uid);
@@ -155,6 +226,43 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
     };
   }, []);
+
+  // Keep public activity stats updated when watchlist or watch history updates
+  useEffect(() => {
+    if (!user?.uid) return;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+
+    const scheduleSync = () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        const proj = buildPublicActivityProjection(
+          getWatchlist(),
+          getWatchHistory()
+        );
+        syncUserActivityProjection({
+          uid: user.uid,
+          ...proj,
+        }).catch(() => {});
+        setProfile((prev) =>
+          prev
+            ? {
+                ...prev,
+                stats: proj.stats,
+                recentActivity: proj.recentActivity,
+              }
+            : prev
+        );
+      }, 1200);
+    };
+
+    window.addEventListener('aniscroll_watchlist_updated', scheduleSync);
+    window.addEventListener('aniscroll_history_updated', scheduleSync);
+    return () => {
+      if (timer) clearTimeout(timer);
+      window.removeEventListener('aniscroll_watchlist_updated', scheduleSync);
+      window.removeEventListener('aniscroll_history_updated', scheduleSync);
+    };
+  }, [user?.uid]);
 
   const signUpWithEmail = useCallback(
     async (displayName: string, email: string, password: string) => {
@@ -204,28 +312,72 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setAdminRecord(null);
   }, []);
 
-  const updateUserDisplayName = useCallback(
-    async (displayName: string) => {
+  const updateUserProfile = useCallback(
+    async (patch: ProfileUpdatePatch): Promise<CloudUserProfile> => {
       const currentUser = auth.currentUser;
-      if (!currentUser) return;
-      const cleanName = displayName.trim();
-      if (!cleanName) return;
+      if (!currentUser) {
+        throw new Error('Authentication required to update profile.');
+      }
 
-      await updateProfile(currentUser, { displayName: cleanName });
-      const isGoogle = currentUser.providerData.some(
-        (p) => p.providerId === 'google.com'
-      );
-      const updatedProfile = await upsertUserProfileDoc({
-        uid: currentUser.uid,
-        displayName: cleanName,
-        email: currentUser.email || 'user@aniscroll.app',
-        photoURL: currentUser.photoURL || '',
-        provider: isGoogle ? 'google' : 'password',
+      const token = await currentUser.getIdToken();
+      const res = await fetch('/api/profile', {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(patch),
       });
-      setProfile(updatedProfile);
+
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok || !data?.profile) {
+        throw new Error(data?.error || 'Failed to update profile.');
+      }
+
+      // Sync Firebase Auth profile displayName/photoURL when applicable
+      const authPatch: { displayName?: string; photoURL?: string } = {};
+      if (patch.displayName && data.profile.displayName) {
+        authPatch.displayName = data.profile.displayName;
+      }
+      if (patch.photoURL !== undefined) {
+        authPatch.photoURL = data.profile.photoURL || '';
+      }
+      if (Object.keys(authPatch).length > 0) {
+        await updateProfile(currentUser, authPatch).catch(() => {});
+      }
+
+      const updated: CloudUserProfile = data.profile;
+      setProfile(updated);
+      if (typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('aniscroll_profile_updated', { detail: updated })
+        );
+      }
+      return updated;
     },
     []
   );
+
+  const updateUserDisplayName = useCallback(
+    async (displayName: string) => {
+      const cleanName = displayName.trim();
+      if (!cleanName) return;
+      await updateUserProfile({ displayName: cleanName });
+    },
+    [updateUserProfile]
+  );
+
+  const isAdmin = Boolean(
+    adminRecord &&
+      adminRecord.status === 'active' &&
+      (effectiveRole === 'owner' ||
+        effectiveRole === 'admin' ||
+        effectiveRole === 'mod')
+  );
+  const isModerator =
+    effectiveRole === 'mod' ||
+    effectiveRole === 'admin' ||
+    effectiveRole === 'owner';
 
   return (
     <AuthContext.Provider
@@ -233,7 +385,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         user,
         profile,
         adminRecord,
-        isAdmin: Boolean(adminRecord && adminRecord.status === 'active'),
+        effectiveRole,
+        isAdmin,
+        isModerator,
         loading,
         adminLoading,
         signUpWithEmail,
@@ -242,6 +396,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         resetPassword,
         signOutUser,
         updateUserDisplayName,
+        updateUserProfile,
+        refreshProfile,
         refreshAdminRecord,
       }}
     >
@@ -249,3 +405,4 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     </AuthContext.Provider>
   );
 }
+
