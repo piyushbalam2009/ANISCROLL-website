@@ -206,8 +206,14 @@ export function EpisodeSection({
     }
   }, [normalizedAnimeId, initialEpisodes, totalEpisodes]);
 
+  const prevTotalEpisodesRef = useRef(totalEpisodes || 0);
+
   // Sync initialEpisodes into episodesMap when server props update without triggering extra renders
   useEffect(() => {
+    if (totalEpisodes && totalEpisodes > prevTotalEpisodesRef.current) {
+      prevTotalEpisodesRef.current = totalEpisodes;
+      attemptedBatchesRef.current.clear();
+    }
     if (initialEpisodes && initialEpisodes.length > 0) {
       cacheEpisodes(normalizedAnimeId, initialEpisodes, {
         language: 'sub',
@@ -223,9 +229,18 @@ export function EpisodeSection({
         let changed = false;
         const next = new Map(prev);
         for (const ep of initialEpisodes) {
-          if (ep && typeof ep.number === 'number' && !next.has(ep.number)) {
-            next.set(ep.number, ep);
-            changed = true;
+          if (ep && typeof ep.number === 'number') {
+            const existing = next.get(ep.number);
+            if (
+              !existing ||
+              existing.title !== ep.title ||
+              existing.thumbnail !== ep.thumbnail ||
+              existing.synopsis !== ep.synopsis ||
+              existing.filler !== ep.filler
+            ) {
+              next.set(ep.number, ep);
+              changed = true;
+            }
           }
         }
         return changed ? next : prev;
@@ -332,9 +347,18 @@ export function EpisodeSection({
               let changed = false;
               const next = new Map(prev);
               for (const ep of cached) {
-                if (ep && typeof ep.number === 'number' && !next.has(ep.number)) {
-                  next.set(ep.number, ep);
-                  changed = true;
+                if (ep && typeof ep.number === 'number') {
+                  const existing = next.get(ep.number);
+                  if (
+                    !existing ||
+                    existing.title !== ep.title ||
+                    existing.thumbnail !== ep.thumbnail ||
+                    existing.synopsis !== ep.synopsis ||
+                    existing.filler !== ep.filler
+                  ) {
+                    next.set(ep.number, ep);
+                    changed = true;
+                  }
                 }
               }
               return changed ? next : prev;

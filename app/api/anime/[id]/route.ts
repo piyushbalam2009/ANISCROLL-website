@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getHoshikaAnime } from '@/lib/hoshika';
+import { appCache } from '@/lib/cache';
 
 export async function GET(
   req: NextRequest,
@@ -10,8 +11,17 @@ export async function GET(
     return NextResponse.json({ ok: false, error: 'Anime ID is required' }, { status: 400 });
   }
 
+  const { searchParams } = new URL(req.url);
+  const locale = searchParams.get('locale') || 'en';
+  const forceRefresh = searchParams.get('refresh') === 'true';
+
+  const cacheKey = `hoshika:/anime/${id}?locale=${locale}`;
+  const preState = forceRefresh
+    ? 'REFRESH'
+    : appCache.getEntryState(cacheKey).status.toUpperCase();
+
   try {
-    const anime = await getHoshikaAnime(id);
+    const anime = await getHoshikaAnime(id, locale, forceRefresh);
     if (!anime) {
       return NextResponse.json({ ok: false, error: 'Anime not found' }, { status: 404 });
     }
@@ -19,7 +29,10 @@ export async function GET(
       { ok: true, anime },
       {
         headers: {
-          'Cache-Control': 'public, s-maxage=1800, stale-while-revalidate=3600',
+          'Cache-Control': forceRefresh
+            ? 'no-store, max-age=0'
+            : 'public, s-maxage=180, stale-while-revalidate=600',
+          'X-Cache-Status': preState === 'FRESH' ? 'HIT' : preState,
         },
       }
     );

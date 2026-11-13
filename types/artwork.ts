@@ -168,6 +168,7 @@ export interface AnimeArtworkResult {
   hasEnglishLogo?: boolean;
   hasJapaneseLogo?: boolean;
   reviewed?: boolean;
+  overrideUpdatedAt?: string | number | null;
   diagnostics?: ArtworkResolutionDiagnostics;
 }
 

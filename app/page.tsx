@@ -7,8 +7,8 @@ import { HomeHeroCarousel, HeroSlideItem } from '@/components/anime/HomeHeroCaro
 import { AnimeGrid } from '@/components/anime/AnimeGrid';
 import { ContinueWatchingRow } from '@/components/anime/ContinueWatchingRow';
 
-// Revalidate home page every 10 minutes
-export const revalidate = 600;
+// Revalidate home page every 3 minutes
+export const revalidate = 180;
 
 export default async function HomePage() {
   const [homeData, topAnime] = await Promise.all([

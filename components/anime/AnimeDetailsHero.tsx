@@ -55,6 +55,7 @@ export function AnimeDetailsHero({
   const [subscribed, setSubscribed] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [logoError, setLogoError] = useState(false);
+  const [posterError, setPosterError] = useState(false);
   const [candidateIndex, setCandidateIndex] = useState(0);
 
   const artwork = useRealtimeArtworkOverride(
@@ -66,6 +67,10 @@ export function AnimeDetailsHero({
   useEffect(() => {
     setLogoError(false);
   }, [artwork?.logoUrl, anime.shortId]);
+
+  useEffect(() => {
+    setPosterError(false);
+  }, [artwork?.posterUrl, anime.coverImage, anime.shortId]);
 
   useEffect(() => {
     setCandidateIndex(0);
@@ -274,21 +279,34 @@ export function AnimeDetailsHero({
       {/* 2. Hero Content Container: Left Poster + Right Information */}
       <div className="relative z-20 w-full max-w-[1600px] mx-auto h-full px-6 sm:px-10 md:px-14 lg:px-16 flex flex-col md:flex-row items-center gap-8 md:gap-12 lg:gap-16 justify-center md:justify-start">
         {/* Left Side: Anime Poster (Aspect 2:3, ~325px wide on desktop) */}
-        {anime.coverImage && (
-          <div className="w-full max-w-[200px] sm:max-w-[240px] md:w-[240px] lg:w-[325px] flex-shrink-0 aspect-[2/3] relative rounded-2xl overflow-hidden shadow-2xl shadow-black ring-1 ring-white/15 group">
-            <Image
-              src={anime.coverImage}
-              alt={`${title} poster`}
-              fill
-              priority
-              sizes="(min-width: 1024px) 325px, (min-width: 768px) 240px, 200px"
-              className="object-cover transition-transform duration-500 group-hover:scale-105"
-              referrerPolicy="no-referrer"
-            />
-            {/* Subtle gloss highlight on edge */}
-            <div className="absolute inset-0 pointer-events-none rounded-2xl ring-1 ring-inset ring-white/10" />
-          </div>
-        )}
+        {(() => {
+          const primaryPoster =
+            !posterError && artwork?.posterUrl
+              ? artwork.posterUrl
+              : anime.coverImage;
+          if (!primaryPoster) return null;
+          return (
+            <div className="w-full max-w-[200px] sm:max-w-[240px] md:w-[240px] lg:w-[325px] flex-shrink-0 aspect-[2/3] relative rounded-2xl overflow-hidden shadow-2xl shadow-black ring-1 ring-white/15 group">
+              <Image
+                key={`${anime.shortId}-${primaryPoster}`}
+                src={primaryPoster}
+                alt={`${title} poster`}
+                fill
+                priority
+                sizes="(min-width: 1024px) 325px, (min-width: 768px) 240px, 200px"
+                className="object-cover transition-transform duration-500 group-hover:scale-105"
+                referrerPolicy="no-referrer"
+                onError={() => {
+                  if (!posterError && artwork?.posterUrl && anime.coverImage && artwork.posterUrl !== anime.coverImage) {
+                    setPosterError(true);
+                  }
+                }}
+              />
+              {/* Subtle gloss highlight on edge */}
+              <div className="absolute inset-0 pointer-events-none rounded-2xl ring-1 ring-inset ring-white/10" />
+            </div>
+          );
+        })()}
 
         {/* Right Side: Anime Content & Actions */}
         <div className="flex-1 min-w-0 flex flex-col justify-center space-y-3.5 lg:space-y-4 text-left w-full">
@@ -304,6 +322,7 @@ export function AnimeDetailsHero({
                 className={`relative w-full ${logoSizingClasses} filter drop-shadow-[0_4px_24px_rgba(0,0,0,0.95)] transition-transform duration-300`}
               >
                 <Image
+                  key={`${anime.shortId}-${artwork!.logoUrl!}`}
                   src={artwork!.logoUrl!}
                   alt={title}
                   fill

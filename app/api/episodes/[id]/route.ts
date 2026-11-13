@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getHoshikaAnime, getHoshikaEpisodes, getAllHoshikaEpisodes } from '@/lib/hoshika';
+import { appCache } from '@/lib/cache';
 import { resolveAnimeIds } from '@/lib/id-mapper';
 import { getAniListById } from '@/lib/anilist';
 import { resolveServerAudioAvailability } from '@/lib/aniscroll';
@@ -42,11 +43,23 @@ export async function GET(
       ? Math.floor((targetEpisode - 1) / 50) * 50
       : undefined;
   const limit = Math.min(100, Math.max(1, parseInt(searchParams.get('limit') || '50', 10) || 50));
+  const forceRefresh = searchParams.get('refresh') === 'true';
+
+  const safeHoshikaLimit = Math.min(50, Math.max(1, limit));
+  const epParams = new URLSearchParams({ locale, limit: String(safeHoshikaLimit) });
+  if (after !== undefined && after > 0) epParams.append('after', String(after));
+  const episodeCacheKey = all
+    ? `hoshika:all_episodes:${trimmedId}:${locale}:max=25`
+    : `hoshika:/anime/${trimmedId}/episodes?${epParams.toString()}`;
+  const preState = forceRefresh
+    ? 'REFRESH'
+    : appCache.getEntryState(episodeCacheKey).status.toUpperCase();
+  const cacheStatusHeader = preState === 'FRESH' ? 'HIT' : preState;
 
   try {
     if (all) {
       const [result, idMap] = await Promise.all([
-        getAllHoshikaEpisodes(trimmedId, locale),
+        getAllHoshikaEpisodes(trimmedId, locale, 25, forceRefresh),
         checkAvailability ? resolveAnimeIds(trimmedId).catch(() => null) : Promise.resolve(null),
       ]);
 
@@ -83,17 +96,19 @@ export async function GET(
         },
         {
           headers: {
-            'Cache-Control': hasValidEpisodes
-              ? 'public, s-maxage=300, stale-while-revalidate=600'
-              : 'no-store, no-cache, must-revalidate',
+            'Cache-Control':
+              hasValidEpisodes && !forceRefresh
+                ? 'public, s-maxage=120, stale-while-revalidate=300'
+                : 'no-store, no-cache, must-revalidate',
+            'X-Cache-Status': cacheStatusHeader,
           },
         }
       );
     }
 
     const [result, anime] = await Promise.all([
-      getHoshikaEpisodes(trimmedId, locale, after, limit),
-      includeAnime ? getHoshikaAnime(trimmedId, locale) : Promise.resolve(null),
+      getHoshikaEpisodes(trimmedId, locale, after, limit, forceRefresh),
+      includeAnime ? getHoshikaAnime(trimmedId, locale, forceRefresh) : Promise.resolve(null),
     ]);
 
     let anilistCover: string | null = null;
@@ -165,9 +180,11 @@ export async function GET(
       },
       {
         headers: {
-          'Cache-Control': hasValidEpisodes
-            ? 'public, s-maxage=300, stale-while-revalidate=600'
-            : 'no-store, no-cache, must-revalidate',
+          'Cache-Control':
+            hasValidEpisodes && !forceRefresh
+              ? 'public, s-maxage=120, stale-while-revalidate=300'
+              : 'no-store, no-cache, must-revalidate',
+          'X-Cache-Status': cacheStatusHeader,
         },
       }
     );

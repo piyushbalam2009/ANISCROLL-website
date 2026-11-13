@@ -19,7 +19,7 @@ import {
   setCachedArtworkOverride,
 } from '@/lib/artwork/artwork-cache';
 import { resolveAnimeLogoSelection } from '@/lib/artwork/logo-selector';
-import { getHoshikaAnime } from '@/lib/hoshika';
+import { getHoshikaAnime, invalidateHoshikaCacheForAnime } from '@/lib/hoshika';
 import { resolveAnimeIds } from '@/lib/id-mapper';
 import {
   CustomLogoItem,
@@ -311,7 +311,10 @@ export async function POST(req: NextRequest) {
       updatedAt: nowMs,
     } as any);
     invalidateCachedArtwork(hoshikaId);
+    invalidateHoshikaCacheForAnime(hoshikaId, true);
     try {
+      revalidatePath('/');
+      revalidatePath('/explore');
       revalidatePath(`/anime/${hoshikaId}`);
       revalidatePath(`/admin/artwork/${hoshikaId}`);
     } catch {

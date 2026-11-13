@@ -229,18 +229,25 @@ export function recordUpstreamMetric(metric: Omit<UpstreamCallMetric, 'timestamp
     recentMetrics.shift();
   }
 
-  // Log slow external requests (>1200ms) or errors in dev mode
+  // Log upstream API failures or slow external requests (>1200ms) in server/dev mode
   if (
-    isDevLoggingEnabled &&
+    typeof process !== 'undefined' &&
     process.env.NODE_ENV !== 'test' &&
-    (!entry.fromCache && (entry.durationMs > 1200 || entry.errorCode))
+    !entry.fromCache
   ) {
-    const tag = entry.errorCode ? `ERROR:${entry.errorCode}` : 'SLOW';
-    console.info(
-      `[PerfMonitor][${tag}] ${entry.provider} ${entry.endpoint} - ${Math.round(
-        entry.durationMs
-      )}ms (status=${entry.status ?? 'none'})`
-    );
+    if (entry.errorCode) {
+      console.warn(
+        `[AniScroll][Upstream API failure] provider="${entry.provider}" endpoint="${entry.endpoint}" code="${entry.errorCode}" status=${entry.status ?? 'none'} duration=${Math.round(
+          entry.durationMs
+        )}ms`
+      );
+    } else if (isDevLoggingEnabled && entry.durationMs > 1200) {
+      console.info(
+        `[PerfMonitor][SLOW] ${entry.provider} ${entry.endpoint} - ${Math.round(
+          entry.durationMs
+        )}ms (status=${entry.status ?? 'none'})`
+      );
+    }
   }
 }
 

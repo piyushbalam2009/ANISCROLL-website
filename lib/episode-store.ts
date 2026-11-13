@@ -51,7 +51,7 @@ interface CachedEpisodeQueryEntry {
   expiresAt: number;
 }
 
-export const EPISODE_CACHE_TTL_MS = 10 * 60 * 1000; // 10 minutes
+export const EPISODE_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 export const MAX_EPISODE_RETRY_ATTEMPTS = 5;
 
 // Retry schedule for attempts 2..5 (Attempt 1 is immediate: 0ms)
@@ -111,7 +111,7 @@ function hydrateFromSessionStorage(): void {
           episodeQueryCache.set(entry.key, entry);
           completedBatchKeys.add(entry.key);
           cacheEpisodes(entry.animeId, entry.items);
-          if (entry.nextAfter === null || entry.items.length < 50) {
+          if (entry.nextAfter === null && entry.total > 0 && entry.items.length < 50) {
             exhaustedPaginationAnime.add(`${entry.animeId}:${entry.language}`);
           }
           if (entry.availability) {
@@ -385,7 +385,17 @@ export function cacheEpisodes(
   completedBatchKeys.add(queryKey);
   retryExhaustedState.delete(queryKey);
 
-  if (options?.nextAfter === null || items.length < limit) {
+  const existingExhausted = exhaustedPaginationAnime.has(`${key}:${lang}`);
+  if (
+    options?.nextAfter !== null &&
+    (items.length >= limit || (options?.total !== undefined && options.total > map.size))
+  ) {
+    exhaustedPaginationAnime.delete(`${key}:${lang}`);
+  } else if (
+    !existingExhausted &&
+    (options?.nextAfter === null || items.length < limit) &&
+    (options?.total === undefined || map.size >= options.total)
+  ) {
     exhaustedPaginationAnime.add(`${key}:${lang}`);
   }
 
@@ -412,10 +422,17 @@ export function isRangeCached(
   const key = String(animeId);
   const after = start > 1 ? start - 1 : undefined;
   const batchKey = buildEpisodeCacheKey({ animeId: key, language, limit: 50, after });
+  const now = Date.now();
 
   const cachedQuery = episodeQueryCache.get(batchKey);
-  if (cachedQuery && cachedQuery.expiresAt > Date.now() && cachedQuery.items.length > 0) {
-    return true;
+  if (cachedQuery) {
+    if (cachedQuery.expiresAt > now && cachedQuery.items.length > 0) {
+      return true;
+    }
+    // Entry expired — evict it and allow re-fetch instead of getting stuck in completedBatchKeys
+    episodeQueryCache.delete(batchKey);
+    completedBatchKeys.delete(batchKey);
+    exhaustedPaginationAnime.delete(`${key}:${language}`);
   }
 
   if (completedBatchKeys.has(batchKey)) {
@@ -694,6 +711,9 @@ export async function fetchEpisodeBatchWithMeta(
         if (after !== undefined && after > 0) {
           params.append('after', String(after));
         }
+        if (options.forceRefresh) {
+          params.append('refresh', 'true');
+        }
 
         let res: Response | null = null;
         let retryAfterHeader: string | null = null;
@@ -872,18 +892,23 @@ export async function fetchEpisodeBatch(
  */
 export async function fetchAllAnimeEpisodes(
   animeId: string | number,
-  language: AudioLanguage = 'sub'
+  language: AudioLanguage = 'sub',
+  forceRefresh: boolean = false
 ): Promise<HoshikaEpisodeItem[]> {
   hydrateFromSessionStorage();
   const key = String(animeId).trim();
   const requestKey = buildEpisodeCacheKey({ animeId: key, language, all: true });
 
-  const cachedQuery = episodeQueryCache.get(requestKey);
-  if (cachedQuery && cachedQuery.expiresAt > Date.now() && cachedQuery.items.length > 0) {
-    return cachedQuery.items;
+  if (forceRefresh) {
+    episodeQueryCache.delete(requestKey);
+  } else {
+    const cachedQuery = episodeQueryCache.get(requestKey);
+    if (cachedQuery && cachedQuery.expiresAt > Date.now() && cachedQuery.items.length > 0) {
+      return cachedQuery.items;
+    }
   }
 
-  const existing = inFlightBatchRequests.get(requestKey);
+  const existing = !forceRefresh ? inFlightBatchRequests.get(requestKey) : undefined;
   if (existing) {
     const res = await existing;
     return res.items;
@@ -891,7 +916,8 @@ export async function fetchAllAnimeEpisodes(
 
   const promise = (async (): Promise<EpisodeBatchResponse> => {
     try {
-      const res = await fetch(`/api/episodes/${key}?all=true&lang=${language}`);
+      const refreshQuery = forceRefresh ? '&refresh=true' : '';
+      const res = await fetch(`/api/episodes/${key}?all=true&lang=${language}${refreshQuery}`);
       if (!res.ok) {
         return {
           ok: false,
@@ -1012,7 +1038,10 @@ export async function resolveEpisodeAvailability(
 
   const avPromise = (async (): Promise<EpisodeAvailabilityResult> => {
     try {
-      const res = await fetchFn(`/api/episodes/${key}?limit=50&checkAvailability=true`);
+      const refreshQuery = options?.forceRefresh ? '&refresh=true' : '';
+      const res = await fetchFn(
+        `/api/episodes/${key}?limit=50&checkAvailability=true${refreshQuery}`
+      );
       if (!res.ok) {
         const cachedEps = getCachedEpisodes(key);
         if (cachedEps.length > 0) {

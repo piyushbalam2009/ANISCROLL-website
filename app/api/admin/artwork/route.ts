@@ -20,6 +20,7 @@ import {
   getHoshikaHome,
   getHoshikaBrowse,
   getHoshikaCatalog,
+  invalidateHoshikaCacheForAnime,
 } from '@/lib/hoshika';
 import {
   resolveAnimeIds,
@@ -295,8 +296,14 @@ async function executeResetToAutomatic(
     updatedAt: Date.now(),
   } as any);
   invalidateCachedArtwork(hoshikaId);
+  invalidateHoshikaCacheForAnime(hoshikaId, true);
 
   try {
+    revalidatePath('/');
+    revalidatePath('/explore');
+    revalidatePath('/trending');
+    revalidatePath('/popular');
+    revalidatePath('/recent');
     revalidatePath(`/anime/${hoshikaId}`);
     revalidatePath(`/admin/artwork/${hoshikaId}`);
   } catch {
@@ -344,10 +351,13 @@ export async function POST(req: NextRequest) {
       const hoshikaId = Number(body?.hoshikaId);
       if (Number.isFinite(hoshikaId) && hoshikaId > 0) {
         invalidateCachedArtwork(hoshikaId);
+        invalidateHoshikaCacheForAnime(hoshikaId, true);
         if (body?.override) {
           setCachedArtworkOverride(hoshikaId, body.override);
         }
         try {
+          revalidatePath('/');
+          revalidatePath('/explore');
           revalidatePath(`/anime/${hoshikaId}`);
           revalidatePath(`/admin/artwork/${hoshikaId}`);
         } catch {
@@ -355,6 +365,7 @@ export async function POST(req: NextRequest) {
         }
       } else {
         invalidateCachedArtwork();
+        invalidateHoshikaCacheForAnime(undefined, true);
       }
       return NextResponse.json({
         ok: true,
@@ -485,8 +496,14 @@ export async function POST(req: NextRequest) {
         updatedAt: Date.now(),
       } as any);
       invalidateCachedArtwork(hoshikaId);
+      invalidateHoshikaCacheForAnime(hoshikaId, true);
 
       try {
+        revalidatePath('/');
+        revalidatePath('/explore');
+        revalidatePath('/trending');
+        revalidatePath('/popular');
+        revalidatePath('/recent');
         revalidatePath(`/anime/${hoshikaId}`);
         revalidatePath(`/admin/artwork/${hoshikaId}`);
       } catch {

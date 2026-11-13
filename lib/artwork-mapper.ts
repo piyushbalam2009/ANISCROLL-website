@@ -15,11 +15,13 @@ import {
   setCachedArtwork,
   getCachedArtworkOverride,
   setCachedArtworkOverride,
+  buildArtworkInputSignature,
 } from './artwork/artwork-cache';
 import { resolveAnimeLogoSelection } from './artwork/logo-selector';
 import { getHoshikaAnime } from './hoshika';
 import { resolveAnimeIds } from './id-mapper';
 import { AnimeArtworkFirestoreDoc } from './admin/admin-firestore';
+import { appCache } from './cache';
 import firebaseAppletConfig from '../firebase-applet-config.json';
 
 // Allowed upstream artwork hosts for the secure image proxy (/api/artwork-image/[encoded])
@@ -105,7 +107,8 @@ export function unwrapProxiedArtworkUrl(url: string | null | undefined): string 
   }
   if (trimmed.startsWith('/api/image-proxy?url=')) {
     try {
-      return decodeURIComponent(trimmed.slice('/api/image-proxy?url='.length));
+      const rawParam = trimmed.slice('/api/image-proxy?url='.length).split('&v=')[0];
+      return decodeURIComponent(rawParam);
     } catch {
       return null;
     }
@@ -113,29 +116,103 @@ export function unwrapProxiedArtworkUrl(url: string | null | undefined): string 
   return trimmed;
 }
 
+export function normalizeArtworkVersionToken(
+  value: unknown
+): string | number | null {
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (/^\d{4}-\d{2}-\d{2}T/.test(trimmed)) {
+      const parsed = Date.parse(trimmed);
+      if (Number.isFinite(parsed)) {
+        return parsed;
+      }
+    }
+    return trimmed;
+  }
+  if (value instanceof Date) {
+    return value.getTime();
+  }
+  if (value && typeof value === 'object') {
+    const maybeTs = value as {
+      toMillis?: () => number;
+      seconds?: number;
+      _seconds?: number;
+    };
+    if (typeof maybeTs.toMillis === 'function') {
+      return maybeTs.toMillis();
+    }
+    if (typeof maybeTs.seconds === 'number') {
+      return Math.round(maybeTs.seconds * 1000);
+    }
+    if (typeof maybeTs._seconds === 'number') {
+      return Math.round(maybeTs._seconds * 1000);
+    }
+  }
+  return null;
+}
+
+/**
+ * Appends a deterministic version token (?v=...) to an artwork URL when an admin override
+ * or content update timestamp is present, ensuring browsers and Next.js <Image> immediately
+ * fetch updated artwork without ever using random per-render cache busters.
+ */
+export function appendArtworkVersion(
+  url: string | null | undefined,
+  versionToken?: string | number | null
+): string | null {
+  if (!url) return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  if (versionToken === null || versionToken === undefined || versionToken === '') {
+    return trimmed;
+  }
+
+  const cleanVersion = String(versionToken)
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]/g, '');
+  if (!cleanVersion) return trimmed;
+
+  // Strip any existing v= parameter before appending the deterministic version
+  const [basePart, queryPart] = trimmed.split('?');
+  if (!queryPart) {
+    return `${basePart}?v=${cleanVersion}`;
+  }
+  const params = new URLSearchParams(queryPart);
+  params.set('v', cleanVersion);
+  return `${basePart}?${params.toString()}`;
+}
+
 /**
  * Rewrites external Fanart.tv and TheTVDB image URLs through our local
  * base64url-encoded proxy route (/api/artwork-image/[encoded]) so hotlink
  * protection and HTTP/2 header restrictions never break browser rendering.
  */
-export function toSafeArtworkUrl(url: string | null | undefined): string | null {
+export function toSafeArtworkUrl(
+  url: string | null | undefined,
+  versionToken?: string | number | null
+): string | null {
   if (!url) return null;
   const trimmed = url.trim();
   if (!trimmed) return null;
 
   // Already a local proxy route
   if (trimmed.startsWith('/api/artwork-image/')) {
-    return trimmed;
+    return versionToken ? appendArtworkVersion(trimmed, versionToken) : trimmed;
   }
 
   // Upgrade legacy /api/image-proxy?url=... URLs if encountered
   if (trimmed.startsWith('/api/image-proxy?url=')) {
     try {
       const legacyTarget = decodeURIComponent(
-        trimmed.slice('/api/image-proxy?url='.length)
+        trimmed.slice('/api/image-proxy?url='.length).split('&v=')[0]
       );
       if (isAllowedArtworkUpstreamUrl(legacyTarget)) {
-        return `/api/artwork-image/${encodeBase64Url(legacyTarget)}`;
+        const proxied = `/api/artwork-image/${encodeBase64Url(legacyTarget)}`;
+        return versionToken ? appendArtworkVersion(proxied, versionToken) : proxied;
       }
     } catch {
       return null;
@@ -148,13 +225,15 @@ export function toSafeArtworkUrl(url: string | null | undefined): string | null 
       parsed.protocol === 'https:' &&
       HOTLINK_PROXIED_HOSTS.has(parsed.hostname.toLowerCase())
     ) {
-      return `/api/artwork-image/${encodeBase64Url(trimmed)}`;
+      // Encode the canonical upstream URL without transient version params
+      const proxied = `/api/artwork-image/${encodeBase64Url(trimmed)}`;
+      return versionToken ? appendArtworkVersion(proxied, versionToken) : proxied;
     }
   } catch {
     // Non-URL or relative path
   }
 
-  return trimmed;
+  return versionToken ? appendArtworkVersion(trimmed, versionToken) : trimmed;
 }
 
 // Known Hoshika shortId / AniList ID -> TVDB ID fast-lookup table
@@ -269,11 +348,6 @@ export function matchTitleToTvdbId(title?: string | null): number | null {
   return null;
 }
 
-const idMapCache = new Map<
-  number,
-  { tvdbId: number | null; tmdbId: number | null; malId: number | null }
->();
-
 // Cache upstream image reachability checks for 30 minutes
 const upstreamReachabilityCache = new Map<
   string,
@@ -288,7 +362,7 @@ export async function verifyUpstreamArtworkUrl(
   urlOrProxy: string | null | undefined
 ): Promise<boolean> {
   if (!urlOrProxy) return false;
-  const rawUrl = unwrapProxiedArtworkUrl(urlOrProxy) || urlOrProxy;
+  const rawUrl = (unwrapProxiedArtworkUrl(urlOrProxy) || urlOrProxy).split('?v=')[0];
   if (!rawUrl || !rawUrl.startsWith('https://')) return false;
 
   const now = Date.now();
@@ -309,6 +383,7 @@ export async function verifyUpstreamArtworkUrl(
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
       },
       signal: controller.signal,
+      cache: 'no-store',
     });
 
     let ok = res.status === 200;
@@ -329,6 +404,7 @@ export async function verifyUpstreamArtworkUrl(
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         },
         signal: controller.signal,
+        cache: 'no-store',
       });
       const getCt = (getRes.headers.get('content-type') || '').toLowerCase();
       ok =
@@ -431,7 +507,12 @@ export async function resolveExternalIdsFromAnilist(
     return { tvdbId: null, tmdbId: null, malId: null };
   }
 
-  const cached = idMapCache.get(anilistId);
+  const cacheKey = `anizip:ext-ids:v2:${anilistId}`;
+  const cached = appCache.get<{
+    tvdbId: number | null;
+    tmdbId: number | null;
+    malId: number | null;
+  }>(cacheKey);
   if (cached) return cached;
 
   const controller = new AbortController();
@@ -441,7 +522,7 @@ export async function resolveExternalIdsFromAnilist(
     const res = await fetch(`https://api.ani.zip/mappings?anilist_id=${anilistId}`, {
       headers: { Accept: 'application/json' },
       signal: controller.signal,
-      next: { revalidate: 86400 },
+      cache: 'no-store',
     });
 
     if (res.ok) {
@@ -456,7 +537,7 @@ export async function resolveExternalIdsFromAnilist(
         tmdbId: Number.isFinite(tmdbId) ? tmdbId : null,
         malId: Number.isFinite(malId) ? malId : null,
       };
-      idMapCache.set(anilistId, result);
+      appCache.set(cacheKey, result, 1800);
       return result;
     }
   } catch {
@@ -468,13 +549,9 @@ export async function resolveExternalIdsFromAnilist(
   return { tvdbId: null, tmdbId: null, malId: null };
 }
 
-const anilistMetaCache = new Map<
-  string,
-  { anilistId: number | null; bannerImage: string | null }
->();
-
 /**
  * Queries AniList GraphQL to resolve anilistId (from malId or title) and fetch bannerImage fallback.
+ * Uses TTL-backed appCache instead of an unbounded non-expiring Map so updated banners are picked up.
  */
 async function resolveAnilistMetadata(params: {
   anilistId?: number | null;
@@ -486,8 +563,13 @@ async function resolveAnilistMetadata(params: {
     return { anilistId: null, bannerImage: null };
   }
 
-  const cacheKey = `${anilistId || ''}:${malId || ''}:${(title || '').toLowerCase()}`;
-  const cached = anilistMetaCache.get(cacheKey);
+  const cacheKey = `anilist:artwork-meta:v2:${anilistId || ''}:${malId || ''}:${(
+    title || ''
+  ).toLowerCase()}`;
+  const cached = appCache.get<{
+    anilistId: number | null;
+    bannerImage: string | null;
+  }>(cacheKey);
   if (cached) return cached;
 
   const controller = new AbortController();
@@ -516,7 +598,7 @@ async function resolveAnilistMetadata(params: {
       },
       body: JSON.stringify({ query, variables }),
       signal: controller.signal,
-      next: { revalidate: 86400 },
+      cache: 'no-store',
     });
 
     if (res.ok) {
@@ -527,7 +609,8 @@ async function resolveAnilistMetadata(params: {
           anilistId: media.id || anilistId || null,
           bannerImage: media.bannerImage || null,
         };
-        anilistMetaCache.set(cacheKey, result);
+        // Cache for 30 minutes if bannerImage is present, or 5 minutes if bannerImage is currently null
+        appCache.set(cacheKey, result, result.bannerImage ? 1800 : 300);
         return result;
       }
     }
@@ -564,8 +647,8 @@ export interface ResolveArtworkParams {
 /**
  * Resolves anime artwork with strict priority order:
  * Backdrops:
- * 1. Verified Fanart.tv landscape background (showbackground / moviebackground / tvthumb / moviethumb)
- * 2. Verified Admin-selected background override
+ * 1. Verified Admin-selected background override (when explicitly configured/reviewed by admin)
+ * 2. Verified Fanart.tv landscape background (showbackground / moviebackground / tvthumb / moviethumb)
  * 3. Hoshika landscape banner (bannerImage)
  * 4. AniList landscape banner (bannerImage)
  * 5. Anime poster (coverImage as last resort)
@@ -589,10 +672,33 @@ export async function resolveAnimeArtwork(
   const bypassCacheFlag =
     typeof input === 'object' && input !== null ? Boolean(input.bypassCache) : false;
 
+  // Only serve immediate fast-path cached artwork if the Firestore override snapshot is ALSO still fresh
+  // AND any caller-provided banner/cover signature matches what was cached.
   if (!bypassCacheFlag && Number.isFinite(initialHoshikaId) && initialHoshikaId > 0) {
-    const cached = getCachedArtwork(initialHoshikaId);
-    if (cached && cached.backgroundUrl) {
-      return cached;
+    const overrideStillFresh =
+      initialHoshikaId === 99999 ||
+      getCachedArtworkOverride(initialHoshikaId) !== undefined;
+
+    if (overrideStillFresh) {
+      const callerInputSig =
+        typeof input === 'object' && input !== null
+          ? buildArtworkInputSignature({
+              hoshikaBanner: input.hoshikaBanner ?? animeItem?.bannerImage,
+              hoshikaCover: input.hoshikaCover ?? animeItem?.coverImage,
+              preferEnglish: input.preferEnglish,
+            })
+          : animeItem
+            ? buildArtworkInputSignature({
+                hoshikaBanner: animeItem.bannerImage,
+                hoshikaCover: animeItem.coverImage,
+                preferEnglish: true,
+              })
+            : undefined;
+
+      const cached = getCachedArtwork(initialHoshikaId, callerInputSig);
+      if (cached && cached.backgroundUrl) {
+        return cached;
+      }
     }
 
     const existingInFlight = inFlightArtworkMap.get(initialHoshikaId);
@@ -606,7 +712,7 @@ export async function resolveAnimeArtwork(
     if ((typeof input === 'number' || typeof input === 'string') && !resolvedItem) {
       const numericId = Number(input);
       if (Number.isFinite(numericId) && numericId > 0 && numericId !== 99999) {
-        resolvedItem = await getHoshikaAnime(numericId, 'en');
+        resolvedItem = await getHoshikaAnime(numericId, 'en', bypassCacheFlag);
       }
     }
 
@@ -643,13 +749,11 @@ export async function resolveAnimeArtwork(
 
     const hoshikaBanner = rawHoshikaBanner || resolvedItem?.bannerImage || null;
     const hoshikaCover = rawHoshikaCover || resolvedItem?.coverImage || null;
-
-    if (!bypassCache) {
-      const cached = getCachedArtwork(hoshikaId);
-      if (cached && cached.backgroundUrl) {
-        return cached;
-      }
-    }
+    const inputSignature = buildArtworkInputSignature({
+      hoshikaBanner,
+      hoshikaCover,
+      preferEnglish,
+    });
 
     let firestoreOverride = bypassCache
       ? undefined
@@ -682,6 +786,15 @@ export async function resolveAnimeArtwork(
     ]);
 
     firestoreOverride = resolvedOverride;
+
+    // Now that Firestore override has been checked/updated (bumping keyVersion if changed),
+    // check if our resolved artwork cache is still valid for this inputSignature
+    if (!bypassCache) {
+      const cached = getCachedArtwork(hoshikaId, inputSignature);
+      if (cached && cached.backgroundUrl) {
+        return cached;
+      }
+    }
 
     if (!anilistId && idRes?.aniListId) {
       anilistId = idRes.aniListId;
@@ -735,9 +848,17 @@ export async function resolveAnimeArtwork(
     tvdbId = canonicalTvdbId || externalIds.tvdbId || tvdbId || null;
     tmdbId = tmdbId || externalIds.tmdbId || null;
 
+    const overrideVersionToken = normalizeArtworkVersionToken(
+      firestoreOverride?.updatedAt
+    );
+
     let backgroundUrl: string | null = null;
     let backgroundSource: AnimeArtworkResult['backgroundSource'] = 'none';
-    let posterUrl: string | null = hoshikaCover || null;
+    let posterUrl: string | null =
+      firestoreOverride?.posterUrl &&
+      !isDeadLegacyFanartUrl(firestoreOverride.posterUrl, hoshikaId)
+        ? toSafeArtworkUrl(firestoreOverride.posterUrl, overrideVersionToken)
+        : hoshikaCover || null;
     let source: AnimeArtworkResult['source'] = 'hoshika';
 
     const isMovie = format === 'MOVIE' && !tvdbId && Boolean(tmdbId);
@@ -747,9 +868,9 @@ export async function resolveAnimeArtwork(
     // Step 4: Fetch Fanart.tv artwork (Movies via TMDB ID or TV via TVDB ID)
     const fanartData =
       isMovie && tmdbId
-        ? await fetchFanartArtwork(tmdbId, 'movies')
+        ? await fetchFanartArtwork(tmdbId, 'movies', bypassCache)
         : tvdbId
-        ? await fetchFanartArtwork(tvdbId, 'tv')
+        ? await fetchFanartArtwork(tvdbId, 'tv', bypassCache)
         : null;
 
     if (fanartData) {
@@ -802,221 +923,259 @@ export async function resolveAnimeArtwork(
       }
     }
 
-  // Merge Fanart.tv available logos with stored Firestore availableLogos, filtering out dead /fanart/tv/ URLs
-  const storedLogos: FanartLogoItem[] = (
-    firestoreOverride?.availableLogos || []
-  )
-    .filter((item) => item?.url && !isDeadLegacyFanartUrl(item.url, hoshikaId))
-    .map((item) => {
-      const lang = (item.lang || item.language || 'en').toLowerCase();
-      const category =
-        item.category ||
-        (item.source === 'fanart_clearlogo' ? 'clearlogo' : 'hdtvlogo');
-      return {
-        ...item,
-        lang,
-        language: lang,
-        category,
-        type: category,
-        provider: 'fanart',
-        proxyUrl: toSafeArtworkUrl(item.url) || item.proxyUrl || item.url,
-      };
+    // Merge Fanart.tv available logos with stored Firestore availableLogos, filtering out dead /fanart/tv/ URLs
+    const storedLogos: FanartLogoItem[] = (
+      firestoreOverride?.availableLogos || []
+    )
+      .filter((item) => item?.url && !isDeadLegacyFanartUrl(item.url, hoshikaId))
+      .map((item) => {
+        const lang = (item.lang || item.language || 'en').toLowerCase();
+        const category =
+          item.category ||
+          (item.source === 'fanart_clearlogo' ? 'clearlogo' : 'hdtvlogo');
+        return {
+          ...item,
+          lang,
+          language: lang,
+          category,
+          type: category,
+          provider: 'fanart',
+          proxyUrl: toSafeArtworkUrl(item.url) || item.proxyUrl || item.url,
+        };
+      });
+
+    const combinedLogosMap = new Map<string, FanartLogoItem>();
+    for (const logo of [
+      ...fanartAvailableLogos.filter((l) => !isDeadLegacyFanartUrl(l.url, hoshikaId)),
+      ...storedLogos,
+    ]) {
+      if (!logo || !logo.url) continue;
+      const key = `${logo.category}:${logo.id || logo.url}:${logo.lang || 'en'}`;
+      if (!combinedLogosMap.has(key)) {
+        combinedLogosMap.set(key, logo);
+      }
+    }
+    const mergedAvailableLogos = Array.from(combinedLogosMap.values());
+
+    const cleanManualLogoUrl =
+      firestoreOverride?.selectedLogoUrl &&
+      !isDeadLegacyFanartUrl(firestoreOverride.selectedLogoUrl, hoshikaId)
+        ? firestoreOverride.selectedLogoUrl
+        : null;
+
+    // Resolve final logo using the 8-step priority selector (respects manual overrides for both TV & Movie)
+    const logoResolution = resolveAnimeLogoSelection({
+      availableLogos: mergedAvailableLogos,
+      customLogos: firestoreOverride?.customLogos || [],
+      hiddenLogoIds: firestoreOverride?.hiddenLogoIds || [],
+      selectionMode: firestoreOverride?.selectionMode || 'auto',
+      manualLogoId: cleanManualLogoUrl ? firestoreOverride?.selectedLogo?.id || null : null,
+      manualLogoUrl: cleanManualLogoUrl,
+      manualLogoSource: cleanManualLogoUrl ? firestoreOverride?.selectedLogoSource : undefined,
+      manualLogoLanguage: firestoreOverride?.selectedLogoLanguage,
+      selectedLogo: cleanManualLogoUrl ? firestoreOverride?.selectedLogo || null : null,
+      logoDisplay: firestoreOverride?.logoDisplay,
+      preferEnglish,
     });
 
-  const combinedLogosMap = new Map<string, FanartLogoItem>();
-  for (const logo of [
-    ...fanartAvailableLogos.filter((l) => !isDeadLegacyFanartUrl(l.url, hoshikaId)),
-    ...storedLogos,
-  ]) {
-    if (!logo || !logo.url) continue;
-    const key = `${logo.category}:${logo.id || logo.url}:${logo.lang || 'en'}`;
-    if (!combinedLogosMap.has(key)) {
-      combinedLogosMap.set(key, logo);
-    }
-  }
-  const mergedAvailableLogos = Array.from(combinedLogosMap.values());
+    let logoUrl: string | null = null;
+    let logoSource: AnimeArtworkResult['logoSource'] =
+      logoResolution.selectedLogoSource === 'typography_fallback'
+        ? 'typography'
+        : logoResolution.selectedLogoSource;
 
-  const cleanManualLogoUrl =
-    firestoreOverride?.selectedLogoUrl &&
-    !isDeadLegacyFanartUrl(firestoreOverride.selectedLogoUrl, hoshikaId)
-      ? firestoreOverride.selectedLogoUrl
-      : null;
-
-  // Resolve final logo using the 8-step priority selector (respects manual overrides for both TV & Movie)
-  const logoResolution = resolveAnimeLogoSelection({
-    availableLogos: mergedAvailableLogos,
-    customLogos: firestoreOverride?.customLogos || [],
-    hiddenLogoIds: firestoreOverride?.hiddenLogoIds || [],
-    selectionMode: firestoreOverride?.selectionMode || 'auto',
-    manualLogoId: cleanManualLogoUrl ? firestoreOverride?.selectedLogo?.id || null : null,
-    manualLogoUrl: cleanManualLogoUrl,
-    manualLogoSource: cleanManualLogoUrl ? firestoreOverride?.selectedLogoSource : undefined,
-    manualLogoLanguage: firestoreOverride?.selectedLogoLanguage,
-    selectedLogo: cleanManualLogoUrl ? firestoreOverride?.selectedLogo || null : null,
-    logoDisplay: firestoreOverride?.logoDisplay,
-    preferEnglish,
-  });
-
-  let logoUrl: string | null = null;
-  let logoSource: AnimeArtworkResult['logoSource'] =
-    logoResolution.selectedLogoSource === 'typography_fallback'
-      ? 'typography'
-      : logoResolution.selectedLogoSource;
-
-  if (logoResolution.logoUrl) {
-    if (logoResolution.selectedLogoSource === 'custom_upload') {
-      logoUrl = logoResolution.logoUrl;
-    } else if (!isDeadLegacyFanartUrl(logoResolution.logoUrl, hoshikaId)) {
-      const isLogoReachable =
-        hoshikaId === 99999
-          ? true
-          : await verifyUpstreamArtworkUrl(logoResolution.logoUrl);
-      if (isLogoReachable) {
-        logoUrl = toSafeArtworkUrl(logoResolution.logoUrl);
+    if (logoResolution.logoUrl) {
+      if (logoResolution.selectedLogoSource === 'custom_upload') {
+        logoUrl = appendArtworkVersion(
+          logoResolution.logoUrl,
+          overrideVersionToken
+        );
+      } else if (!isDeadLegacyFanartUrl(logoResolution.logoUrl, hoshikaId)) {
+        const isLogoReachable =
+          hoshikaId === 99999
+            ? true
+            : await verifyUpstreamArtworkUrl(logoResolution.logoUrl);
+        if (isLogoReachable) {
+          logoUrl = toSafeArtworkUrl(
+            logoResolution.logoUrl,
+            logoResolution.selectionMode === 'manual' ? overrideVersionToken : null
+          );
+        } else {
+          logoUrl = null;
+          logoSource = 'typography';
+        }
       } else {
         logoUrl = null;
         logoSource = 'typography';
       }
-    } else {
-      logoUrl = null;
-      logoSource = 'typography';
     }
-  }
 
-  if (
-    logoResolution.selectionMode === 'manual' ||
-    logoResolution.selectedLogoSource === 'custom_upload'
-  ) {
-    source = 'custom_override';
-  } else if (logoUrl && source === 'hoshika') {
-    source = 'fanart';
-  }
-
-  // Step 5: Build ordered landscape backdropCandidates and select primary backgroundUrl
-  const candidateSet = new Set<string>();
-  const addBackdropCandidate = (url: string | null | undefined) => {
-    if (!url || !isValidBackdropCandidateUrl(url, hoshikaId)) return;
-    const trimmed = url.trim();
-    if (!candidateSet.has(trimmed)) {
-      candidateSet.add(trimmed);
+    if (
+      logoResolution.selectionMode === 'manual' ||
+      logoResolution.selectedLogoSource === 'custom_upload'
+    ) {
+      source = 'custom_override';
+    } else if (logoUrl && source === 'hoshika') {
+      source = 'fanart';
     }
-  };
 
-  // 1. Verified Fanart.tv landscape backgrounds
-  for (const bg of verifiedFanartBackdrops) {
-    addBackdropCandidate(bg);
-  }
+    // Step 5: Build ordered landscape backdropCandidates and select primary backgroundUrl
+    const candidateSet = new Set<string>();
+    const addBackdropCandidate = (url: string | null | undefined) => {
+      if (!url || !isValidBackdropCandidateUrl(url, hoshikaId)) return;
+      const trimmed = url.trim();
+      if (!candidateSet.has(trimmed)) {
+        candidateSet.add(trimmed);
+      }
+    };
 
-  // 2. Firestore admin override backgroundUrl (only if not a dead /fanart/tv/ URL)
-  let verifiedOverrideBackground: string | null = null;
-  if (
-    firestoreOverride?.backgroundUrl &&
-    isValidBackdropCandidateUrl(firestoreOverride.backgroundUrl, hoshikaId)
-  ) {
-    const rawOverrideBg =
-      unwrapProxiedArtworkUrl(firestoreOverride.backgroundUrl) ||
-      firestoreOverride.backgroundUrl;
-    const needsProbe = HOTLINK_PROXIED_HOSTS.has(
-      (() => {
-        try {
-          return new URL(rawOverrideBg).hostname.toLowerCase();
-        } catch {
-          return '';
-        }
-      })()
+    // Firestore admin override backgroundUrl (only if not a dead /fanart/tv/ URL)
+    let verifiedOverrideBackground: string | null = null;
+    if (
+      firestoreOverride?.backgroundUrl &&
+      isValidBackdropCandidateUrl(firestoreOverride.backgroundUrl, hoshikaId)
+    ) {
+      const rawOverrideBg =
+        unwrapProxiedArtworkUrl(firestoreOverride.backgroundUrl) ||
+        firestoreOverride.backgroundUrl;
+      const needsProbe = HOTLINK_PROXIED_HOSTS.has(
+        (() => {
+          try {
+            return new URL(rawOverrideBg).hostname.toLowerCase();
+          } catch {
+            return '';
+          }
+        })()
+      );
+      const overrideOk =
+        !needsProbe ||
+        hoshikaId === 99999 ||
+        (await verifyUpstreamArtworkUrl(rawOverrideBg));
+      if (overrideOk) {
+        verifiedOverrideBackground = toSafeArtworkUrl(
+          firestoreOverride.backgroundUrl,
+          overrideVersionToken
+        );
+      }
+    }
+
+    // If an admin explicitly reviewed/saved a custom backdrop override, prioritize it first
+    const hasExplicitAdminBackdrop = Boolean(
+      verifiedOverrideBackground &&
+        (firestoreOverride?.reviewed ||
+          firestoreOverride?.selectionMode === 'manual')
     );
-    const overrideOk =
-      !needsProbe ||
-      hoshikaId === 99999 ||
-      (await verifyUpstreamArtworkUrl(rawOverrideBg));
-    if (overrideOk) {
-      verifiedOverrideBackground = toSafeArtworkUrl(firestoreOverride.backgroundUrl);
+
+    if (hasExplicitAdminBackdrop && verifiedOverrideBackground) {
       addBackdropCandidate(verifiedOverrideBackground);
-    }
-  }
-
-  // 3. Hoshika landscape banner
-  if (hoshikaBanner && isValidBackdropCandidateUrl(hoshikaBanner, hoshikaId)) {
-    addBackdropCandidate(hoshikaBanner);
-  }
-
-  // 4. AniList landscape banner
-  if (anilistBanner && isValidBackdropCandidateUrl(anilistBanner, hoshikaId)) {
-    addBackdropCandidate(anilistBanner);
-  }
-
-  // 5. Hoshika cover poster (last-resort fallback)
-  if (hoshikaCover && isValidBackdropCandidateUrl(hoshikaCover, hoshikaId)) {
-    addBackdropCandidate(hoshikaCover);
-  }
-
-  if (!backgroundUrl) {
-    if (hoshikaBanner && isValidBackdropCandidateUrl(hoshikaBanner, hoshikaId)) {
-      backgroundUrl = hoshikaBanner;
-      backgroundSource = 'hoshika_banner';
-      if (source === 'hoshika') source = 'hoshika';
-    } else if (anilistBanner && isValidBackdropCandidateUrl(anilistBanner, hoshikaId)) {
-      backgroundUrl = anilistBanner;
-      backgroundSource = 'anilist_banner';
-      if (source === 'hoshika') source = 'anilist';
-    } else if (verifiedOverrideBackground) {
       backgroundUrl = verifiedOverrideBackground;
       backgroundSource = 'fanart';
-    } else if (hoshikaCover && isValidBackdropCandidateUrl(hoshikaCover, hoshikaId)) {
-      backgroundUrl = hoshikaCover;
-      backgroundSource = 'hoshika_cover';
+      source = 'custom_override';
     }
-  }
 
-  const backdropCandidates = Array.from(candidateSet);
+    // 1. Verified Fanart.tv landscape backgrounds
+    for (const bg of verifiedFanartBackdrops) {
+      addBackdropCandidate(bg);
+    }
 
-  const diagnostics: ArtworkResolutionDiagnostics = {
-    requestedId: hoshikaId,
-    resolvedAnilistId: anilistId,
-    resolvedTvdbId: tvdbId,
-    resolvedTmdbId: tmdbId,
-    fanartBackdropCount: verifiedFanartBackdrops.length,
-    hoshikaBannerAvailable: Boolean(hoshikaBanner),
-    anilistBannerAvailable: Boolean(anilistBanner),
-    selectedBackdropUrl: backgroundUrl,
-    selectedBackdropSource: backgroundSource || 'none',
-    candidateCount: backdropCandidates.length,
-  };
+    // 2. Verified override background (if not already added first)
+    if (verifiedOverrideBackground) {
+      addBackdropCandidate(verifiedOverrideBackground);
+    }
 
-  const finalResult: AnimeArtworkResult = {
-    hoshikaId,
-    title: title || titleRomaji || firestoreOverride?.title || 'Unknown Anime',
-    anilistId,
-    malId: externalIds.malId || malId || null,
-    tvdbId,
-    tmdbId,
-    backgroundUrl,
-    backgroundSource,
-    backdropCandidates,
-    logoUrl,
-    logoSource,
-    characterArtUrl: null,
-    posterUrl,
-    source,
-    fetchedAt: Date.now(),
-    logos: logoResolution.availableLogos,
-    availableLogos: logoResolution.availableLogos,
-    selectedLogo: logoResolution.selectedLogo,
-    customLogos: logoResolution.customLogos,
-    hiddenLogoIds: logoResolution.hiddenLogoIds,
-    selectionMode: logoResolution.selectionMode,
-    selectedLogoSource: logoUrl ? logoResolution.selectedLogoSource : 'typography_fallback',
-    selectedLogoLanguage: logoResolution.selectedLogoLanguage,
-    logoDisplay: logoResolution.logoDisplay,
-    logoStatus: logoUrl ? logoResolution.logoStatus : 'typography_fallback',
-    hasEnglishLogo: logoResolution.hasEnglishLogo,
-    hasJapaneseLogo: logoResolution.hasJapaneseLogo,
-    reviewed: firestoreOverride?.reviewed ?? false,
-    diagnostics,
-  };
+    // 3. Hoshika landscape banner
+    if (hoshikaBanner && isValidBackdropCandidateUrl(hoshikaBanner, hoshikaId)) {
+      addBackdropCandidate(hoshikaBanner);
+    }
+
+    // 4. AniList landscape banner
+    if (anilistBanner && isValidBackdropCandidateUrl(anilistBanner, hoshikaId)) {
+      addBackdropCandidate(anilistBanner);
+    }
+
+    // 5. Hoshika cover poster (last-resort fallback)
+    if (hoshikaCover && isValidBackdropCandidateUrl(hoshikaCover, hoshikaId)) {
+      addBackdropCandidate(hoshikaCover);
+    }
+
+    if (!backgroundUrl) {
+      if (hoshikaBanner && isValidBackdropCandidateUrl(hoshikaBanner, hoshikaId)) {
+        backgroundUrl = hoshikaBanner;
+        backgroundSource = 'hoshika_banner';
+        if (source === 'hoshika') source = 'hoshika';
+      } else if (anilistBanner && isValidBackdropCandidateUrl(anilistBanner, hoshikaId)) {
+        backgroundUrl = anilistBanner;
+        backgroundSource = 'anilist_banner';
+        if (source === 'hoshika') source = 'anilist';
+      } else if (verifiedOverrideBackground) {
+        backgroundUrl = verifiedOverrideBackground;
+        backgroundSource = 'fanart';
+      } else if (hoshikaCover && isValidBackdropCandidateUrl(hoshikaCover, hoshikaId)) {
+        backgroundUrl = hoshikaCover;
+        backgroundSource = 'hoshika_cover';
+      }
+    }
+
+    const backdropCandidates = Array.from(candidateSet);
+
+    const diagnostics: ArtworkResolutionDiagnostics = {
+      requestedId: hoshikaId,
+      resolvedAnilistId: anilistId,
+      resolvedTvdbId: tvdbId,
+      resolvedTmdbId: tmdbId,
+      fanartBackdropCount: verifiedFanartBackdrops.length,
+      hoshikaBannerAvailable: Boolean(hoshikaBanner),
+      anilistBannerAvailable: Boolean(anilistBanner),
+      selectedBackdropUrl: backgroundUrl,
+      selectedBackdropSource: backgroundSource || 'none',
+      candidateCount: backdropCandidates.length,
+    };
+
+    if (
+      typeof process !== 'undefined' &&
+      process.env.NODE_ENV !== 'test' &&
+      process.env.ANISCROLL_CACHE_LOG === 'true'
+    ) {
+      console.info(
+        `[AniScroll][Artwork resolver source] hoshikaId=${hoshikaId} source="${source}" backdrop="${backgroundSource}" logo="${logoSource}"`
+      );
+    }
+
+    const finalResult: AnimeArtworkResult = {
+      hoshikaId,
+      title: title || titleRomaji || firestoreOverride?.title || 'Unknown Anime',
+      anilistId,
+      malId: externalIds.malId || malId || null,
+      tvdbId,
+      tmdbId,
+      backgroundUrl,
+      backgroundSource,
+      backdropCandidates,
+      logoUrl,
+      logoSource,
+      characterArtUrl: null,
+      posterUrl,
+      source,
+      fetchedAt: Date.now(),
+      logos: logoResolution.availableLogos,
+      availableLogos: logoResolution.availableLogos,
+      selectedLogo: logoResolution.selectedLogo,
+      customLogos: logoResolution.customLogos,
+      hiddenLogoIds: logoResolution.hiddenLogoIds,
+      selectionMode: logoResolution.selectionMode,
+      selectedLogoSource: logoUrl ? logoResolution.selectedLogoSource : 'typography_fallback',
+      selectedLogoLanguage: logoResolution.selectedLogoLanguage,
+      logoDisplay: logoResolution.logoDisplay,
+      logoStatus: logoUrl ? logoResolution.logoStatus : 'typography_fallback',
+      hasEnglishLogo: logoResolution.hasEnglishLogo,
+      hasJapaneseLogo: logoResolution.hasJapaneseLogo,
+      reviewed: firestoreOverride?.reviewed ?? false,
+      overrideUpdatedAt: overrideVersionToken,
+      diagnostics,
+    };
 
     if (backgroundUrl) {
-      setCachedArtwork(hoshikaId, finalResult);
+      setCachedArtwork(hoshikaId, finalResult, undefined, inputSignature);
     }
     return finalResult;
   })();

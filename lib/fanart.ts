@@ -1,4 +1,5 @@
 import { FanartImage, FanartResponse, FanartLogoItem } from '@/types/artwork';
+import { appCache } from './cache';
 
 const BASE_CURATED_FANART: Record<string, FanartResponse> = {
   // Demon Slayer: Kimetsu no Yaiba (TVDB: 348545)
@@ -575,7 +576,8 @@ export async function fetchFanartArtwork(
         tmdbId?: number | null;
         isMovie?: boolean;
       },
-  typeArg: 'tv' | 'movies' = 'tv'
+  typeArg: 'tv' | 'movies' = 'tv',
+  forceRefresh: boolean = false
 ): Promise<FanartResponse | null> {
   const apiKey = process.env.FANART_API_KEY || process.env.FANART_TV_API_KEY;
 
@@ -600,39 +602,57 @@ export async function fetchFanartArtwork(
     CURATED_FANART_ARTWORK[String(targetId)];
 
   if (apiKey && apiKey !== 'MY_FANART_API_KEY' && apiKey.trim().length > 5) {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 5000);
-    try {
-      const url = `https://webservice.fanart.tv/v3/${endpointType}/${targetId}?api_key=${encodeURIComponent(
-        apiKey.trim()
-      )}`;
-      const res = await fetch(url, {
-        next: { revalidate: 3600 },
-        signal: controller.signal,
-        headers: {
-          Accept: 'application/json',
-        },
-      });
-      if (res.ok) {
-        const data = (await res.json()) as FanartResponse;
-        if (
-          data &&
-          (data.hdtvlogo ||
-            data.showbackground ||
-            data.hdmovielogo ||
-            data.moviebackground ||
-            data.clearlogo ||
-            data.movielogo ||
-            data.tvthumb ||
-            data.moviethumb)
-        ) {
-          return data;
+    const cacheKey = `fanart:v1:${endpointType}:${targetId}`;
+    const fetched = await appCache.getOrSet<FanartResponse | null>(
+      cacheKey,
+      async () => {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 5000);
+        try {
+          const url = `https://webservice.fanart.tv/v3/${endpointType}/${targetId}?api_key=${encodeURIComponent(
+            apiKey.trim()
+          )}`;
+          const res = await fetch(url, {
+            cache: 'no-store',
+            signal: controller.signal,
+            headers: {
+              Accept: 'application/json',
+            },
+          });
+          if (res.ok) {
+            const data = (await res.json()) as FanartResponse;
+            if (
+              data &&
+              (data.hdtvlogo ||
+                data.showbackground ||
+                data.hdmovielogo ||
+                data.moviebackground ||
+                data.clearlogo ||
+                data.movielogo ||
+                data.tvthumb ||
+                data.moviethumb)
+            ) {
+              return data;
+            }
+          }
+          return null;
+        } catch {
+          return null;
+        } finally {
+          clearTimeout(timeout);
         }
+      },
+      {
+        ttlSeconds: 1800,
+        staleWhileRevalidateSeconds: 3600,
+        shouldCache: (val) => val !== null,
+        serveStaleOnError: true,
+        forceRefresh,
       }
-    } catch {
-      // Fall through to curated registry or null
-    } finally {
-      clearTimeout(timeout);
+    );
+
+    if (fetched) {
+      return fetched;
     }
   }
 

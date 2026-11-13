@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getHoshikaAnime } from '@/lib/hoshika';
 import { resolveAnimeArtwork } from '@/lib/artwork-mapper';
-import { getCachedArtworkOverride } from '@/lib/artwork/artwork-cache';
+import {
+  getCachedArtwork,
+  getCachedArtworkOverride,
+  invalidateCachedArtwork,
+} from '@/lib/artwork/artwork-cache';
 
 export async function GET(
   request: NextRequest,
@@ -24,6 +28,15 @@ export async function GET(
   const bypassCache = searchParams.get('refresh') === 'true';
 
   try {
+    if (bypassCache) {
+      invalidateCachedArtwork(hoshikaId);
+    }
+
+    const hadFreshCache =
+      !bypassCache &&
+      getCachedArtworkOverride(hoshikaId) !== undefined &&
+      getCachedArtwork(hoshikaId) !== null;
+
     let title = queryTitle;
     let titleRomaji: string | null = null;
     let anilistId = queryAnilistId ? parseInt(queryAnilistId, 10) : null;
@@ -36,8 +49,8 @@ export async function GET(
 
     let fetchedAnime = null;
 
-    if (!title || (!hoshikaBanner && !hoshikaCover) || !anilistId) {
-      const anime = await getHoshikaAnime(hoshikaId, 'en');
+    if (!title || (!hoshikaBanner && !hoshikaCover) || !anilistId || bypassCache) {
+      const anime = await getHoshikaAnime(hoshikaId, 'en', bypassCache);
       fetchedAnime = anime;
       const override = getCachedArtworkOverride(hoshikaId);
 
@@ -83,12 +96,16 @@ export async function GET(
       fetchedAnime
     );
 
+    const cacheStatus = bypassCache ? 'REFRESH' : hadFreshCache ? 'HIT' : 'MISS';
+
     return NextResponse.json(artwork, {
       status: 200,
       headers: {
         'Cache-Control': bypassCache
           ? 'no-store, max-age=0'
-          : 'public, s-maxage=300, stale-while-revalidate=3600',
+          : 'public, s-maxage=180, stale-while-revalidate=600',
+        'X-Cache-Status': cacheStatus,
+        'X-Artwork-Source': `${artwork.source}:${artwork.backgroundSource}:${artwork.logoSource}`,
       },
     });
   } catch (error) {

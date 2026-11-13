@@ -1,19 +1,70 @@
 import React from 'react';
 import { getHoshikaCatalog, getHoshikaGenres } from '@/lib/hoshika';
 import { ExploreCatalog } from '@/components/explore/ExploreCatalog';
+import {
+  DEFAULT_PER_PAGE,
+  buildPaginatedResponse,
+  parseGenresParam,
+  sanitizePageNumber,
+} from '@/lib/explore-catalog';
 import { Compass } from 'lucide-react';
 
-export const revalidate = 300;
+export const revalidate = 180;
 
-export default async function ExplorePage() {
+interface ExplorePageProps {
+  searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
+}
+
+export default async function ExplorePage({ searchParams }: ExplorePageProps) {
+  const resolvedParams = searchParams ? await searchParams : {};
+
+  const q =
+    typeof resolvedParams.q === 'string' ? resolvedParams.q : undefined;
+  const genreList = parseGenresParam(
+    resolvedParams.genre as string | string[] | undefined
+  );
+  const genre = genreList.length > 0 ? genreList.join(',') : undefined;
+  const format =
+    typeof resolvedParams.format === 'string'
+      ? resolvedParams.format
+      : undefined;
+  const status =
+    typeof resolvedParams.status === 'string'
+      ? resolvedParams.status
+      : undefined;
+  const year =
+    typeof resolvedParams.year === 'string' ? resolvedParams.year : undefined;
+  const season =
+    typeof resolvedParams.season === 'string'
+      ? resolvedParams.season
+      : undefined;
+  const sort =
+    typeof resolvedParams.sort === 'string' ? resolvedParams.sort : 'top';
+  const page = sanitizePageNumber(
+    Array.isArray(resolvedParams.page)
+      ? resolvedParams.page[0]
+      : resolvedParams.page
+  );
+
   const [initialCatalog, genres] = await Promise.all([
-    getHoshikaCatalog({ sort: 'top', page: 1 }).catch(() => ({
-      items: [],
-      total: 0,
-      page: 1,
-      pages: 1,
-      hasMore: false,
-    })),
+    getHoshikaCatalog({
+      q,
+      genre,
+      format,
+      status,
+      year,
+      season,
+      sort,
+      page,
+      perPage: DEFAULT_PER_PAGE,
+    }).catch(() =>
+      buildPaginatedResponse({
+        results: [],
+        currentPage: page,
+        perPage: DEFAULT_PER_PAGE,
+        totalItems: 0,
+      })
+    ),
     getHoshikaGenres(),
   ]);
 
@@ -31,14 +82,12 @@ export default async function ExplorePage() {
         </div>
       </div>
 
-      <React.Suspense fallback={<div className="h-40 bg-[#141414] rounded-2xl animate-pulse" />}>
-        <ExploreCatalog
-          initialItems={initialCatalog.items}
-          initialTotal={initialCatalog.total}
-          initialHasMore={initialCatalog.hasMore}
-          initialPages={initialCatalog.pages}
-          genres={genres}
-        />
+      <React.Suspense
+        fallback={
+          <div className="h-40 bg-[#141414] rounded-2xl animate-pulse" />
+        }
+      >
+        <ExploreCatalog initialData={initialCatalog} genres={genres} />
       </React.Suspense>
     </div>
   );

@@ -23,6 +23,10 @@ export function AnimeCard({ anime, priority = false }: AnimeCardProps) {
     'Unknown Title';
 
   useEffect(() => {
+    setImageError(false);
+  }, [anime.shortId, anime.coverImage]);
+
+  useEffect(() => {
     setInWatchlist(isInWatchlist(anime.shortId));
     const handleUpdate = () => setInWatchlist(isInWatchlist(anime.shortId));
     window.addEventListener('aniscroll_watchlist_updated', handleUpdate);
@@ -48,6 +52,7 @@ export function AnimeCard({ anime, priority = false }: AnimeCardProps) {
       <Link href={`/anime/${anime.shortId}`} className="block relative aspect-[3/4] overflow-hidden bg-[#0A0A0A]">
         {anime.coverImage && !imageError ? (
           <Image
+            key={`${anime.shortId}-${anime.coverImage}`}
             src={anime.coverImage}
             alt={title}
             fill

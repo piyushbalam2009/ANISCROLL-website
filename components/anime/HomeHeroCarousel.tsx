@@ -160,6 +160,7 @@ export function HomeHeroCarousel({
             aria-hidden="true"
           >
             <Image
+              key={nextBackdropUrl}
               src={nextBackdropUrl}
               alt=""
               width={1280}

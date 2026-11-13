@@ -4,8 +4,6 @@ import {
   encodeBase64Url,
 } from '@/lib/artwork-mapper';
 
-export const revalidate = 604800;
-
 export async function GET(req: NextRequest) {
   const rawUrl = req.nextUrl.searchParams.get('url');
   if (!rawUrl || rawUrl.length > 4096) {
@@ -37,5 +35,15 @@ export async function GET(req: NextRequest) {
 
   const encoded = encodeBase64Url(parsedUrl.toString());
   const redirectUrl = new URL(`/api/artwork-image/${encoded}`, req.url);
-  return NextResponse.redirect(redirectUrl, 307);
+  const v = req.nextUrl.searchParams.get('v');
+  const refresh = req.nextUrl.searchParams.get('refresh');
+  if (v) redirectUrl.searchParams.set('v', v);
+  if (refresh) redirectUrl.searchParams.set('refresh', refresh);
+
+  const response = NextResponse.redirect(redirectUrl, 307);
+  response.headers.set(
+    'Cache-Control',
+    refresh === 'true' ? 'no-store, max-age=0' : 'public, max-age=1800, s-maxage=3600'
+  );
+  return response;
 }

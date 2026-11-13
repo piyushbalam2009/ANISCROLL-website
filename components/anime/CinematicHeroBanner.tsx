@@ -150,6 +150,7 @@ export function CinematicHeroBanner({
               className={`relative w-full ${logoSizingClasses} filter drop-shadow-[0_4px_24px_rgba(0,0,0,0.95)] transition-transform duration-300`}
             >
               <Image
+                key={`${anime.shortId}-${artwork!.logoUrl!}`}
                 src={artwork!.logoUrl!}
                 alt={title}
                 fill

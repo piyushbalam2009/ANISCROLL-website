@@ -1,12 +1,39 @@
 import React from 'react';
-import { getHoshikaBrowse } from '@/lib/hoshika';
-import { AnimeGrid } from '@/components/anime/AnimeGrid';
+import { getHoshikaBrowsePaginated } from '@/lib/hoshika';
+import { PaginatedBrowseSection } from '@/components/anime/PaginatedBrowseSection';
+import {
+  DEFAULT_PER_PAGE,
+  buildPaginatedResponse,
+  sanitizePageNumber,
+} from '@/lib/explore-catalog';
 import { Flame } from 'lucide-react';
 
-export const revalidate = 600;
+export const revalidate = 180;
 
-export default async function PopularPage() {
-  const items = await getHoshikaBrowse('top', 'anime');
+interface PopularPageProps {
+  searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
+}
+
+export default async function PopularPage({ searchParams }: PopularPageProps) {
+  const resolvedParams = searchParams ? await searchParams : {};
+  const page = sanitizePageNumber(
+    Array.isArray(resolvedParams.page)
+      ? resolvedParams.page[0]
+      : resolvedParams.page
+  );
+
+  const initialData = await getHoshikaBrowsePaginated(
+    'popular',
+    page,
+    DEFAULT_PER_PAGE
+  ).catch(() =>
+    buildPaginatedResponse({
+      results: [],
+      currentPage: page,
+      perPage: DEFAULT_PER_PAGE,
+      totalItems: 0,
+    })
+  );
 
   return (
     <div className="space-y-6 pb-16">
@@ -22,7 +49,17 @@ export default async function PopularPage() {
         </div>
       </div>
 
-      <AnimeGrid animeList={items} />
+      <React.Suspense
+        fallback={
+          <div className="h-40 bg-[#141414] rounded-2xl animate-pulse" />
+        }
+      >
+        <PaginatedBrowseSection
+          category="popular"
+          initialData={initialData}
+          emptyMessage="No popular anime found on this page."
+        />
+      </React.Suspense>
     </div>
   );
 }

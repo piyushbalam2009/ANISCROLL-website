@@ -8,8 +8,17 @@ const nextConfig: NextConfig = {
   typescript: {
     ignoreBuildErrors: false,
   },
-  // Allow access to anime image CDNs and remote placeholders.
+  // Allow access to anime image CDNs, remote placeholders, and versioned local proxy artwork routes.
   images: {
+    localPatterns: [
+      {
+        pathname: '/api/artwork-image/**',
+      },
+      {
+        pathname: '/**',
+        search: '',
+      },
+    ],
     remotePatterns: [
       {
         protocol: 'https',

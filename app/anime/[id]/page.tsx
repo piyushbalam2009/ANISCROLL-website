@@ -13,7 +13,7 @@ interface AnimePageProps {
   params: Promise<{ id: string }>;
 }
 
-export const revalidate = 600;
+export const revalidate = 180;
 
 export default async function AnimePage({ params }: AnimePageProps) {
   const { id } = await params;

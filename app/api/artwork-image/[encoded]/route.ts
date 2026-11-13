@@ -5,9 +5,53 @@ import {
   decodeBase64Url,
 } from '@/lib/artwork-mapper';
 
-export const revalidate = 604800; // 7 days
 const UPSTREAM_TIMEOUT_MS = 8000;
 const MAX_IMAGE_BYTES = 12 * 1024 * 1024; // 12 MB cap
+const PROXY_CACHE_TTL_MS = 30 * 60 * 1000; // 30 minutes in-memory buffer cache
+const MAX_PROXY_CACHE_ENTRIES = 60;
+
+interface CachedImageBuffer {
+  contentType: string;
+  buffer: Buffer;
+  expiresAt: number;
+}
+
+const proxyImageCache = new Map<string, CachedImageBuffer>();
+
+function getCachedProxyImage(cacheKey: string): CachedImageBuffer | null {
+  const entry = proxyImageCache.get(cacheKey);
+  if (!entry) return null;
+  if (Date.now() > entry.expiresAt) {
+    proxyImageCache.delete(cacheKey);
+    return null;
+  }
+  // Refresh LRU order
+  proxyImageCache.delete(cacheKey);
+  proxyImageCache.set(cacheKey, entry);
+  return entry;
+}
+
+function setCachedProxyImage(
+  cacheKey: string,
+  contentType: string,
+  buffer: Buffer
+): void {
+  // Only cache reasonably sized images (<= 2.5MB) in memory
+  if (buffer.byteLength > 2.5 * 1024 * 1024) return;
+  if (proxyImageCache.has(cacheKey)) {
+    proxyImageCache.delete(cacheKey);
+  } else if (proxyImageCache.size >= MAX_PROXY_CACHE_ENTRIES) {
+    const oldestKey = proxyImageCache.keys().next().value;
+    if (oldestKey !== undefined) {
+      proxyImageCache.delete(oldestKey);
+    }
+  }
+  proxyImageCache.set(cacheKey, {
+    contentType,
+    buffer,
+    expiresAt: Date.now() + PROXY_CACHE_TTL_MS,
+  });
+}
 
 function createUpstreamErrorResponse(status: number, reason: string): NextResponse {
   const httpStatus = status === 404 ? 404 : status === 403 ? 404 : 502;
@@ -19,6 +63,7 @@ function createUpstreamErrorResponse(status: number, reason: string): NextRespon
         'Cache-Control': 'no-store, max-age=0',
         'X-Content-Type-Options': 'nosniff',
         'X-Artwork-Error': reason,
+        'X-Proxy-Cache': 'ERROR',
       },
     }
   );
@@ -49,6 +94,7 @@ function fetchViaHttp1(
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         },
         signal: controller.signal,
+        cache: 'no-store',
       });
 
       const contentType = res.headers.get('content-type') || '';
@@ -193,7 +239,11 @@ function fetchViaHttp2(
   });
 }
 
-async function proxyValidatedArtworkUrl(parsedUrl: URL): Promise<NextResponse> {
+async function proxyValidatedArtworkUrl(
+  parsedUrl: URL,
+  versionParam: string | null,
+  forceRefresh: boolean
+): Promise<NextResponse> {
   if (
     parsedUrl.protocol !== 'https:' ||
     !ALLOWED_ARTWORK_PROXY_HOSTS.has(parsedUrl.hostname.toLowerCase())
@@ -204,15 +254,50 @@ async function proxyValidatedArtworkUrl(parsedUrl: URL): Promise<NextResponse> {
     });
   }
 
+  const targetUrlStr = parsedUrl.toString();
+  const hasVersionToken = Boolean(versionParam && versionParam !== '0');
+  const cacheKey = `${targetUrlStr}::v=${versionParam || '0'}`;
+  const successCacheControl = forceRefresh
+    ? 'no-store, max-age=0'
+    : hasVersionToken
+      ? 'public, max-age=86400, s-maxage=604800, stale-while-revalidate=604800'
+      : 'public, max-age=1800, s-maxage=3600, stale-while-revalidate=86400';
+
+  if (forceRefresh) {
+    for (const key of Array.from(proxyImageCache.keys())) {
+      if (key.startsWith(`${targetUrlStr}::`)) {
+        proxyImageCache.delete(key);
+      }
+    }
+  } else {
+    const cached = getCachedProxyImage(cacheKey);
+    if (cached) {
+      if (process.env.ANISCROLL_CACHE_LOG === 'true') {
+        console.info(
+          `[AniScroll][Image proxy cache status] status=HIT url="${targetUrlStr}"`
+        );
+      }
+      return new NextResponse(new Uint8Array(cached.buffer), {
+        status: 200,
+        headers: {
+          'Content-Type': cached.contentType,
+          'Cache-Control': successCacheControl,
+          'X-Content-Type-Options': 'nosniff',
+          'X-Proxy-Cache': 'HIT',
+        },
+      });
+    }
+  }
+
   try {
     let result: { status: number; contentType: string; buffer: Buffer };
     try {
-      result = await fetchViaHttp2(parsedUrl.toString());
+      result = await fetchViaHttp2(targetUrlStr);
       if (result.status < 200 || result.status >= 300 || result.buffer.length === 0) {
-        result = await fetchViaHttp1(parsedUrl.toString());
+        result = await fetchViaHttp1(targetUrlStr);
       }
     } catch {
-      result = await fetchViaHttp1(parsedUrl.toString());
+      result = await fetchViaHttp1(targetUrlStr);
     }
 
     if (result.status !== 200 || result.buffer.length === 0) {
@@ -230,13 +315,23 @@ async function proxyValidatedArtworkUrl(parsedUrl: URL): Promise<NextResponse> {
       );
     }
 
+    setCachedProxyImage(cacheKey, normalizedType, result.buffer);
+
+    if (process.env.ANISCROLL_CACHE_LOG === 'true') {
+      console.info(
+        `[AniScroll][Image proxy cache status] status=${
+          forceRefresh ? 'REFRESH' : 'MISS'
+        } url="${targetUrlStr}"`
+      );
+    }
+
     return new NextResponse(new Uint8Array(result.buffer), {
       status: 200,
       headers: {
         'Content-Type': normalizedType,
-        'Cache-Control':
-          'public, max-age=604800, stale-while-revalidate=86400, immutable',
+        'Cache-Control': successCacheControl,
         'X-Content-Type-Options': 'nosniff',
+        'X-Proxy-Cache': forceRefresh ? 'REFRESH' : 'MISS',
       },
     });
   } catch (err: any) {
@@ -252,7 +347,7 @@ async function proxyValidatedArtworkUrl(parsedUrl: URL): Promise<NextResponse> {
 }
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ encoded: string }> }
 ) {
   const { encoded } = await params;
@@ -282,5 +377,8 @@ export async function GET(
     });
   }
 
-  return proxyValidatedArtworkUrl(parsedUrl);
+  const versionParam = req.nextUrl.searchParams.get('v');
+  const forceRefresh = req.nextUrl.searchParams.get('refresh') === 'true';
+
+  return proxyValidatedArtworkUrl(parsedUrl, versionParam, forceRefresh);
 }

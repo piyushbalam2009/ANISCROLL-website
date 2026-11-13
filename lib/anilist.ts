@@ -64,6 +64,7 @@ async function executeAniListGraphQL<T>(
       },
       body: JSON.stringify({ query, variables }),
       signal: controller.signal,
+      cache: 'no-store',
     });
 
     const durationMs = Date.now() - startTime;
@@ -176,13 +177,14 @@ const MEDIA_FIELDS_FRAGMENT = `
 export async function searchAniList(
   searchQuery: string,
   format?: string | null,
-  options?: { page?: number; perPage?: number }
+  options?: { page?: number; perPage?: number; forceRefresh?: boolean }
 ): Promise<AniListMedia[]> {
   const trimmedQuery = searchQuery?.trim();
   if (!trimmedQuery) return [];
 
   const page = Math.max(1, options?.page ?? 1);
   const perPage = Math.min(50, Math.max(5, options?.perPage ?? 25));
+  const forceRefresh = Boolean(options?.forceRefresh);
   const normalizedFormat =
     format && VALID_ANILIST_FORMATS.has(format.toUpperCase())
       ? format.toUpperCase()
@@ -192,16 +194,18 @@ export async function searchAniList(
     normalizedFormat || 'ALL'
   }:p${page}:${perPage}`;
 
-  const preState = appCache.getEntryState<AniListMedia[]>(cacheKey);
-  if (preState.status !== 'miss' && preState.value) {
-    recordUpstreamMetric({
-      provider: 'anilist',
-      endpoint: `search:${trimmedQuery.toLowerCase()}`,
-      durationMs: 0,
-      status: 200,
-      fromCache: true,
-      staleRevalidated: preState.status === 'stale',
-    });
+  if (!forceRefresh) {
+    const preState = appCache.getEntryState<AniListMedia[]>(cacheKey);
+    if ((preState.status === 'fresh' || preState.status === 'stale') && preState.value) {
+      recordUpstreamMetric({
+        provider: 'anilist',
+        endpoint: `search:${trimmedQuery.toLowerCase()}`,
+        durationMs: 0,
+        status: 200,
+        fromCache: true,
+        staleRevalidated: preState.status === 'stale',
+      });
+    }
   }
 
   return appCache.getOrSet<AniListMedia[]>(
@@ -243,17 +247,18 @@ export async function searchAniList(
       // Warm per-ID cache for every media item returned by search so subsequent getAniListById(id) calls cost 0ms
       for (const item of mediaList) {
         if (item && typeof item.id === 'number' && item.id > 0) {
-          appCache.set(`anilist:media:v2:${item.id}`, item, 24 * 3600);
+          appCache.set(`anilist:media:v2:${item.id}`, item, 1800);
         }
       }
 
       return mediaList;
     },
     {
-      ttlSeconds: 12 * 3600,
-      staleWhileRevalidateSeconds: 24 * 3600,
+      ttlSeconds: 1800,
+      staleWhileRevalidateSeconds: 3600,
       shouldCache: (list) => Array.isArray(list) && list.length > 0,
-      negativeTtlSeconds: 120,
+      negativeTtlSeconds: 60,
+      forceRefresh,
     }
   );
 }
@@ -266,7 +271,7 @@ export async function searchAniList(
 export async function searchAniListWithFallback(
   searchQuery: string,
   format?: string | null,
-  options?: { fetchSecondPage?: boolean }
+  options?: { fetchSecondPage?: boolean; forceRefresh?: boolean }
 ): Promise<AniListMedia[]> {
   const trimmed = searchQuery?.trim();
   if (!trimmed) return [];
@@ -284,6 +289,7 @@ export async function searchAniListWithFallback(
   const unfilteredResults = await searchAniList(trimmed, undefined, {
     page: 1,
     perPage: 25,
+    forceRefresh: options?.forceRefresh,
   });
   addAll(unfilteredResults);
 
@@ -301,6 +307,7 @@ export async function searchAniListWithFallback(
     const filteredResults = await searchAniList(trimmed, normalizedFormat, {
       page: 1,
       perPage: 25,
+      forceRefresh: options?.forceRefresh,
     });
     addAll(filteredResults);
   }
@@ -309,6 +316,7 @@ export async function searchAniListWithFallback(
     const page2 = await searchAniList(trimmed, undefined, {
       page: 2,
       perPage: 25,
+      forceRefresh: options?.forceRefresh,
     });
     addAll(page2);
   }
@@ -317,21 +325,24 @@ export async function searchAniListWithFallback(
 }
 
 export async function getAniListById(
-  anilistId: number
+  anilistId: number,
+  forceRefresh: boolean = false
 ): Promise<AniListMedia | null> {
   if (!Number.isFinite(anilistId) || anilistId <= 0) return null;
 
   const cacheKey = `anilist:media:v2:${anilistId}`;
-  const preState = appCache.getEntryState<AniListMedia>(cacheKey);
-  if (preState.status !== 'miss' && preState.value) {
-    recordUpstreamMetric({
-      provider: 'anilist',
-      endpoint: `media:${anilistId}`,
-      durationMs: 0,
-      status: 200,
-      fromCache: true,
-      staleRevalidated: preState.status === 'stale',
-    });
+  if (!forceRefresh) {
+    const preState = appCache.getEntryState<AniListMedia>(cacheKey);
+    if ((preState.status === 'fresh' || preState.status === 'stale') && preState.value) {
+      recordUpstreamMetric({
+        provider: 'anilist',
+        endpoint: `media:${anilistId}`,
+        durationMs: 0,
+        status: 200,
+        fromCache: true,
+        staleRevalidated: preState.status === 'stale',
+      });
+    }
   }
 
   return appCache.getOrSet<AniListMedia | null>(
@@ -353,10 +364,11 @@ export async function getAniListById(
       return data?.Media || null;
     },
     {
-      ttlSeconds: 24 * 3600,
-      staleWhileRevalidateSeconds: 48 * 3600,
+      ttlSeconds: 1800,
+      staleWhileRevalidateSeconds: 3600,
       shouldCache: (media) => media !== null && media !== undefined,
-      negativeTtlSeconds: 180,
+      negativeTtlSeconds: 60,
+      forceRefresh,
     }
   );
 }
