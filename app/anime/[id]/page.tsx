@@ -29,7 +29,7 @@ export default async function AnimePage({ params }: AnimePageProps) {
   const totalEpisodeCount =
     episodeData.total || anime.episodes || episodeData.items.length || 0;
 
-  // Kick off ZokoAnime Sub/Dub availability check immediately (returns synchronously if warm, or warms in background)
+  // Return cached Sub/Dub availability synchronously if already warm in server cache (client loads lazily on mount)
   const initialAvailability =
     episodeData.items.length > 0 || totalEpisodeCount > 0
       ? getCachedOrWarmServerAudioAvailability({

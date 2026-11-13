@@ -1,8 +1,9 @@
-import { initializeApp, getApps, cert, App } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
+import type { App } from 'firebase-admin/app';
+import type { Auth } from 'firebase-admin/auth';
+import type { Firestore } from 'firebase-admin/firestore';
 import { NextRequest } from 'next/server';
 import firebaseAppletConfig from '../firebase-applet-config.json';
+import { verifyFirebaseIdTokenWithJose } from './firebase-jwt';
 import {
   AdminRecord,
   DEFAULT_ROLE_PERMISSIONS,
@@ -11,10 +12,14 @@ import {
 } from './admin/admin-permissions';
 
 /**
- * Server-side Firebase Admin initialization, token verification, and Firestore REST persistence.
- * Uses firebase-admin when service account credentials are provided in environment variables,
- * and falls back cleanly to Google Identity Toolkit REST token verification + Firestore REST API
- * with the user's verified Bearer token when running without a service account private key.
+ * Server-side Firebase token verification, Firestore REST persistence, and optional lazy Admin SDK.
+ *
+ * IMPORTANT: Never statically import `firebase-admin/*` at module top level.
+ * `firebase-admin/auth` depends on `jwks-rsa` which calls CommonJS `require('jose')`,
+ * crashing Node 20 runtimes even on routes that never use service-account credentials.
+ * Token verification uses pure ESM `jose` (`verifyFirebaseIdTokenWithJose`) plus Google
+ * Identity Toolkit REST verification, and `firebase-admin/*` is loaded lazily only when
+ * service account credentials are configured.
  */
 
 const PROJECT_ID = (
@@ -33,31 +38,84 @@ const DATABASE_ID = (
   '(default)'
 ).trim();
 
-export function getFirebaseAdminApp(): App | null {
-  const apps = getApps();
-  if (apps.length > 0) {
-    return apps[0]!;
-  }
+let cachedAdminApp: App | null = null;
+let adminLoadDisabled = false;
 
+export function hasFirebaseServiceAccountCredentials(): boolean {
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
-  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY?.trim();
+  return Boolean(clientEmail && privateKey && PROJECT_ID);
+}
 
-  if (clientEmail && privateKey && PROJECT_ID) {
-    try {
-      return initializeApp({
-        credential: cert({
-          projectId: PROJECT_ID,
-          clientEmail,
-          privateKey,
-        }),
-        projectId: PROJECT_ID,
-      });
-    } catch (error) {
-      console.error('Failed to initialize firebase-admin with cert:', error);
-    }
+/**
+ * Returns cached Admin App if already initialized, or null without triggering synchronous CJS require.
+ */
+export function getFirebaseAdminApp(): App | null {
+  return cachedAdminApp;
+}
+
+export async function getFirebaseAdminAppAsync(): Promise<App | null> {
+  if (cachedAdminApp) return cachedAdminApp;
+  if (adminLoadDisabled || !hasFirebaseServiceAccountCredentials()) {
+    return null;
   }
 
-  return null;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL!.trim();
+  const privateKey = process.env.FIREBASE_PRIVATE_KEY!.replace(/\\n/g, '\n');
+
+  try {
+    const appMod = await import('firebase-admin/app');
+    const apps = appMod.getApps();
+    if (apps.length > 0) {
+      cachedAdminApp = apps[0]!;
+      return cachedAdminApp;
+    }
+
+    cachedAdminApp = appMod.initializeApp({
+      credential: appMod.cert({
+        projectId: PROJECT_ID,
+        clientEmail,
+        privateKey,
+      }),
+      projectId: PROJECT_ID,
+    });
+    return cachedAdminApp;
+  } catch (error) {
+    adminLoadDisabled = true;
+    console.warn('Lazy firebase-admin initialization unavailable; continuing with ESM/REST:', error);
+    return null;
+  }
+}
+
+export async function getFirebaseAdminAuth(): Promise<Auth | null> {
+  const app = await getFirebaseAdminAppAsync();
+  if (!app) return null;
+  try {
+    const authMod = await import('firebase-admin/auth');
+    return authMod.getAuth(app);
+  } catch (error) {
+    adminLoadDisabled = true;
+    console.warn('Lazy firebase-admin/auth unavailable; continuing with ESM/REST:', error);
+    return null;
+  }
+}
+
+export async function getFirebaseAdminFirestore(): Promise<{
+  db: Firestore;
+  FieldValue: typeof import('firebase-admin/firestore').FieldValue;
+} | null> {
+  const app = await getFirebaseAdminAppAsync();
+  if (!app) return null;
+  try {
+    const fsMod = await import('firebase-admin/firestore');
+    return {
+      db: fsMod.getFirestore(app, DATABASE_ID),
+      FieldValue: fsMod.FieldValue,
+    };
+  } catch (error) {
+    console.warn('Lazy firebase-admin/firestore unavailable; falling back to REST:', error);
+    return null;
+  }
 }
 
 export interface VerifiedServerUser {
@@ -69,7 +127,9 @@ export interface VerifiedServerUser {
 }
 
 /**
- * Verifies the Firebase ID token from the Authorization: Bearer <token> header.
+ * Verifies the Firebase ID token from the Authorization: Bearer <token> header
+ * using pure ESM `jose` RS256 JWK signature verification, optional Identity Toolkit
+ * lookup (for disabled-user / revocation enforcement), and optional lazy Admin SDK.
  */
 export async function verifyServerAuthToken(
   req: NextRequest | Request
@@ -85,11 +145,11 @@ export async function verifyServerAuthToken(
     return null;
   }
 
-  // 1. Try firebase-admin SDK if service account is configured
-  const adminApp = getFirebaseAdminApp();
-  if (adminApp) {
+  // 1. Optional lazy firebase-admin check if service account credentials are present
+  const adminAuth = await getFirebaseAdminAuth();
+  if (adminAuth) {
     try {
-      const decoded = await getAuth(adminApp).verifyIdToken(idToken);
+      const decoded = await adminAuth.verifyIdToken(idToken);
       return {
         uid: decoded.uid,
         email: (decoded.email || '').toLowerCase(),
@@ -99,51 +159,92 @@ export async function verifyServerAuthToken(
       };
     } catch (err) {
       console.warn(
-        'firebase-admin verifyIdToken fallback to Identity Toolkit:',
+        'firebase-admin verifyIdToken fallback to ESM jose + Identity Toolkit:',
         err
       );
     }
   }
 
-  // 2. Verify token cryptographically via Google Identity Toolkit accounts:lookup
-  if (!API_KEY) {
-    return null;
+  // 2. Cryptographic RS256 verification via pure ESM `jose` (zero CommonJS require('jose'))
+  const joseClaims = PROJECT_ID
+    ? await verifyFirebaseIdTokenWithJose(idToken, PROJECT_ID)
+    : null;
+
+  // 3. Cross-check against Google Identity Toolkit accounts:lookup (catches disabled/deleted accounts)
+  if (API_KEY) {
+    try {
+      const res = await fetch(
+        `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(
+          API_KEY
+        )}`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ idToken }),
+          cache: 'no-store',
+        }
+      );
+
+      if (!res.ok) {
+        if (res.status >= 400 && res.status < 500) {
+          return null;
+        }
+        // Transient Identity Toolkit 5xx: trust valid cryptographic jose verification if present
+        if (joseClaims) {
+          return {
+            uid: joseClaims.uid,
+            email: joseClaims.email,
+            displayName: joseClaims.displayName,
+            emailVerified: joseClaims.emailVerified,
+            idToken,
+          };
+        }
+        return null;
+      }
+
+      const data = await res.json();
+      const user = data?.users?.[0];
+      if (!user || !user.localId || user.disabled) {
+        return null;
+      }
+
+      return {
+        uid: joseClaims?.uid || user.localId,
+        email: (user.email || joseClaims?.email || '').toLowerCase(),
+        displayName:
+          user.displayName ||
+          joseClaims?.displayName ||
+          user.email?.split('@')[0] ||
+          'User',
+        emailVerified: Boolean(user.emailVerified ?? joseClaims?.emailVerified),
+        idToken,
+      };
+    } catch (error) {
+      console.error('Identity Toolkit token check failed:', error);
+      if (joseClaims) {
+        return {
+          uid: joseClaims.uid,
+          email: joseClaims.email,
+          displayName: joseClaims.displayName,
+          emailVerified: joseClaims.emailVerified,
+          idToken,
+        };
+      }
+      return null;
+    }
   }
 
-  try {
-    const res = await fetch(
-      `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${encodeURIComponent(
-        API_KEY
-      )}`,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ idToken }),
-        cache: 'no-store',
-      }
-    );
-
-    if (!res.ok) {
-      return null;
-    }
-
-    const data = await res.json();
-    const user = data?.users?.[0];
-    if (!user || !user.localId) {
-      return null;
-    }
-
+  if (joseClaims) {
     return {
-      uid: user.localId,
-      email: (user.email || '').toLowerCase(),
-      displayName: user.displayName || user.email?.split('@')[0] || 'User',
-      emailVerified: Boolean(user.emailVerified),
+      uid: joseClaims.uid,
+      email: joseClaims.email,
+      displayName: joseClaims.displayName,
+      emailVerified: joseClaims.emailVerified,
       idToken,
     };
-  } catch (error) {
-    console.error('Token verification failed:', error);
-    return null;
   }
+
+  return null;
 }
 
 /**
@@ -201,11 +302,10 @@ export async function listFirestoreCollectionRest(
   pageSize = 100,
   idToken?: string
 ): Promise<Array<{ id: string; data: Record<string, any> }>> {
-  const adminApp = getFirebaseAdminApp();
-  if (adminApp) {
+  const adminFs = await getFirebaseAdminFirestore();
+  if (adminFs) {
     try {
-      const adminDb = getFirestore(adminApp, DATABASE_ID);
-      const snap = await adminDb.collection(collectionPath).limit(pageSize).get();
+      const snap = await adminFs.db.collection(collectionPath).limit(pageSize).get();
       return snap.docs.map((d) => ({ id: d.id, data: d.data() || {} }));
     } catch {
       // Fallback to REST below
@@ -266,11 +366,10 @@ export async function queryPublicProfilesRest(
   const uniqueVis = Array.from(new Set(visibilities));
   if (uniqueVis.length === 0) return [];
 
-  const adminApp = getFirebaseAdminApp();
-  if (adminApp) {
+  const adminFs = await getFirebaseAdminFirestore();
+  if (adminFs) {
     try {
-      const adminDb = getFirestore(adminApp, DATABASE_ID);
-      const snap = await adminDb
+      const snap = await adminFs.db
         .collection('publicProfiles')
         .where('privacy.profileVisibility', 'in', uniqueVis)
         .limit(pageSize)
@@ -362,11 +461,10 @@ export async function runCollectionGroupQueryRest(
   pageSize = 200,
   idToken?: string
 ): Promise<Array<{ id: string; path: string; data: Record<string, any> }>> {
-  const adminApp = getFirebaseAdminApp();
-  if (adminApp) {
+  const adminFs = await getFirebaseAdminFirestore();
+  if (adminFs) {
     try {
-      const adminDb = getFirestore(adminApp, DATABASE_ID);
-      const snap = await adminDb
+      const snap = await adminFs.db
         .collectionGroup(collectionId)
         .limit(pageSize)
         .get();
@@ -440,11 +538,10 @@ export async function deleteFirestoreDocumentServer(params: {
   docId: string;
   idToken?: string;
 }): Promise<boolean> {
-  const adminApp = getFirebaseAdminApp();
-  if (adminApp) {
+  const adminFs = await getFirebaseAdminFirestore();
+  if (adminFs) {
     try {
-      const adminDb = getFirestore(adminApp, DATABASE_ID);
-      await adminDb.collection(params.collectionPath).doc(params.docId).delete();
+      await adminFs.db.collection(params.collectionPath).doc(params.docId).delete();
       return true;
     } catch {
       // Fall through to REST
@@ -574,19 +671,18 @@ export async function writeFirestoreDocumentServer(params: {
     throw new Error('collectionPath and docId are required for writeFirestoreDocumentServer');
   }
 
-  const adminApp = getFirebaseAdminApp();
-  if (adminApp) {
-    const adminDb = getFirestore(adminApp, DATABASE_ID);
-    const docRef = adminDb.collection(collectionPath).doc(docId);
+  const adminFs = await getFirebaseAdminFirestore();
+  if (adminFs) {
+    const docRef = adminFs.db.collection(collectionPath).doc(docId);
     const snap = await docRef.get();
     const payload: Record<string, any> = {
       ...data,
       createdAt: snap.exists
-        ? snap.data()?.createdAt || FieldValue.serverTimestamp()
-        : FieldValue.serverTimestamp(),
+        ? snap.data()?.createdAt || adminFs.FieldValue.serverTimestamp()
+        : adminFs.FieldValue.serverTimestamp(),
     };
     if (includeUpdatedAt) {
-      payload.updatedAt = FieldValue.serverTimestamp();
+      payload.updatedAt = adminFs.FieldValue.serverTimestamp();
     }
     await docRef.set(payload);
     return true;

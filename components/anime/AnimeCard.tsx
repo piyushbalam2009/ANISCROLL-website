@@ -44,7 +44,7 @@ export function AnimeCard({ anime, priority = false }: AnimeCardProps) {
 
   return (
     <div className="group relative flex flex-col bg-[#141414] rounded-xl overflow-hidden border border-[#292929] hover:border-[#404040] transition-all duration-200">
-      <Link href={`/anime/${anime.shortId}`} className="block relative aspect-[3/4] overflow-hidden bg-[#0A0A0A]">
+      <Link href={`/anime/${anime.shortId}`} prefetch={false} className="block relative aspect-[3/4] overflow-hidden bg-[#0A0A0A]">
         <ResilientImage
           src={anime.coverImage}
           fallbackSrcs={[anime.bannerImage]}
@@ -96,6 +96,7 @@ export function AnimeCard({ anime, priority = false }: AnimeCardProps) {
         <div>
           <Link
             href={`/anime/${anime.shortId}`}
+            prefetch={false}
             className="font-medium text-sm text-white line-clamp-1 hover:underline transition-all"
             title={title}
           >

@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { listFirestoreCollectionRest, verifyAdminRequest, writeFirestoreDocumentServer } from '@/lib/firebase-admin';
 import { hasAdminPermission } from '@/lib/admin/admin-permissions';
 import { getDetailedProviderTelemetry } from '@/lib/perf-monitor';
-import { getAniScrollStream } from '@/lib/aniscroll';
+import { getAniScrollStreamDetailed } from '@/lib/aniscroll';
 import { selectStreamingProvider } from '@/lib/stream-provider-core';
 import { redactSensitiveText, sanitizeDiagnosticUrl } from '@/lib/admin/redaction';
 import { logAdminActionServer, logErrorEventServer } from '@/lib/admin/server-audit';
@@ -209,10 +209,11 @@ export async function POST(req: NextRequest) {
 
     const provider = selectStreamingProvider({ format });
     const start = Date.now();
-    const stream = await getAniScrollStream(anilistId, episode, audioType, {
+    const outcome = await getAniScrollStreamDetailed(anilistId, episode, audioType, {
       provider,
       format,
     });
+    const stream = outcome.stream;
     const latencyMs = Math.max(1, Date.now() - start);
 
     const primaryUrl =
@@ -231,11 +232,15 @@ export async function POST(req: NextRequest) {
 
     if (!stream || !primaryUrl) {
       await logErrorEventServer(verified.idToken, {
-        severity: 'warning',
+        severity: outcome.errorCode === 'not_found' ? 'info' : 'warning',
         category: 'stream',
         provider,
         endpoint: `/api/watch/${provider}/${anilistId}/${episode}/${audioType}`,
-        message: `Admin stream test found no playable ${audioType} stream for AniList #${anilistId} Ep ${episode}`,
+        code: outcome.errorCode || undefined,
+        statusCode: outcome.upstreamStatus || outcome.httpStatus,
+        message:
+          outcome.message ||
+          `Admin stream test found no playable ${audioType} stream for AniList #${anilistId} Ep ${episode}`,
       });
     }
 
@@ -246,7 +251,7 @@ export async function POST(req: NextRequest) {
       targetName: `AniList #${anilistId} Ep ${episode} (${audioType.toUpperCase()})`,
       details: stream
         ? `Resolved ${provider} (${format}) in ${latencyMs}ms with ${tracksCount} source(s)`
-        : `No stream returned from ${provider} (${format}) in ${latencyMs}ms`,
+        : `No stream returned from ${provider} (${format}) [${outcome.errorCode || 'unavailable'}] in ${latencyMs}ms`,
     });
 
     return NextResponse.json({
@@ -261,6 +266,9 @@ export async function POST(req: NextRequest) {
       tracksCount,
       subtitlesCount,
       latencyMs,
+      errorCode: outcome.errorCode,
+      upstreamStatus: outcome.upstreamStatus,
+      errorMessage: outcome.message || undefined,
     });
   }
 

@@ -15,6 +15,7 @@ export type UpstreamErrorCode =
   | 'not_found'
   | 'bad_request'
   | 'invalid_json'
+  | 'parse_error'
   | 'network_error'
   | 'unknown_error';
 

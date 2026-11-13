@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuth } from 'firebase-admin/auth';
 import {
   fetchFirestoreDocumentRest,
-  getFirebaseAdminApp,
+  getFirebaseAdminAuth,
+  hasFirebaseServiceAccountCredentials,
   listFirestoreCollectionRest,
   verifyAdminRequest,
 } from '@/lib/firebase-admin';
@@ -43,10 +43,10 @@ export async function GET(
     providerId?: string;
   } | null = null;
 
-  const adminApp = getFirebaseAdminApp();
-  if (adminApp) {
+  const adminAuth = await getFirebaseAdminAuth();
+  if (adminAuth) {
     try {
-      const u = await getAuth(adminApp).getUser(uid);
+      const u = await adminAuth.getUser(uid);
       authUser = {
         email: u.email || undefined,
         emailVerified: u.emailVerified,
@@ -80,7 +80,8 @@ export async function GET(
   let watchHistory: Array<Record<string, any>> = [];
   let continueWatching: Array<Record<string, any>> = [];
 
-  if (!isMod && adminApp) {
+  const hasAdminSdk = hasFirebaseServiceAccountCredentials() && Boolean(adminAuth);
+  if (!isMod && hasAdminSdk) {
     const [wl, wh, cw] = await Promise.all([
       listFirestoreCollectionRest(`users/${uid}/watchlist`, 40),
       listFirestoreCollectionRest(`users/${uid}/watchHistory`, 40),
@@ -129,7 +130,7 @@ export async function GET(
     },
     adminRecord: isMod ? null : adminDoc,
     relatedReports,
-    watchDataAvailable: !isMod && Boolean(adminApp),
+    watchDataAvailable: !isMod && hasAdminSdk,
     watchlistCount: watchlist.length,
     watchHistoryCount: watchHistory.length,
     continueWatchingCount: continueWatching.length,

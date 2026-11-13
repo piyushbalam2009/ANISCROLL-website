@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuth } from 'firebase-admin/auth';
 import {
   deleteFirestoreDocumentServer,
   fetchFirestoreDocumentRest,
-  getFirebaseAdminApp,
+  getFirebaseAdminAuth,
   listFirestoreCollectionRest,
   runCollectionGroupQueryRest,
   verifyAdminRequest,
@@ -108,11 +107,11 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const adminApp = getFirebaseAdminApp();
+  const adminAuth = await getFirebaseAdminAuth();
   let source = 'firestore_only';
-  if (adminApp) {
+  if (adminAuth) {
     try {
-      const listUsersResult = await getAuth(adminApp).listUsers(250);
+      const listUsersResult = await adminAuth.listUsers(250);
       source = 'firebase_admin';
       for (const u of listUsersResult.users) {
         const existing = merged.get(u.uid);
@@ -460,10 +459,9 @@ export async function POST(req: NextRequest) {
     ]).catch(() => {});
   }
 
-  const adminApp = getFirebaseAdminApp();
-  if (adminApp) {
+  const adminAuth = await getFirebaseAdminAuth();
+  if (adminAuth) {
     try {
-      const adminAuth = getAuth(adminApp);
       if (action === 'disable' || action === 'ban') {
         await adminAuth.updateUser(uid, { disabled: true });
       } else if (action === 'enable') {

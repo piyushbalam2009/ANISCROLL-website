@@ -1,9 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getAuth } from 'firebase-admin/auth';
 import {
   deleteFirestoreDocumentServer,
   fetchFirestoreDocumentRest,
-  getFirebaseAdminApp,
+  getFirebaseAdminAuth,
   listFirestoreCollectionRest,
   verifyAdminRequest,
   writeFirestoreDocumentServer,
@@ -202,10 +201,10 @@ export async function POST(req: NextRequest) {
       }).catch(() => {});
     }
 
-    const adminApp = getFirebaseAdminApp();
-    if (adminApp) {
+    const adminAuth = await getFirebaseAdminAuth();
+    if (adminAuth) {
       try {
-        await getAuth(adminApp).updateUser(targetUid, {
+        await adminAuth.updateUser(targetUid, {
           disabled: moderateAction !== 'enable',
         });
       } catch {

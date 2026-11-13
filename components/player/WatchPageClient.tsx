@@ -347,9 +347,22 @@ export function WatchPageClient({
           `/api/stream?anilistId=${anilistId}&episode=${episodeNumber}&hoshikaId=${anime.shortId}${formatQuery}${prefParam}`,
           { signal: controller.signal }
         );
-        const data = await res.json();
+        const data = (await res.json().catch(() => null)) as Record<string, any> | null;
 
         if (!isMounted || controller.signal.aborted) return;
+
+        if (!data) {
+          setIsCheckingAvailability(false);
+          setEpisodeHasSub(false);
+          setEpisodeHasDub(false);
+          setStreamData(null);
+          setStreamError(
+            res.status === 504
+              ? `${routedProviderLabel} timed out while resolving Episode ${episodeNumber}. Please retry.`
+              : `${routedProviderLabel} returned an unexpected error (HTTP ${res.status}). Please retry.`
+          );
+          return;
+        }
 
         const subAvailable = Boolean(data.subAvailable && data.subStream);
         const dubAvailable = Boolean(data.dubAvailable && data.dubStream);
@@ -380,7 +393,11 @@ export function WatchPageClient({
           setStreamData(null);
           setStreamError(
             data.error ||
-              `Neither Sub nor Dub is currently available for Episode ${episodeNumber} on ${routedProviderLabel}.`
+              (res.status === 429
+                ? `${routedProviderLabel} rate limit reached. Please wait a moment and retry.`
+                : res.status === 504
+                ? `${routedProviderLabel} timed out resolving Episode ${episodeNumber}. Please retry.`
+                : `Neither Sub nor Dub is currently available for Episode ${episodeNumber} on ${routedProviderLabel}.`)
           );
           return;
         }
@@ -397,7 +414,8 @@ export function WatchPageClient({
           setStreamData(chosenStream);
         } else {
           setStreamError(
-            `Stream unavailable for Episode ${episodeNumber} (${chosenVersion.toUpperCase()}) on ${routedProviderLabel}.`
+            data.error ||
+              `Stream unavailable for Episode ${episodeNumber} (${chosenVersion.toUpperCase()}) on ${routedProviderLabel}.`
           );
         }
       } catch (err: any) {
