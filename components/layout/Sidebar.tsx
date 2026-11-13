@@ -1,6 +1,7 @@
 'use client';
 
 import React from 'react';
+import Image from 'next/image';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
@@ -89,8 +90,16 @@ export function Sidebar({
           aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
         >
           {/* Stylized Monochrome Logo Mark */}
-          <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center shrink-0 group-hover:scale-105 transition-transform shadow-sm">
-            <span className="text-black font-black text-sm tracking-tighter">AS</span>
+          <div className="relative w-8 h-8 rounded-lg bg-[#141414] border border-white/15 flex items-center justify-center shrink-0 overflow-hidden group-hover:scale-105 transition-transform shadow-sm">
+            <Image
+              src="/assets/aistudio/Stylized_A_Swoosh_Logo_7cdc8c1f.png"
+              alt="AniScroll logo"
+              fill
+              sizes="32px"
+              className="object-contain scale-125"
+              referrerPolicy="no-referrer"
+              priority
+            />
           </div>
           {!collapsed && (
             <div className="flex flex-col flex-1 min-w-0">
