@@ -72,15 +72,35 @@ service cloud.firestore {
       return isOwnerRole() || (hasAdminDoc() && getAdminDoc().status == 'active' && getAdminDoc().permissions.manageSettings == true);
     }
 
+    function isModeratorOnly() {
+      return !isOwnerRole()
+        && hasAdminDoc()
+        && getAdminDoc().status == 'active'
+        && getAdminDoc().role == 'editor';
+    }
+
+    function canViewErrorLogs() {
+      return isOwnerRole() || (hasAdminDoc() && getAdminDoc().status == 'active' && getAdminDoc().role in ['owner', 'administrator']);
+    }
+
     function canAdminModifyTargetRole(existingData, incomingData) {
       return isOwnerRole()
         ? (existingData.uid != 'ClYKhPNBohZuDPPS3upXVyQvUEq2' || incomingData.role == 'owner')
         : (
             canManageUsers()
+            && !isModeratorOnly()
             && (!('role' in existingData) || !(existingData.role in ['owner', 'admin', 'administrator']))
             && (!('role' in incomingData) || !(incomingData.role in ['owner', 'admin', 'administrator']))
             && existingData.uid != 'ClYKhPNBohZuDPPS3upXVyQvUEq2'
           );
+    }
+
+    function canModeratorModerateTargetStatus(existingData, incomingData) {
+      return isModeratorOnly()
+        && (!('role' in existingData) || existingData.role in ['member', 'user'])
+        && (!('role' in incomingData) || incomingData.role == existingData.role)
+        && existingData.uid != 'ClYKhPNBohZuDPPS3upXVyQvUEq2'
+        && existingData.uid != request.auth.uid;
     }
 
     function expectedCallerRole() {
@@ -353,15 +373,20 @@ service cloud.firestore {
     // Entity Blueprint 9: AdminActivityLog (/adminActivityLogs/{logId})
     function isValidAdminActivityLog(data) {
       return data.keys().hasAll(['id', 'adminUid', 'adminEmail', 'category', 'action', 'targetId', 'targetName', 'timestamp', 'createdAt'])
-        && data.keys().hasOnly(['id', 'adminUid', 'adminEmail', 'category', 'action', 'targetId', 'targetName', 'targetLabel', 'details', 'timestamp', 'createdAt'])
+        && data.keys().hasOnly(['id', 'adminUid', 'adminEmail', 'adminRole', 'category', 'action', 'targetId', 'targetName', 'targetLabel', 'details', 'status', 'timestamp', 'createdAt'])
         && data.id is string && data.id.size() >= 1 && data.id.size() <= 128
         && data.adminUid is string && data.adminUid.size() >= 1 && data.adminUid.size() <= 128 && data.adminUid == request.auth.uid
         && data.adminEmail is string && data.adminEmail.size() >= 3 && data.adminEmail.size() <= 256
-        && data.category is string && data.category in ['artwork', 'users', 'anime', 'announcements', 'admins', 'settings', 'security', 'scanner']
+        && (!('adminRole' in data) || (data.adminRole is string && data.adminRole.size() <= 32))
+        && data.category is string && data.category in [
+          'artwork', 'users', 'anime', 'announcements', 'admins', 'settings', 'security', 'scanner',
+          'moderation', 'cache', 'monitoring', 'homepage', 'episodes', 'errors'
+        ]
         && data.action is string && data.action.size() >= 1 && data.action.size() <= 120
         && data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128
         && data.targetName is string && data.targetName.size() >= 1 && data.targetName.size() <= 300
         && (!('details' in data) || (data.details is string && data.details.size() <= 2000))
+        && (!('status' in data) || (data.status is string && data.status.size() <= 32))
         && data.timestamp is string && data.timestamp.size() >= 1 && data.timestamp.size() <= 64
         && data.createdAt is timestamp;
     }
@@ -370,7 +395,7 @@ service cloud.firestore {
     function isValidAnnouncementDoc(data) {
       return data.keys().hasAll(['id', 'title', 'message', 'type', 'status', 'createdByUid', 'createdByEmail', 'createdAt', 'updatedAt'])
         && data.keys().hasOnly([
-          'id', 'title', 'message', 'type', 'status', 'dismissible',
+          'id', 'title', 'message', 'type', 'status', 'priority', 'dismissible',
           'ctaText', 'ctaLink', 'startsAt', 'expiresAt',
           'createdByUid', 'createdByEmail', 'createdAt', 'updatedAt'
         ])
@@ -379,6 +404,7 @@ service cloud.firestore {
         && data.message is string && data.message.size() <= 2000
         && data.type is string && data.type in ['feature', 'maintenance', 'notice', 'alert']
         && data.status is string && data.status in ['draft', 'published', 'scheduled', 'archived']
+        && (!('priority' in data) || (data.priority is string && data.priority in ['normal', 'high']))
         && (!('dismissible' in data) || data.dismissible is bool)
         && (!('ctaText' in data) || (data.ctaText is string && data.ctaText.size() <= 80))
         && (!('ctaLink' in data) || (data.ctaLink is string && data.ctaLink.size() <= 512))
@@ -395,7 +421,7 @@ service cloud.firestore {
       return data.keys().hasAll(['configId', 'featuredAnimeIds', 'pinnedSeasonalIds', 'collections', 'updatedByUid', 'createdAt', 'updatedAt'])
         && data.keys().hasOnly([
           'configId', 'featuredAnimeIds', 'featuredAnime', 'pinnedSeasonalIds', 'pinnedSeasonal',
-          'collections', 'promoBanner', 'updatedByUid', 'updatedByEmail', 'createdAt', 'updatedAt'
+          'collections', 'promoBanner', 'sectionOrder', 'enabledSections', 'updatedByUid', 'updatedByEmail', 'createdAt', 'updatedAt'
         ])
         && data.configId is string && data.configId.size() >= 1 && data.configId.size() <= 128
         && data.featuredAnimeIds is list && data.featuredAnimeIds.size() <= 30
@@ -404,6 +430,8 @@ service cloud.firestore {
         && (!('pinnedSeasonal' in data) || (data.pinnedSeasonal is list && data.pinnedSeasonal.size() <= 30))
         && data.collections is list && data.collections.size() <= 30
         && (!('promoBanner' in data) || data.promoBanner == null || data.promoBanner is map)
+        && (!('sectionOrder' in data) || (data.sectionOrder is list && data.sectionOrder.size() <= 20))
+        && (!('enabledSections' in data) || data.enabledSections == null || data.enabledSections is map)
         && data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 && data.updatedByUid == request.auth.uid
         && (!('updatedByEmail' in data) || (data.updatedByEmail is string && data.updatedByEmail.size() <= 256))
         && data.createdAt is timestamp
@@ -415,7 +443,8 @@ service cloud.firestore {
       return data.keys().hasAll(['configId', 'siteName', 'preferEnglishLogos', 'autoArtworkScan', 'artworkCacheTtlMinutes', 'maintenanceMode', 'updatedByUid', 'createdAt', 'updatedAt'])
         && data.keys().hasOnly([
           'configId', 'siteName', 'siteDescription', 'preferEnglishLogos', 'autoArtworkScan',
-          'artworkCacheTtlMinutes', 'maintenanceMode', 'require2FAForAdmins', 'sessionTimeoutMinutes',
+          'artworkCacheTtlMinutes', 'maintenanceMode', 'maintenanceMessage', 'require2FAForAdmins', 'sessionTimeoutMinutes',
+          'playerSettings', 'providerSettings', 'performanceSettings',
           'updatedByUid', 'updatedByEmail', 'createdAt', 'updatedAt'
         ])
         && data.configId is string && data.configId.size() >= 1 && data.configId.size() <= 128
@@ -425,8 +454,12 @@ service cloud.firestore {
         && data.autoArtworkScan is bool
         && data.artworkCacheTtlMinutes is number && data.artworkCacheTtlMinutes >= 1 && data.artworkCacheTtlMinutes <= 10080
         && data.maintenanceMode is bool
+        && (!('maintenanceMessage' in data) || (data.maintenanceMessage is string && data.maintenanceMessage.size() <= 500))
         && (!('require2FAForAdmins' in data) || data.require2FAForAdmins is bool)
         && (!('sessionTimeoutMinutes' in data) || (data.sessionTimeoutMinutes is number && data.sessionTimeoutMinutes >= 5 && data.sessionTimeoutMinutes <= 10080))
+        && (!('playerSettings' in data) || data.playerSettings == null || data.playerSettings is map)
+        && (!('providerSettings' in data) || data.providerSettings == null || data.providerSettings is map)
+        && (!('performanceSettings' in data) || data.performanceSettings == null || data.performanceSettings is map)
         && data.updatedByUid is string && data.updatedByUid.size() >= 1 && data.updatedByUid.size() <= 128 && data.updatedByUid == request.auth.uid
         && (!('updatedByEmail' in data) || (data.updatedByEmail is string && data.updatedByEmail.size() <= 256))
         && data.createdAt is timestamp
@@ -445,6 +478,50 @@ service cloud.firestore {
         && data.statusCode is number && data.statusCode >= 0
         && (!('errorMessage' in data) || data.errorMessage == null || (data.errorMessage is string && data.errorMessage.size() <= 1024))
         && data.checkedAt is string && data.checkedAt.size() >= 1 && data.checkedAt.size() <= 64
+        && data.createdAt is timestamp;
+    }
+
+    // Entity Blueprint 14: ModerationReport (/reports/{reportId})
+    function isValidModerationReport(data) {
+      return data.keys().hasAll(['id', 'reporterUid', 'targetType', 'targetId', 'reason', 'status', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly([
+          'id', 'reporterUid', 'reporterLabel', 'targetType', 'targetId', 'targetName',
+          'reason', 'details', 'status', 'actionTaken', 'resolutionNote',
+          'resolvedByUid', 'resolvedByEmail', 'resolvedAt', 'createdAt', 'updatedAt'
+        ])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 128
+        && data.reporterUid is string && data.reporterUid.size() >= 1 && data.reporterUid.size() <= 128
+        && (!('reporterLabel' in data) || (data.reporterLabel is string && data.reporterLabel.size() <= 120))
+        && data.targetType is string && data.targetType in ['user', 'anime', 'episode', 'other']
+        && data.targetId is string && data.targetId.size() >= 1 && data.targetId.size() <= 128
+        && (!('targetName' in data) || (data.targetName is string && data.targetName.size() <= 300))
+        && data.reason is string && data.reason.size() >= 1 && data.reason.size() <= 200
+        && (!('details' in data) || (data.details is string && data.details.size() <= 2000))
+        && data.status is string && data.status in ['open', 'in_review', 'resolved', 'dismissed']
+        && (!('actionTaken' in data) || (data.actionTaken is string && data.actionTaken.size() <= 120))
+        && (!('resolutionNote' in data) || (data.resolutionNote is string && data.resolutionNote.size() <= 1000))
+        && (!('resolvedByUid' in data) || (data.resolvedByUid is string && data.resolvedByUid.size() <= 128))
+        && (!('resolvedByEmail' in data) || (data.resolvedByEmail is string && data.resolvedByEmail.size() <= 256))
+        && (!('resolvedAt' in data) || (data.resolvedAt is string && data.resolvedAt.size() <= 64))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Entity Blueprint 15: ErrorLog (/errorLogs/{logId})
+    function isValidErrorLog(data) {
+      return data.keys().hasAll(['id', 'severity', 'category', 'provider', 'message', 'timestamp', 'createdAt'])
+        && data.keys().hasOnly([
+          'id', 'severity', 'category', 'provider', 'endpoint', 'code', 'statusCode', 'message', 'timestamp', 'createdAt'
+        ])
+        && data.id is string && data.id.size() >= 1 && data.id.size() <= 128
+        && data.severity is string && data.severity in ['info', 'warning', 'error', 'critical']
+        && data.category is string && data.category in ['api', 'stream', 'artwork', 'auth', 'database', 'system']
+        && data.provider is string && data.provider.size() >= 1 && data.provider.size() <= 64
+        && (!('endpoint' in data) || (data.endpoint is string && data.endpoint.size() <= 512))
+        && (!('code' in data) || (data.code is string && data.code.size() <= 64))
+        && (!('statusCode' in data) || (data.statusCode is number && data.statusCode >= 0))
+        && data.message is string && data.message.size() >= 1 && data.message.size() <= 1024
+        && data.timestamp is string && data.timestamp.size() >= 1 && data.timestamp.size() <= 64
         && data.createdAt is timestamp;
     }
 
@@ -477,10 +554,15 @@ service cloud.firestore {
           ||
           // Action 2: Authorized Staff moderates status/role with hierarchy enforcement
           (canManageUsers()
+            && !isModeratorOnly()
             && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'accountStatus', 'role', 'updatedAt'])
             && canAdminModifyTargetRole(existing(), incoming()))
+          ||
+          // Action 3: Moderator updates status ONLY on member accounts
+          (canModeratorModerateTargetStatus(existing(), incoming())
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'accountStatus', 'updatedAt']))
         );
-      allow delete: if (isOwner(uid) || (canManageUsers() && existing().role != 'owner' && uid != 'ClYKhPNBohZuDPPS3upXVyQvUEq2')) && isValidId(uid) && isValidId(docId);
+      allow delete: if (isOwner(uid) || (canManageUsers() && !isModeratorOnly() && existing().role != 'owner' && uid != 'ClYKhPNBohZuDPPS3upXVyQvUEq2')) && isValidId(uid) && isValidId(docId);
     }
 
     // CollectionGroup query support for Admin User Management (/users/*/profile/*)
@@ -675,7 +757,7 @@ service cloud.firestore {
         && incoming().updatedAt == request.time
         && canManageAnnouncements()
         && incoming().diff(existing()).affectedKeys().hasOnly([
-          'title', 'message', 'type', 'status', 'dismissible',
+          'title', 'message', 'type', 'status', 'priority', 'dismissible',
           'ctaText', 'ctaLink', 'startsAt', 'expiresAt',
           'createdByEmail', 'updatedAt'
         ]);
@@ -698,7 +780,7 @@ service cloud.firestore {
         && canManageAnime()
         && incoming().diff(existing()).affectedKeys().hasOnly([
           'configId', 'featuredAnimeIds', 'featuredAnime', 'pinnedSeasonalIds', 'pinnedSeasonal',
-          'collections', 'promoBanner', 'updatedByUid', 'updatedByEmail', 'updatedAt'
+          'collections', 'promoBanner', 'sectionOrder', 'enabledSections', 'updatedByUid', 'updatedByEmail', 'updatedAt'
         ]);
       allow delete: if isSignedIn() && isValidId(docId) && isOwnerRole();
     }
@@ -719,7 +801,8 @@ service cloud.firestore {
         && canManageSettings()
         && incoming().diff(existing()).affectedKeys().hasOnly([
           'configId', 'siteName', 'siteDescription', 'preferEnglishLogos', 'autoArtworkScan',
-          'artworkCacheTtlMinutes', 'maintenanceMode', 'require2FAForAdmins', 'sessionTimeoutMinutes',
+          'artworkCacheTtlMinutes', 'maintenanceMode', 'maintenanceMessage', 'require2FAForAdmins', 'sessionTimeoutMinutes',
+          'playerSettings', 'providerSettings', 'performanceSettings',
           'updatedByUid', 'updatedByEmail', 'updatedAt'
         ]);
       allow delete: if false;
@@ -767,11 +850,15 @@ service cloud.firestore {
           ]))
           ||
           (canManageUsers()
+            && !isModeratorOnly()
             && incoming().diff(existing()).affectedKeys().hasOnly(['role', 'status', 'updatedAt'])
             && canAdminModifyTargetRole(existing(), incoming()))
+          ||
+          (canModeratorModerateTargetStatus(existing(), incoming())
+            && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
         );
       allow delete: if isSignedIn() && isValidId(uid)
-        && (isOwner(uid) || (canManageUsers() && existing().role != 'owner' && uid != 'ClYKhPNBohZuDPPS3upXVyQvUEq2'));
+        && (isOwner(uid) || (canManageUsers() && !isModeratorOnly() && existing().role != 'owner' && uid != 'ClYKhPNBohZuDPPS3upXVyQvUEq2'));
     }
 
     // Collection 15: Unique Username Reservations (/usernames/{username})
@@ -793,6 +880,43 @@ service cloud.firestore {
         && incoming().updatedAt == request.time;
       allow delete: if isSignedIn() && isValidId(username)
         && (existing().uid == request.auth.uid || isOwnerRole());
+    }
+
+    // Collection 16: Moderation Reports (/reports/{reportId})
+    match /reports/{reportId} {
+      allow get: if isSignedIn() && isValidId(reportId) && isActiveAdmin();
+      allow list: if isActiveAdmin();
+      allow create: if isSignedIn() && isValidId(reportId)
+        && isValidModerationReport(incoming())
+        && incoming().id == reportId
+        && incoming().reporterUid == request.auth.uid
+        && incoming().status == 'open'
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+      allow update: if isSignedIn() && isValidId(reportId)
+        && isActiveAdmin()
+        && isValidModerationReport(incoming())
+        && incoming().id == existing().id
+        && incoming().reporterUid == existing().reporterUid
+        && incoming().createdAt == existing().createdAt
+        && incoming().updatedAt == request.time
+        && incoming().diff(existing()).affectedKeys().hasOnly([
+          'status', 'actionTaken', 'resolutionNote', 'resolvedByUid', 'resolvedByEmail', 'resolvedAt', 'updatedAt'
+        ]);
+      allow delete: if isSignedIn() && isValidId(reportId) && isOwnerRole();
+    }
+
+    // Collection 17: System & Upstream Error Logs (/errorLogs/{logId})
+    match /errorLogs/{logId} {
+      allow get: if isSignedIn() && isValidId(logId) && canViewErrorLogs();
+      allow list: if canViewErrorLogs();
+      allow create: if isSignedIn() && isValidId(logId)
+        && isActiveAdmin()
+        && isValidErrorLog(incoming())
+        && incoming().id == logId
+        && incoming().createdAt == request.time;
+      allow update: if false;
+      allow delete: if isSignedIn() && isValidId(logId) && isOwnerRole();
     }
   }
 }

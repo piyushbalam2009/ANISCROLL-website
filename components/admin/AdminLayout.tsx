@@ -2,6 +2,7 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
+import { usePathname } from 'next/navigation';
 import {
   Shield,
   Lock,
@@ -13,16 +14,20 @@ import {
   LogIn,
   Copy,
   Check,
+  ShieldAlert,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { BOOTSTRAPPED_OWNER_EMAIL } from '@/lib/admin/admin-permissions';
+import { canAccessAdminPathname } from '@/lib/admin/rbac';
 import { AdminSidebar } from './AdminSidebar';
 import { AdminHeader } from './AdminHeader';
 
 export function AdminLayout({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
   const {
     user,
     adminRecord,
+    effectiveRole,
     isAdmin,
     loading,
     adminLoading,
@@ -284,7 +289,13 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // 4. Authorized Admin Workspace
+  // 4. Authorized Admin Workspace (with Route-Level RBAC Guard)
+  const routeAllowed = canAccessAdminPathname(
+    pathname || '/admin',
+    adminRecord,
+    effectiveRole
+  );
+
   return (
     <div className="min-h-screen bg-[#000000] text-white flex">
       <AdminSidebar
@@ -295,7 +306,32 @@ export function AdminLayout({ children }: { children: React.ReactNode }) {
       <div className="flex-1 flex flex-col min-h-screen lg:pl-[264px] min-w-0">
         <AdminHeader onOpenMobile={() => setMobileOpen(true)} />
         <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-[1600px] w-full mx-auto space-y-6">
-          {children}
+          {routeAllowed ? (
+            children
+          ) : (
+            <div className="p-8 rounded-2xl bg-[#0A0A0A] border border-[#292929] max-w-xl mx-auto mt-8 text-center space-y-4">
+              <div className="w-12 h-12 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 flex items-center justify-center mx-auto">
+                <ShieldAlert size={22} aria-hidden="true" />
+              </div>
+              <div className="space-y-1">
+                <h2 className="text-lg font-bold text-white">
+                  403 — Access Restricted for Your Role
+                </h2>
+                <p className="text-xs text-[#A0A0A0] leading-relaxed">
+                  Your current role (<span className="font-mono text-white uppercase">{effectiveRole}</span>) does not have permission to open{' '}
+                  <span className="font-mono text-white">{pathname}</span>.
+                </p>
+              </div>
+              <div className="pt-2 flex items-center justify-center gap-3">
+                <Link
+                  href="/admin"
+                  className="px-4 py-2 rounded-xl bg-white text-black font-bold text-xs hover:bg-neutral-200 transition-colors"
+                >
+                  Back to Dashboard
+                </Link>
+              </div>
+            </div>
+          )}
         </main>
       </div>
     </div>

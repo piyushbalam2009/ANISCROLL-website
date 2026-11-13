@@ -3,14 +3,11 @@
 import React, { useState, useEffect } from 'react';
 import { usePathname } from 'next/navigation';
 import Link from 'next/link';
-import { Megaphone, X, ArrowRight } from 'lucide-react';
+import { Megaphone, X, ArrowRight, Wrench } from 'lucide-react';
 import { Sidebar } from './Sidebar';
 import { FloatingHeader } from './FloatingHeader';
 import { getUserPreferences, saveUserPreferences } from '@/lib/storage';
-import {
-  AnnouncementFirestoreDoc,
-  getActiveAnnouncementsForPublic,
-} from '@/lib/admin/admin-firestore';
+import { AnnouncementFirestoreDoc } from '@/lib/admin/admin-firestore';
 
 interface AppShellProps {
   children: React.ReactNode;
@@ -21,6 +18,8 @@ export function AppShell({ children }: AppShellProps) {
   const [collapsed, setCollapsed] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
   const [announcements, setAnnouncements] = useState<AnnouncementFirestoreDoc[]>([]);
+  const [maintenanceMode, setMaintenanceMode] = useState(false);
+  const [maintenanceMessage, setMaintenanceMessage] = useState('');
   const [dismissedIds, setDismissedIds] = useState<string[]>([]);
 
   const isAdminRoute = pathname.startsWith('/admin');
@@ -43,9 +42,22 @@ export function AppShell({ children }: AppShellProps) {
 
   useEffect(() => {
     if (isAdminRoute) return;
-    getActiveAnnouncementsForPublic()
-      .then((items) => setAnnouncements(items))
+    let cancelled = false;
+    fetch('/api/site-status', { cache: 'no-store' })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (cancelled || !data) return;
+        setMaintenanceMode(Boolean(data.maintenanceMode));
+        setMaintenanceMessage(
+          typeof data.maintenanceMessage === 'string' ? data.maintenanceMessage : ''
+        );
+        setAnnouncements(Array.isArray(data.announcements) ? data.announcements : []);
+      })
       .catch(() => {});
+
+    return () => {
+      cancelled = true;
+    };
   }, [isAdminRoute, pathname]);
 
   if (isAdminRoute) {
@@ -79,12 +91,28 @@ export function AppShell({ children }: AppShellProps) {
           collapsed ? 'md:pl-[76px]' : 'md:pl-[240px]'
         }`}
       >
+        {/* Maintenance Mode Notice Banner */}
+        {maintenanceMode && (
+          <div className="relative z-40 bg-[#141414] border-b border-amber-500/40 px-4 py-2.5 text-xs text-white flex items-center gap-3">
+            <span className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded bg-amber-500/15 border border-amber-500/40 text-amber-300 font-mono font-bold text-[10px] uppercase tracking-wider shrink-0">
+              <Wrench size={11} />
+              <span>Maintenance</span>
+            </span>
+            <span className="text-[#E5E5E5] truncate">
+              {maintenanceMessage ||
+                'AniScroll is undergoing scheduled maintenance. Some features may be temporarily degraded.'}
+            </span>
+          </div>
+        )}
+
         {/* Active Published Announcements Banner */}
         {visibleAnnouncements.length > 0 && (
           <div className="relative z-40 bg-[#141414] border-b border-[#292929] px-4 py-2 text-xs text-white flex items-center justify-between gap-3">
             <div className="flex items-center gap-2.5 min-w-0">
               <span className="px-2 py-0.5 rounded bg-white text-black font-mono font-bold text-[10px] uppercase tracking-wider shrink-0">
-                {visibleAnnouncements[0].type}
+                {visibleAnnouncements[0].priority === 'high'
+                  ? `URGENT · ${visibleAnnouncements[0].type}`
+                  : visibleAnnouncements[0].type}
               </span>
               <Megaphone size={14} className="text-white shrink-0" />
               <span className="font-semibold text-white truncate">
@@ -109,7 +137,7 @@ export function AppShell({ children }: AppShellProps) {
                 onClick={() =>
                   setDismissedIds((prev) => [...prev, visibleAnnouncements[0].id])
                 }
-                className="text-[#A0A0A0] hover:text-white p-1 shrink-0"
+                className="text-[#A0A0A0] hover:text-white p-1 shrink-0 cursor-pointer"
                 aria-label="Dismiss announcement"
               >
                 <X size={14} />

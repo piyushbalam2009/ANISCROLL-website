@@ -123,10 +123,16 @@ export function getAdminPermissionsForUserRole(
   if (role === 'mod') {
     return {
       ...DEFAULT_ROLE_PERMISSIONS.editor,
-      manageUsers: true,
-      manageSettings: false,
       manageAdmins: false,
+      manageUsers: true,
+      manageArtwork: false,
+      uploadLogos: false,
       deleteLogos: false,
+      manageAnime: false,
+      manageAnnouncements: false,
+      manageSettings: false,
+      viewAnalytics: false,
+      viewLogs: true,
     };
   }
   return { ...DEFAULT_ROLE_PERMISSIONS[adminRole] };

@@ -181,11 +181,66 @@ test('firestore.rules file contains all required match blocks and validation blu
   assert.ok(rulesText.includes('isValidAnimeManagementDoc'));
   assert.ok(rulesText.includes('isValidSiteConfigDoc'));
   assert.ok(rulesText.includes('isValidStreamingMonitorLog'));
+  assert.ok(rulesText.includes('isValidModerationReport'));
+  assert.ok(rulesText.includes('isValidErrorLog'));
+  assert.ok(rulesText.includes('isModeratorOnly'));
+  assert.ok(rulesText.includes('canModeratorModerateTargetStatus'));
+  assert.ok(rulesText.includes('canViewErrorLogs'));
+  assert.ok(rulesText.includes('match /reports/{reportId}'));
+  assert.ok(rulesText.includes('match /errorLogs/{logId}'));
   assert.ok(rulesText.includes('isBootstrappedOwner'));
   assert.ok(rulesText.includes('canManageArtwork'));
   assert.ok(rulesText.includes("'previousLogoUrl'"));
   assert.ok(rulesText.includes("'previousLogoSource'"));
   assert.ok(rulesText.includes("'selectedLogo'"));
+  assert.ok(rulesText.includes("'maintenanceMessage'"));
+  assert.ok(rulesText.includes("'sectionOrder'"));
+});
+
+test('Mod RBAC boundaries and /reports + /errorLogs security invariants', () => {
+  const canModeratorModerate = (
+    actorRole: 'member' | 'mod' | 'admin' | 'owner',
+    actorUid: string,
+    targetUid: string,
+    targetRole: string,
+    changedKeys: string[]
+  ): 'ALLOW' | 'PERMISSION_DENIED' => {
+    if (actorRole !== 'mod') return 'PERMISSION_DENIED';
+    if (!['member', 'user'].includes(targetRole)) return 'PERMISSION_DENIED';
+    if (targetUid === 'ClYKhPNBohZuDPPS3upXVyQvUEq2' || targetUid === actorUid) {
+      return 'PERMISSION_DENIED';
+    }
+    const allowedKeys = ['status', 'accountStatus', 'updatedAt'];
+    if (!changedKeys.every((k) => allowedKeys.includes(k))) {
+      return 'PERMISSION_DENIED';
+    }
+    return 'ALLOW';
+  };
+
+  // Mod can ban/disable a member's status
+  assert.equal(
+    canModeratorModerate('mod', 'mod_1', 'member_1', 'member', ['status', 'updatedAt']),
+    'ALLOW'
+  );
+  // Mod CANNOT change a member's role
+  assert.equal(
+    canModeratorModerate('mod', 'mod_1', 'member_1', 'member', ['role', 'updatedAt']),
+    'PERMISSION_DENIED'
+  );
+  // Mod CANNOT moderate an Admin or Owner
+  assert.equal(
+    canModeratorModerate('mod', 'mod_1', 'admin_1', 'admin', ['status', 'updatedAt']),
+    'PERMISSION_DENIED'
+  );
+  assert.equal(
+    canModeratorModerate('mod', 'mod_1', 'ClYKhPNBohZuDPPS3upXVyQvUEq2', 'owner', ['status', 'updatedAt']),
+    'PERMISSION_DENIED'
+  );
+  // Mod CANNOT view error logs (Admin/Owner only)
+  const canViewErrorLogs = (role: string) => role === 'owner' || role === 'administrator';
+  assert.equal(canViewErrorLogs('editor'), false);
+  assert.equal(canViewErrorLogs('administrator'), true);
+  assert.equal(canViewErrorLogs('owner'), true);
 });
 
 test('Dirty Dozen Payloads all return PERMISSION_DENIED', () => {

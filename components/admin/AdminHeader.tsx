@@ -12,7 +12,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { getAdminAuthHeaders } from '@/lib/admin/admin-auth';
-import { ADMIN_NAV_ITEMS } from './AdminSidebar';
+import { getBreadcrumbForAdminPath } from '@/lib/admin/rbac';
 import { RoleBadge } from '@/components/ui/RoleBadge';
 
 interface AdminHeaderProps {
@@ -27,10 +27,8 @@ export function AdminHeader({ onOpenMobile }: AdminHeaderProps) {
   const [flushing, setFlushing] = useState(false);
   const [flushedNotice, setFlushedNotice] = useState(false);
 
-  const currentNav =
-    ADMIN_NAV_ITEMS.find((item) =>
-      item.exact ? pathname === item.href : pathname.startsWith(item.href)
-    ) || ADMIN_NAV_ITEMS[0];
+  const breadcrumb = getBreadcrumbForAdminPath(pathname || '/admin');
+  const isMod = effectiveRole === 'mod';
 
   const handleQuickJump = (e: React.FormEvent) => {
     e.preventDefault();
@@ -39,7 +37,7 @@ export function AdminHeader({ onOpenMobile }: AdminHeaderProps) {
     if (/^\d+$/.test(q)) {
       router.push(`/admin/artwork/${q}`);
     } else {
-      router.push(`/admin/artwork?q=${encodeURIComponent(q)}`);
+      router.push(`/admin/anime?q=${encodeURIComponent(q)}`);
     }
     setQuickSearch('');
   };
@@ -74,52 +72,54 @@ export function AdminHeader({ onOpenMobile }: AdminHeaderProps) {
           <Menu size={18} />
         </button>
 
-        <div className="flex items-center gap-2.5 min-w-0">
-          <span className="text-xs font-mono uppercase tracking-wider text-[#707070] hidden sm:inline">
-            Admin
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-xs font-mono uppercase tracking-wider text-[#707070] hidden sm:inline truncate">
+            {breadcrumb.sectionTitle}
           </span>
           <span className="text-[#292929] hidden sm:inline">/</span>
           <h1 className="text-sm sm:text-base font-bold text-white truncate">
-            {currentNav.label}
+            {breadcrumb.pageLabel}
           </h1>
         </div>
       </div>
 
       <div className="flex items-center gap-2.5 sm:gap-3">
-        {/* Quick Jump to Anime Artwork by ID or Title */}
-        <form onSubmit={handleQuickJump} className="hidden md:flex items-center relative">
-          <Search size={14} className="absolute left-3 text-[#707070]" />
-          <input
-            type="text"
-            value={quickSearch}
-            onChange={(e) => setQuickSearch(e.target.value)}
-            placeholder="Jump to anime title or ID..."
-            className="w-56 lg:w-64 pl-8 pr-3 py-1.5 rounded-lg bg-[#141414] border border-[#292929] focus:border-white text-xs text-white placeholder-[#707070] focus:outline-none transition-colors"
-          />
-        </form>
+        {!isMod && (
+          <form onSubmit={handleQuickJump} className="hidden md:flex items-center relative">
+            <Search size={14} className="absolute left-3 text-[#707070]" />
+            <input
+              type="text"
+              value={quickSearch}
+              onChange={(e) => setQuickSearch(e.target.value)}
+              placeholder="Jump to anime title or ID..."
+              aria-label="Quick jump to anime title or ID"
+              className="w-56 lg:w-64 pl-8 pr-3 py-1.5 rounded-lg bg-[#141414] border border-[#292929] focus:border-white text-xs text-white placeholder-[#707070] focus:outline-none transition-colors"
+            />
+          </form>
+        )}
 
-        {/* Flush Artwork Cache Button */}
-        <button
-          type="button"
-          onClick={handleFlushArtworkCache}
-          disabled={flushing}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#141414] border border-[#292929] hover:border-white/40 text-xs font-medium text-white transition-all cursor-pointer disabled:opacity-50"
-          title="Flush server-side Fanart.tv & Firestore artwork cache"
-        >
-          {flushedNotice ? (
-            <>
-              <CheckCircle2 size={14} className="text-white" />
-              <span className="hidden sm:inline">Cache Purged</span>
-            </>
-          ) : (
-            <>
-              <RefreshCw size={14} className={flushing ? 'animate-spin' : ''} />
-              <span className="hidden sm:inline">Purge Artwork Cache</span>
-            </>
-          )}
-        </button>
+        {!isMod && (
+          <button
+            type="button"
+            onClick={handleFlushArtworkCache}
+            disabled={flushing}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#141414] border border-[#292929] hover:border-white/40 text-xs font-medium text-white transition-all cursor-pointer disabled:opacity-50"
+            title="Flush server-side Fanart.tv & Firestore artwork cache"
+          >
+            {flushedNotice ? (
+              <>
+                <CheckCircle2 size={14} className="text-white" />
+                <span className="hidden sm:inline">Cache Purged</span>
+              </>
+            ) : (
+              <>
+                <RefreshCw size={14} className={flushing ? 'animate-spin' : ''} />
+                <span className="hidden sm:inline">Purge Artwork Cache</span>
+              </>
+            )}
+          </button>
+        )}
 
-        {/* Live Site Link */}
         <Link
           href="/"
           className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white text-black hover:bg-neutral-200 text-xs font-bold transition-colors"
@@ -128,7 +128,6 @@ export function AdminHeader({ onOpenMobile }: AdminHeaderProps) {
           <ExternalLink size={13} />
         </Link>
 
-        {/* Role Pill */}
         {adminRecord && (
           <div className="hidden xl:flex items-center">
             <RoleBadge role={effectiveRole} size="md" />

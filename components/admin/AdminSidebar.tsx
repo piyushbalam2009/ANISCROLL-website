@@ -1,25 +1,40 @@
 'use client';
 
-import React from 'react';
+import React, { useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import {
   LayoutDashboard,
+  BarChart3,
+  Film,
+  ListVideo,
   Image as ImageIcon,
   AlertTriangle,
-  Users,
-  Film,
-  Activity,
+  LayoutTemplate,
   Megaphone,
+  Users,
   ShieldCheck,
-  FileClock,
+  Flag,
+  HeartPulse,
+  Activity,
+  Database,
+  Bug,
   Settings,
+  FileClock,
   ArrowLeft,
   LogOut,
   X,
+  ChevronDown,
+  ChevronRight,
+  LucideIcon,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { ROLE_LABELS } from '@/lib/admin/admin-permissions';
+import {
+  ALL_ADMIN_NAV_ITEMS,
+  AdminSectionId,
+  getAuthorizedNavSections,
+} from '@/lib/admin/rbac';
 import { RoleBadge } from '@/components/ui/RoleBadge';
 
 interface AdminSidebarProps {
@@ -27,83 +42,51 @@ interface AdminSidebarProps {
   onCloseMobile: () => void;
 }
 
-export const ADMIN_NAV_ITEMS = [
-  {
-    label: 'Overview',
-    href: '/admin',
-    icon: LayoutDashboard,
-    exact: true,
-    badge: 'KPI',
-  },
-  {
-    label: 'Artwork Management',
-    href: '/admin/artwork',
-    icon: ImageIcon,
-    exact: false,
-    badge: 'FANART',
-  },
-  {
-    label: 'Missing Logos',
-    href: '/admin/missing-logos',
-    icon: AlertTriangle,
-    exact: false,
-    badge: 'SCANNER',
-  },
-  {
-    label: 'User Management',
-    href: '/admin/users',
-    icon: Users,
-    exact: false,
-  },
-  {
-    label: 'Anime Management',
-    href: '/admin/anime',
-    icon: Film,
-    exact: false,
-  },
-  {
-    label: 'Streaming Monitor',
-    href: '/admin/streaming',
-    icon: Activity,
-    exact: false,
-    badge: 'LIVE',
-  },
-  {
-    label: 'Announcements',
-    href: '/admin/announcements',
-    icon: Megaphone,
-    exact: false,
-  },
-  {
-    label: 'Admin Management',
-    href: '/admin/admins',
-    icon: ShieldCheck,
-    exact: false,
-    badge: 'RBAC',
-  },
-  {
-    label: 'Activity Logs',
-    href: '/admin/activity',
-    icon: FileClock,
-    exact: false,
-    badge: 'AUDIT',
-  },
-  {
-    label: 'Settings',
-    href: '/admin/settings',
-    icon: Settings,
-    exact: false,
-  },
-];
+const ICON_BY_NAV_ID: Record<string, LucideIcon> = {
+  dashboard: LayoutDashboard,
+  analytics: BarChart3,
+  anime: Film,
+  episodes: ListVideo,
+  artwork: ImageIcon,
+  'missing-logos': AlertTriangle,
+  homepage: LayoutTemplate,
+  announcements: Megaphone,
+  'users-list': Users,
+  roles: ShieldCheck,
+  moderation: Flag,
+  'api-health': HeartPulse,
+  streaming: Activity,
+  cache: Database,
+  errors: Bug,
+  settings: Settings,
+  activity: FileClock,
+};
+
+export const ADMIN_NAV_ITEMS = ALL_ADMIN_NAV_ITEMS.map((item) => ({
+  ...item,
+  icon: ICON_BY_NAV_ID[item.id] || LayoutDashboard,
+}));
 
 export function AdminSidebar({ mobileOpen, onCloseMobile }: AdminSidebarProps) {
   const pathname = usePathname();
   const router = useRouter();
   const { adminRecord, effectiveRole, signOutUser } = useAuth();
+  const [collapsedSections, setCollapsedSections] = useState<
+    Partial<Record<AdminSectionId, boolean>>
+  >({});
+
+  const authorizedSections = getAuthorizedNavSections(effectiveRole, adminRecord);
 
   const isActive = (href: string, exact?: boolean) => {
     if (exact) return pathname === href;
     return pathname === href || pathname.startsWith(`${href}/`);
+  };
+
+  const toggleSection = (sectionId: AdminSectionId) => {
+    setCollapsedSections((prev) => ({
+      ...prev,
+      [sectionId]: !prev[sectionId],
+    }));
   };
 
   const roleMeta =
@@ -139,7 +122,7 @@ export function AdminSidebar({ mobileOpen, onCloseMobile }: AdminSidebarProps) {
               </span>
             </div>
             <div className="text-[10px] font-mono text-[#707070] uppercase tracking-wider">
-              Control Plane v2.4
+              Control Plane v3.0
             </div>
           </div>
         </Link>
@@ -154,45 +137,69 @@ export function AdminSidebar({ mobileOpen, onCloseMobile }: AdminSidebarProps) {
         </button>
       </div>
 
-      {/* Navigation Sections */}
-      <div className="flex-1 overflow-y-auto py-4 px-3 space-y-1">
-        <div className="px-3 pb-2 text-[10px] font-mono font-semibold uppercase tracking-widest text-[#707070]">
-          Operations & Systems
-        </div>
-
-        {ADMIN_NAV_ITEMS.map((item) => {
-          const active = isActive(item.href, item.exact);
-          const Icon = item.icon;
+      {/* Collapsible Navigation Sections */}
+      <nav
+        aria-label="Admin sidebar navigation"
+        className="flex-1 overflow-y-auto py-3 px-3 space-y-3"
+      >
+        {authorizedSections.map((section) => {
+          const isCollapsed = Boolean(collapsedSections[section.id]);
           return (
-            <Link
-              key={item.href}
-              href={item.href}
-              onClick={onCloseMobile}
-              className={`flex items-center justify-between gap-3 px-3 py-2.5 rounded-lg text-xs font-medium transition-all ${
-                active
-                  ? 'bg-white text-black font-bold shadow-sm'
-                  : 'text-[#A0A0A0] hover:text-white hover:bg-[#141414]'
-              }`}
-            >
-              <div className="flex items-center gap-3 min-w-0">
-                <Icon size={16} className="shrink-0" />
-                <span className="truncate">{item.label}</span>
-              </div>
-              {item.badge && (
-                <span
-                  className={`px-1.5 py-0.5 rounded font-mono text-[9px] font-semibold tracking-wider uppercase ${
-                    active
-                      ? 'bg-black/15 text-black'
-                      : 'bg-[#141414] text-[#707070] border border-[#292929]'
-                  }`}
-                >
-                  {item.badge}
-                </span>
+            <div key={section.id} className="space-y-1">
+              <button
+                type="button"
+                onClick={() => toggleSection(section.id)}
+                aria-expanded={!isCollapsed}
+                className="w-full flex items-center justify-between px-2.5 py-1.5 text-[10px] font-mono font-semibold uppercase tracking-widest text-[#707070] hover:text-white transition-colors cursor-pointer"
+              >
+                <span>{section.title}</span>
+                {isCollapsed ? (
+                  <ChevronRight size={12} aria-hidden="true" />
+                ) : (
+                  <ChevronDown size={12} aria-hidden="true" />
+                )}
+              </button>
+
+              {!isCollapsed && (
+                <div className="space-y-0.5">
+                  {section.items.map((item) => {
+                    const active = isActive(item.href, item.exact);
+                    const Icon = ICON_BY_NAV_ID[item.id] || LayoutDashboard;
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        onClick={onCloseMobile}
+                        className={`flex items-center justify-between gap-2.5 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
+                          active
+                            ? 'bg-white text-black font-bold'
+                            : 'text-[#A0A0A0] hover:text-white hover:bg-[#141414]'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <Icon size={15} className="shrink-0" aria-hidden="true" />
+                          <span className="truncate">{item.label}</span>
+                        </div>
+                        {item.badge && (
+                          <span
+                            className={`px-1.5 py-0.5 rounded font-mono text-[9px] font-semibold tracking-wider uppercase shrink-0 ${
+                              active
+                                ? 'bg-black/15 text-black'
+                                : 'bg-[#141414] text-[#707070] border border-[#292929]'
+                            }`}
+                          >
+                            {item.badge}
+                          </span>
+                        )}
+                      </Link>
+                    );
+                  })}
+                </div>
               )}
-            </Link>
+            </div>
           );
         })}
-      </div>
+      </nav>
 
       {/* Admin Identity & Footer */}
       <div className="p-3 border-t border-[#292929] space-y-2 bg-[#070707] shrink-0">
@@ -207,7 +214,7 @@ export function AdminSidebar({ mobileOpen, onCloseMobile }: AdminSidebarProps) {
             <div className="text-[11px] font-mono text-[#707070] truncate mt-0.5">
               {adminRecord.email}
             </div>
-            <div className="text-[10px] font-mono text-[#A0A0A0] mt-1.5 uppercase tracking-wider">
+            <div className="text-[10px] font-mono text-[#A0A0A0] mt-1 uppercase tracking-wider">
               {roleMeta.badge}
             </div>
           </div>

@@ -389,13 +389,30 @@
         "adminEmail": { "type": "string", "maxLength": 256 },
         "category": {
           "type": "string",
-          "enum": ["artwork", "users", "anime", "announcements", "admins", "settings", "security", "scanner"],
+          "enum": [
+            "artwork",
+            "users",
+            "anime",
+            "announcements",
+            "admins",
+            "settings",
+            "security",
+            "scanner",
+            "moderation",
+            "cache",
+            "monitoring",
+            "homepage",
+            "episodes",
+            "errors"
+          ],
           "maxLength": 40
         },
+        "adminRole": { "type": "string", "maxLength": 32 },
         "action": { "type": "string", "maxLength": 120 },
         "targetId": { "type": "string", "maxLength": 128 },
         "targetName": { "type": "string", "maxLength": 300 },
         "details": { "type": "string", "maxLength": 2000 },
+        "status": { "type": "string", "maxLength": 32 },
         "timestamp": { "type": "string", "maxLength": 64 },
         "createdAt": { "type": "string", "format": "date-time" }
       },
@@ -416,8 +433,13 @@
         },
         "status": {
           "type": "string",
-          "enum": ["draft", "published", "scheduled"],
+          "enum": ["draft", "published", "scheduled", "archived"],
           "maxLength": 32
+        },
+        "priority": {
+          "type": "string",
+          "enum": ["normal", "high"],
+          "maxLength": 24
         },
         "dismissible": { "type": "boolean" },
         "ctaText": { "type": "string", "maxLength": 80 },
@@ -433,7 +455,7 @@
     },
     "AnimeManagementDoc": {
       "title": "AnimeManagementDoc",
-      "description": "Curated homepage featured anime, collections, and promotional banners under /animeManagement/{docId}",
+      "description": "Curated homepage featured anime, collections, section order, and promotional banners under /animeManagement/{docId}",
       "type": "object",
       "properties": {
         "configId": { "type": "string", "maxLength": 128 },
@@ -443,6 +465,8 @@
         "pinnedSeasonal": { "type": "array" },
         "collections": { "type": "array" },
         "promoBanner": { "type": "object" },
+        "sectionOrder": { "type": "array" },
+        "enabledSections": { "type": "object" },
         "updatedByUid": { "type": "string", "maxLength": 128 },
         "updatedByEmail": { "type": "string", "maxLength": 256 },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -452,7 +476,7 @@
     },
     "SiteConfigDoc": {
       "title": "SiteConfigDoc",
-      "description": "Global site, artwork defaults, and scanner status configuration under /siteConfig/{docId}",
+      "description": "Global site, player, provider, cache, and security configuration under /siteConfig/{docId}",
       "type": "object",
       "properties": {
         "configId": { "type": "string", "maxLength": 128 },
@@ -462,8 +486,12 @@
         "autoArtworkScan": { "type": "boolean" },
         "artworkCacheTtlMinutes": { "type": "number" },
         "maintenanceMode": { "type": "boolean" },
+        "maintenanceMessage": { "type": "string", "maxLength": 500 },
         "require2FAForAdmins": { "type": "boolean" },
         "sessionTimeoutMinutes": { "type": "number" },
+        "playerSettings": { "type": "object" },
+        "providerSettings": { "type": "object" },
+        "performanceSettings": { "type": "object" },
         "updatedByUid": { "type": "string", "maxLength": 128 },
         "updatedByEmail": { "type": "string", "maxLength": 256 },
         "createdAt": { "type": "string", "format": "date-time" },
@@ -487,6 +515,64 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "provider", "endpoint", "status", "responseTimeMs", "statusCode", "checkedAt", "createdAt"]
+    },
+    "ModerationReport": {
+      "title": "ModerationReport",
+      "description": "User-submitted or moderator-flagged reports under /reports/{reportId}",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "reporterUid": { "type": "string", "maxLength": 128 },
+        "reporterLabel": { "type": "string", "maxLength": 120 },
+        "targetType": {
+          "type": "string",
+          "enum": ["user", "anime", "episode", "other"],
+          "maxLength": 32
+        },
+        "targetId": { "type": "string", "maxLength": 128 },
+        "targetName": { "type": "string", "maxLength": 300 },
+        "reason": { "type": "string", "maxLength": 200 },
+        "details": { "type": "string", "maxLength": 2000 },
+        "status": {
+          "type": "string",
+          "enum": ["open", "in_review", "resolved", "dismissed"],
+          "maxLength": 32
+        },
+        "actionTaken": { "type": "string", "maxLength": 120 },
+        "resolutionNote": { "type": "string", "maxLength": 1000 },
+        "resolvedByUid": { "type": "string", "maxLength": 128 },
+        "resolvedByEmail": { "type": "string", "maxLength": 256 },
+        "resolvedAt": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "reporterUid", "targetType", "targetId", "reason", "status", "createdAt", "updatedAt"]
+    },
+    "ErrorLog": {
+      "title": "ErrorLog",
+      "description": "Redacted system, API, and stream failure logs under /errorLogs/{logId}",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 128 },
+        "severity": {
+          "type": "string",
+          "enum": ["info", "warning", "error", "critical"],
+          "maxLength": 24
+        },
+        "category": {
+          "type": "string",
+          "enum": ["api", "stream", "artwork", "auth", "database", "system"],
+          "maxLength": 32
+        },
+        "provider": { "type": "string", "maxLength": 64 },
+        "endpoint": { "type": "string", "maxLength": 512 },
+        "code": { "type": "string", "maxLength": 64 },
+        "statusCode": { "type": "number" },
+        "message": { "type": "string", "maxLength": 1024 },
+        "timestamp": { "type": "string", "maxLength": 64 },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "severity", "category", "provider", "message", "timestamp", "createdAt"]
     }
   },
   "firestore": {
@@ -549,6 +635,14 @@
     "/usernames/{username}": {
       "schema": "UsernameReservation",
       "description": "Unique username handle reservations keyed by lowercase username"
+    },
+    "/reports/{reportId}": {
+      "schema": "ModerationReport",
+      "description": "Moderation reports queue for profiles, anime, and playback issues"
+    },
+    "/errorLogs/{logId}": {
+      "schema": "ErrorLog",
+      "description": "Redacted server, streaming, and upstream API error logs"
     }
   }
 }

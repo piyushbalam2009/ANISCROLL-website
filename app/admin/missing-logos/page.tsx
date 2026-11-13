@@ -15,6 +15,7 @@ import {
   Globe,
   Type,
   Sparkles,
+  ShieldCheck,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { getAdminAuthHeaders, hasAdminPermission } from '@/lib/admin/admin-auth';
@@ -24,6 +25,7 @@ import {
   recordAdminActivity,
   saveAnimeArtworkOverride,
 } from '@/lib/admin/admin-firestore';
+import { AdminStatusBadge } from '@/components/admin/ui/AdminStatusBadge';
 
 type ScannerFilter =
   | 'all_issues'
@@ -33,6 +35,7 @@ type ScannerFilter =
   | 'typography'
   | 'custom'
   | 'unreviewed'
+  | 'broken_url'
   | 'all';
 
 export default function AdminMissingLogosScannerPage() {
@@ -43,6 +46,8 @@ export default function AdminMissingLogosScannerPage() {
   const [loading, setLoading] = useState(true);
   const [scanning, setScanning] = useState(false);
   const [syncingBatch, setSyncingBatch] = useState(false);
+  const [checkingHealth, setCheckingHealth] = useState(false);
+  const [urlHealth, setUrlHealth] = useState<Record<number, 'ok' | 'broken'>>({});
   const [filter, setFilter] = useState<ScannerFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [toast, setToast] = useState<string | null>(null);
@@ -103,6 +108,41 @@ export default function AdminMissingLogosScannerPage() {
     }
   };
 
+  const handleVerifyLogoUrls = async () => {
+    const withUrls = items.filter((item) => Boolean(item.selectedLogoUrl));
+    if (withUrls.length === 0) return;
+
+    setCheckingHealth(true);
+    const nextHealth: Record<number, 'ok' | 'broken'> = {};
+    await Promise.all(
+      withUrls.map(
+        (item) =>
+          new Promise<void>((resolve) => {
+            const img = new window.Image();
+            const timer = setTimeout(() => {
+              nextHealth[item.hoshikaId] = 'broken';
+              resolve();
+            }, 6000);
+            img.onload = () => {
+              clearTimeout(timer);
+              nextHealth[item.hoshikaId] = 'ok';
+              resolve();
+            };
+            img.onerror = () => {
+              clearTimeout(timer);
+              nextHealth[item.hoshikaId] = 'broken';
+              resolve();
+            };
+            img.src = item.selectedLogoUrl;
+          })
+      )
+    );
+    setUrlHealth(nextHealth);
+    const brokenTotal = Object.values(nextHealth).filter((v) => v === 'broken').length;
+    setCheckingHealth(false);
+    showToast(`Verified ${withUrls.length} logo URLs (${brokenTotal} failed to load).`);
+  };
+
   const handleSyncScannedToFirestore = async () => {
     if (!canEdit) return;
     setSyncingBatch(true);
@@ -137,14 +177,8 @@ export default function AdminMissingLogosScannerPage() {
         ...item,
         reviewed: nextReviewed,
       });
-      setItems((prev) =>
-        prev.map((x) => (x.hoshikaId === item.hoshikaId ? saved : x))
-      );
-      showToast(
-        nextReviewed
-          ? `Marked ${item.title} as reviewed.`
-          : `Unmarked ${item.title}.`
-      );
+      setItems((prev) => prev.map((x) => (x.hoshikaId === item.hoshikaId ? saved : x)));
+      showToast(nextReviewed ? `Marked ${item.title} as reviewed.` : `Unmarked ${item.title}.`);
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to update review state.');
     }
@@ -168,10 +202,11 @@ export default function AdminMissingLogosScannerPage() {
     const isCustom =
       item.selectedLogoSource === 'custom_upload' ||
       (item.customLogos && item.customLogos.length > 0);
+    const isBroken = urlHealth[item.hoshikaId] === 'broken';
 
     switch (filter) {
       case 'all_issues':
-        return isMissing || isTypography || isJaOnly || isNoEnglish;
+        return isMissing || isTypography || isJaOnly || isNoEnglish || isBroken;
       case 'missing':
         return isMissing;
       case 'japanese_only':
@@ -184,6 +219,8 @@ export default function AdminMissingLogosScannerPage() {
         return Boolean(isCustom);
       case 'unreviewed':
         return !item.reviewed;
+      case 'broken_url':
+        return isBroken;
       default:
         return true;
     }
@@ -201,6 +238,8 @@ export default function AdminMissingLogosScannerPage() {
       x.selectedLogoSource === 'custom_upload' ||
       (x.customLogos && x.customLogos.length > 0)
   ).length;
+  const coveragePct =
+    items.length > 0 ? Math.round(((items.length - missingCount) / items.length) * 100) : 0;
 
   return (
     <div className="space-y-6">
@@ -215,10 +254,10 @@ export default function AdminMissingLogosScannerPage() {
       <div className="bg-[#0A0A0A] border border-[#292929] rounded-xl p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <div className="text-[11px] font-mono uppercase tracking-widest text-[#707070]">
-            Automatic Artwork Diagnostic Engine
+            Automatic Artwork Diagnostic Engine · {coveragePct}% Coverage
           </div>
-          <h2 className="text-lg sm:text-xl font-black text-white mt-0.5">
-            Missing Logo Detector & Fanart.tv Coverage Scanner
+          <h2 className="text-lg sm:text-xl font-bold text-white mt-0.5">
+            Missing Logo Detector &amp; Fanart.tv Coverage Scanner
           </h2>
           <p className="text-xs text-[#A0A0A0] mt-1">
             Automatically detects anime missing transparent logos, using Japanese-only logos, or falling back to Hoshika typography.
@@ -226,6 +265,20 @@ export default function AdminMissingLogosScannerPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={handleVerifyLogoUrls}
+            disabled={checkingHealth || loading || items.length === 0}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2.5 rounded-xl bg-[#141414] border border-[#292929] hover:border-white text-xs font-semibold text-white transition-colors cursor-pointer disabled:opacity-50"
+          >
+            {checkingHealth ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <ShieldCheck size={14} />
+            )}
+            <span>{checkingHealth ? 'Checking URLs...' : 'Verify Logo URLs'}</span>
+          </button>
+
           {canEdit && (
             <button
               type="button"
@@ -254,7 +307,7 @@ export default function AdminMissingLogosScannerPage() {
         </div>
       </div>
 
-      {/* Summary Diagnostic Pills */}
+      {/* Summary Diagnostic Cards */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <button
           type="button"
@@ -269,9 +322,7 @@ export default function AdminMissingLogosScannerPage() {
             <span>Missing / Fallback</span>
             <AlertTriangle size={14} />
           </div>
-          <div className="text-2xl font-black font-mono tabular-nums mt-1">
-            {missingCount}
-          </div>
+          <div className="text-2xl font-black font-mono tabular-nums mt-1">{missingCount}</div>
         </button>
 
         <button
@@ -287,9 +338,7 @@ export default function AdminMissingLogosScannerPage() {
             <span>Japanese Logo Only</span>
             <Globe size={14} />
           </div>
-          <div className="text-2xl font-black font-mono tabular-nums mt-1">
-            {jaOnlyCount}
-          </div>
+          <div className="text-2xl font-black font-mono tabular-nums mt-1">{jaOnlyCount}</div>
         </button>
 
         <button
@@ -305,9 +354,7 @@ export default function AdminMissingLogosScannerPage() {
             <span>No English Logo</span>
             <Type size={14} />
           </div>
-          <div className="text-2xl font-black font-mono tabular-nums mt-1">
-            {noEnCount}
-          </div>
+          <div className="text-2xl font-black font-mono tabular-nums mt-1">{noEnCount}</div>
         </button>
 
         <button
@@ -323,9 +370,7 @@ export default function AdminMissingLogosScannerPage() {
             <span>Custom Uploaded</span>
             <Upload size={14} />
           </div>
-          <div className="text-2xl font-black font-mono tabular-nums mt-1">
-            {customCount}
-          </div>
+          <div className="text-2xl font-black font-mono tabular-nums mt-1">{customCount}</div>
         </button>
       </div>
 
@@ -342,6 +387,9 @@ export default function AdminMissingLogosScannerPage() {
               { id: 'typography', label: 'Typography Fallback' },
               { id: 'custom', label: 'Custom Logo Available' },
               { id: 'unreviewed', label: 'Unreviewed' },
+              ...(Object.values(urlHealth).some((v) => v === 'broken')
+                ? [{ id: 'broken_url' as const, label: 'Broken URL' }]
+                : []),
             ] as const
           ).map((f) => (
             <button
@@ -377,14 +425,12 @@ export default function AdminMissingLogosScannerPage() {
           <div className="p-12 flex flex-col items-center justify-center space-y-3">
             <Loader2 size={24} className="animate-spin text-white" />
             <div className="text-xs font-mono uppercase tracking-wider text-[#A0A0A0]">
-              Scanning Catalogue Artwork & Fanart.tv Logos...
+              Scanning Catalogue Artwork &amp; Fanart.tv Logos...
             </div>
           </div>
         ) : filteredItems.length === 0 ? (
           <div className="p-10 text-center space-y-2">
-            <div className="text-sm font-bold text-white">
-              No Anime Matched This Filter
-            </div>
+            <div className="text-sm font-bold text-white">No Anime Matched This Filter</div>
             <p className="text-xs text-[#A0A0A0]">
               Try switching to &ldquo;All Scanned&rdquo; or running a deep artwork scan.
             </p>
@@ -397,105 +443,114 @@ export default function AdminMissingLogosScannerPage() {
                   <th className="py-3 px-4">Anime</th>
                   <th className="py-3 px-4">Current Logo Preview</th>
                   <th className="py-3 px-4">External IDs</th>
-                  <th className="py-3 px-4">Logo Status & Source</th>
+                  <th className="py-3 px-4">Logo Status &amp; Source</th>
                   <th className="py-3 px-4">Candidates</th>
                   <th className="py-3 px-4 text-right">Quick Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#292929] text-xs">
-                {filteredItems.map((item) => (
-                  <tr
-                    key={item.hoshikaId}
-                    className="hover:bg-[#141414]/40 transition-colors"
-                  >
-                    <td className="py-3.5 px-4">
-                      <div className="font-bold text-white max-w-[220px] truncate">
-                        {item.title}
-                      </div>
-                      <div className="text-[11px] font-mono text-[#707070] tabular-nums">
-                        Hoshika #{item.hoshikaId}
-                      </div>
-                    </td>
+                {filteredItems.map((item) => {
+                  const health = urlHealth[item.hoshikaId];
+                  return (
+                    <tr
+                      key={item.hoshikaId}
+                      className="hover:bg-[#141414]/40 transition-colors"
+                    >
+                      <td className="py-3.5 px-4">
+                        <div className="font-bold text-white max-w-[220px] truncate">
+                          {item.title}
+                        </div>
+                        <div className="text-[11px] font-mono text-[#707070] tabular-nums">
+                          Hoshika #{item.hoshikaId}
+                        </div>
+                      </td>
 
-                    <td className="py-3.5 px-4">
-                      <div className="w-36 h-12 rounded-lg bg-[#050505] border border-[#292929] relative flex items-center justify-center p-1.5 overflow-hidden">
-                        <ResilientImage
-                          src={item.selectedLogoUrl}
-                          alt={item.title}
-                          fill
-                          sizes="150px"
-                          className="object-contain p-1.5"
-                          fallback={
-                            <span className="text-[10px] font-mono text-[#707070] uppercase">
-                              Typography Fallback
-                            </span>
-                          }
-                        />
-                      </div>
-                    </td>
+                      <td className="py-3.5 px-4">
+                        <div className="w-36 h-12 rounded-lg bg-[#050505] border border-[#292929] relative flex items-center justify-center p-1.5 overflow-hidden">
+                          <ResilientImage
+                            src={item.selectedLogoUrl}
+                            alt={item.title}
+                            fill
+                            sizes="150px"
+                            className="object-contain p-1.5"
+                            fallback={
+                              <span className="text-[10px] font-mono text-[#707070] uppercase">
+                                Typography Fallback
+                              </span>
+                            }
+                          />
+                        </div>
+                      </td>
 
-                    <td className="py-3.5 px-4 font-mono text-[11px] text-[#A0A0A0] tabular-nums">
-                      <div>TVDB: {item.tvdbId || '—'}</div>
-                      <div>TMDB: {item.tmdbId || '—'}</div>
-                    </td>
+                      <td className="py-3.5 px-4 font-mono text-[11px] text-[#A0A0A0] tabular-nums">
+                        <div>TVDB: {item.tvdbId || '—'}</div>
+                        <div>TMDB: {item.tmdbId || '—'}</div>
+                      </td>
 
-                    <td className="py-3.5 px-4">
-                      <div className="flex flex-wrap items-center gap-1.5">
-                        <span
-                          className={`px-2 py-0.5 rounded font-mono text-[10px] font-bold uppercase ${
-                            item.selectedLogoUrl
-                              ? 'bg-white text-black'
-                              : 'bg-[#141414] border border-white/30 text-white'
-                          }`}
-                        >
-                          {item.selectedLogoUrl ? item.logoStatus : 'MISSING LOGO'}
-                        </span>
-                        <span className="px-2 py-0.5 rounded bg-[#141414] border border-[#292929] font-mono text-[10px] text-[#A0A0A0] uppercase">
-                          {item.selectedLogoSource} ({item.selectedLogoLanguage || 'en'})
-                        </span>
-                      </div>
-                    </td>
-
-                    <td className="py-3.5 px-4 font-mono text-[11px] text-white tabular-nums">
-                      <div>
-                        {(item.availableLogos || []).length} Fanart •{' '}
-                        {(item.customLogos || []).length} Custom
-                      </div>
-                      <div className="text-[#707070]">
-                        EN: {item.hasEnglishLogo ? 'Yes' : 'No'} • JA:{' '}
-                        {item.hasJapaneseLogo ? 'Yes' : 'No'}
-                      </div>
-                    </td>
-
-                    <td className="py-3.5 px-4 text-right">
-                      <div className="inline-flex items-center justify-end gap-2">
-                        <Link
-                          href={`/admin/artwork/${item.hoshikaId}`}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white text-black hover:bg-neutral-200 font-bold text-xs transition-colors"
-                        >
-                          <SlidersHorizontal size={12} />
-                          <span>Manage / Upload</span>
-                        </Link>
-
-                        {canEdit && (
-                          <button
-                            type="button"
-                            onClick={() => handleToggleReviewed(item)}
-                            className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-mono transition-colors cursor-pointer ${
-                              item.reviewed
-                                ? 'bg-[#141414] border-white text-white'
-                                : 'bg-[#0F0F0F] border-[#292929] text-[#A0A0A0] hover:text-white'
+                      <td className="py-3.5 px-4">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span
+                            className={`px-2 py-0.5 rounded font-mono text-[10px] font-bold uppercase ${
+                              item.selectedLogoUrl
+                                ? 'bg-white text-black'
+                                : 'bg-[#141414] border border-white/30 text-white'
                             }`}
-                            title="Mark as reviewed"
                           >
-                            <Check size={12} />
-                            <span>{item.reviewed ? 'Reviewed' : 'Review'}</span>
-                          </button>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                            {item.selectedLogoUrl ? item.logoStatus : 'MISSING LOGO'}
+                          </span>
+                          <span className="px-2 py-0.5 rounded bg-[#141414] border border-[#292929] font-mono text-[10px] text-[#A0A0A0] uppercase">
+                            {item.selectedLogoSource} ({item.selectedLogoLanguage || 'en'})
+                          </span>
+                          {health === 'broken' && (
+                            <AdminStatusBadge tone="outage" label="BROKEN URL" />
+                          )}
+                          {health === 'ok' && (
+                            <AdminStatusBadge tone="operational" label="URL OK" />
+                          )}
+                        </div>
+                      </td>
+
+                      <td className="py-3.5 px-4 font-mono text-[11px] text-white tabular-nums">
+                        <div>
+                          {(item.availableLogos || []).length} Fanart •{' '}
+                          {(item.customLogos || []).length} Custom
+                        </div>
+                        <div className="text-[#707070]">
+                          EN: {item.hasEnglishLogo ? 'Yes' : 'No'} • JA:{' '}
+                          {item.hasJapaneseLogo ? 'Yes' : 'No'}
+                        </div>
+                      </td>
+
+                      <td className="py-3.5 px-4 text-right">
+                        <div className="inline-flex items-center justify-end gap-2">
+                          <Link
+                            href={`/admin/artwork/${item.hoshikaId}`}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-white text-black hover:bg-neutral-200 font-bold text-xs transition-colors"
+                          >
+                            <SlidersHorizontal size={12} />
+                            <span>Manage / Upload</span>
+                          </Link>
+
+                          {canEdit && (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleReviewed(item)}
+                              className={`inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg border text-xs font-mono transition-colors cursor-pointer ${
+                                item.reviewed
+                                  ? 'bg-[#141414] border-white text-white'
+                                  : 'bg-[#0F0F0F] border-[#292929] text-[#A0A0A0] hover:text-white'
+                              }`}
+                              title="Mark as reviewed"
+                            >
+                              <Check size={12} />
+                              <span>{item.reviewed ? 'Reviewed' : 'Review'}</span>
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>

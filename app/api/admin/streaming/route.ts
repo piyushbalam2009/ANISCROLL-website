@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { verifyAdminRequest } from '@/lib/firebase-admin';
+import { listFirestoreCollectionRest, verifyAdminRequest, writeFirestoreDocumentServer } from '@/lib/firebase-admin';
 import { hasAdminPermission } from '@/lib/admin/admin-permissions';
+import { getDetailedProviderTelemetry } from '@/lib/perf-monitor';
+import { getAniScrollStream } from '@/lib/aniscroll';
+import { selectStreamingProvider } from '@/lib/stream-provider-core';
+import { redactSensitiveText, sanitizeDiagnosticUrl } from '@/lib/admin/redaction';
+import { logAdminActionServer, logErrorEventServer } from '@/lib/admin/server-audit';
 
 interface ProviderProbeResult {
-  provider: 'aniscroll' | 'hoshika' | 'anilist' | 'aniskip' | 'fanart';
+  provider: 'aniscroll' | 'hoshika' | 'anilist' | 'aniskip' | 'fanart' | 'megaplay' | 'zokoanime';
   name: string;
   description: string;
   endpoint: string;
@@ -39,7 +44,6 @@ async function probeEndpoint(params: {
     const responseTimeMs = Math.max(1, Date.now() - start);
     const statusCode = res.status;
 
-    // Note: AniSkip returns 404 when skip times aren't found for an episode, which still proves the API is online & responding
     const isOnline =
       (statusCode >= 200 && statusCode < 400) ||
       (params.provider === 'aniskip' && statusCode === 404);
@@ -72,19 +76,30 @@ async function probeEndpoint(params: {
       status: 'outage',
       responseTimeMs,
       statusCode: 0,
-      errorMessage: error instanceof Error ? error.message : 'Connection timeout',
+      errorMessage: error instanceof Error ? redactSensitiveText(error.message, 256) : 'Connection timeout',
       checkedAt,
     };
   }
 }
 
-export async function GET(req: NextRequest) {
-  const verified = await verifyAdminRequest(req);
-  if (!verified || !hasAdminPermission(verified.admin, 'viewAnalytics')) {
-    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
-  }
-
-  const probes = await Promise.all([
+async function runStreamingProbes(): Promise<ProviderProbeResult[]> {
+  return Promise.all([
+    probeEndpoint({
+      provider: 'megaplay',
+      name: 'MegaPlay (Anime Series)',
+      description: 'Primary TV / OVA / ONA / Special series streaming gateway (Sub & Dub)',
+      endpointLabel: 'GET https://api.aniscroll.in/api/watch/megaplay/{anilist_id}/{episode}/{sub|dub}',
+      url: 'https://api.aniscroll.in/api/watch/megaplay/21/1/sub',
+      init: { method: 'GET', headers: { Accept: 'application/json' } },
+    }),
+    probeEndpoint({
+      provider: 'zokoanime',
+      name: 'ZokoAnime (Anime Movies)',
+      description: 'Dedicated movie streaming gateway preserving movie playback routing',
+      endpointLabel: 'GET https://api.aniscroll.in/api/watch/zokoanime/{anilist_id}/{episode}/{sub|dub}',
+      url: 'https://api.aniscroll.in/api/watch/zokoanime/16498/1/sub',
+      init: { method: 'GET', headers: { Accept: 'application/json' } },
+    }),
     probeEndpoint({
       provider: 'hoshika',
       name: 'Hoshika Metadata API',
@@ -130,6 +145,18 @@ export async function GET(req: NextRequest) {
       init: { method: 'HEAD' },
     }),
   ]);
+}
+
+export async function GET(req: NextRequest) {
+  const verified = await verifyAdminRequest(req);
+  if (!verified || !hasAdminPermission(verified.admin, 'viewAnalytics')) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
+  const [probes, logsDocs] = await Promise.all([
+    runStreamingProbes(),
+    listFirestoreCollectionRest('streamingLogs', 50, verified.idToken),
+  ]);
 
   const fanartKey = (
     process.env.FANART_API_KEY ||
@@ -137,11 +164,137 @@ export async function GET(req: NextRequest) {
     ''
   ).trim();
 
+  const providerTelemetry = getDetailedProviderTelemetry([
+    'megaplay',
+    'zokoanime',
+    'hoshika',
+    'anilist',
+    'aniskip',
+    'fanart',
+  ]);
+
+  const historyLogs = logsDocs
+    .map((d) => d.data)
+    .sort((a: any, b: any) => String(b.checkedAt || '').localeCompare(String(a.checkedAt || '')));
+
   return NextResponse.json({
     checkedAt: new Date().toISOString(),
     fanartApiKeyConfigured: Boolean(
       fanartKey && fanartKey !== 'MY_FANART_API_KEY' && fanartKey.length > 5
     ),
     probes,
+    providerTelemetry,
+    historyLogs,
   });
+}
+
+export async function POST(req: NextRequest) {
+  const verified = await verifyAdminRequest(req);
+  if (!verified || !hasAdminPermission(verified.admin, 'viewAnalytics')) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+  }
+
+  const body = await req.json().catch(() => ({}));
+  const action = String(body?.action || '');
+
+  if (action === 'test_stream') {
+    const anilistId = Math.max(1, Math.floor(Number(body?.anilistId) || 0));
+    const episode = Math.max(1, Math.floor(Number(body?.episode) || 1));
+    const audioType = body?.audioType === 'dub' ? 'dub' : 'sub';
+    const format = String(body?.format || 'TV');
+
+    if (!anilistId) {
+      return NextResponse.json({ error: 'Valid AniList ID required' }, { status: 400 });
+    }
+
+    const provider = selectStreamingProvider({ format });
+    const start = Date.now();
+    const stream = await getAniScrollStream(anilistId, episode, audioType, {
+      provider,
+      format,
+    });
+    const latencyMs = Math.max(1, Date.now() - start);
+
+    const primaryUrl =
+      stream?.m3u8 ||
+      stream?.hlsProxyUrl ||
+      stream?.qualities?.[0]?.hlsProxyUrl ||
+      stream?.embedUrl ||
+      '';
+    const sanitizedUrl = primaryUrl ? sanitizeDiagnosticUrl(primaryUrl) : '';
+    const tracksCount = Array.isArray(stream?.qualities) && stream.qualities.length > 0
+      ? stream.qualities.length
+      : primaryUrl
+      ? 1
+      : 0;
+    const subtitlesCount = Array.isArray(stream?.subtitles) ? stream.subtitles.length : 0;
+
+    if (!stream || !primaryUrl) {
+      await logErrorEventServer(verified.idToken, {
+        severity: 'warning',
+        category: 'stream',
+        provider,
+        endpoint: `/api/watch/${provider}/${anilistId}/${episode}/${audioType}`,
+        message: `Admin stream test found no playable ${audioType} stream for AniList #${anilistId} Ep ${episode}`,
+      });
+    }
+
+    await logAdminActionServer(verified, {
+      category: 'monitoring',
+      action: `Tested ${provider} stream endpoint`,
+      targetId: `${anilistId}-${episode}`,
+      targetName: `AniList #${anilistId} Ep ${episode} (${audioType.toUpperCase()})`,
+      details: stream
+        ? `Resolved ${provider} (${format}) in ${latencyMs}ms with ${tracksCount} source(s)`
+        : `No stream returned from ${provider} (${format}) in ${latencyMs}ms`,
+    });
+
+    return NextResponse.json({
+      ok: true,
+      provider,
+      format,
+      anilistId,
+      episode,
+      audioType,
+      playable: Boolean(stream && primaryUrl),
+      url: sanitizedUrl,
+      tracksCount,
+      subtitlesCount,
+      latencyMs,
+    });
+  }
+
+  if (action === 'log_probes') {
+    const probes = await runStreamingProbes();
+    const savedCount = await Promise.all(
+      probes.map(async (p) => {
+        const id = `smon_${Date.now()}_${p.provider}_${Math.random().toString(36).slice(2, 6)}`;
+        await writeFirestoreDocumentServer({
+          collectionPath: 'streamingLogs',
+          docId: id,
+          data: {
+            id,
+            provider: p.provider,
+            endpoint: redactSensitiveText(p.endpoint, 512),
+            status: p.status,
+            responseTimeMs: Math.round(p.responseTimeMs),
+            statusCode: Math.round(p.statusCode),
+            errorMessage: redactSensitiveText(p.errorMessage || '', 1024),
+            checkedAt: p.checkedAt,
+          },
+          idToken: verified.idToken,
+          includeUpdatedAt: false,
+        }).catch(() => false);
+        return true;
+      })
+    );
+
+    return NextResponse.json({
+      ok: true,
+      probes,
+      savedCount: savedCount.length,
+    });
+  }
+
+  return NextResponse.json({ error: `Unknown action: ${action}` }, { status: 400 });
 }

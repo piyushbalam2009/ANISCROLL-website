@@ -29,6 +29,7 @@ import {
   AnimeLogoStatus,
   SelectedLogoMetadata,
 } from '@/types/artwork';
+import { redactSensitiveText } from './redaction';
 
 // ============================================================================
 // INTERFACES MATCHING FIREBASE-BLUEPRINT.JSON & FIRESTORE.RULES
@@ -85,15 +86,33 @@ export interface ArtworkAuditLogEntry {
   createdAt?: unknown;
 }
 
+export type AdminActivityCategory =
+  | 'artwork'
+  | 'users'
+  | 'anime'
+  | 'announcements'
+  | 'admins'
+  | 'settings'
+  | 'security'
+  | 'scanner'
+  | 'moderation'
+  | 'cache'
+  | 'monitoring'
+  | 'homepage'
+  | 'episodes'
+  | 'errors';
+
 export interface AdminActivityLogEntry {
   id: string;
   adminUid: string;
   adminEmail: string;
-  category: 'artwork' | 'users' | 'anime' | 'announcements' | 'admins' | 'settings' | 'security' | 'scanner';
+  adminRole?: string;
+  category: AdminActivityCategory;
   action: string;
   targetId: string;
   targetName: string;
   details: string;
+  status?: string;
   timestamp: string;
   createdAt?: unknown;
 }
@@ -103,7 +122,8 @@ export interface AnnouncementFirestoreDoc {
   title: string;
   message: string;
   type: 'feature' | 'maintenance' | 'notice' | 'alert';
-  status: 'draft' | 'published' | 'scheduled';
+  status: 'draft' | 'published' | 'scheduled' | 'archived';
+  priority?: 'normal' | 'high';
   dismissible: boolean;
   ctaText: string;
   ctaLink: string;
@@ -143,6 +163,15 @@ export interface PromoBannerConfig {
   ctaText: string;
 }
 
+export type HomepageSectionKey =
+  | 'continue_watching'
+  | 'trending'
+  | 'seasonal'
+  | 'popular'
+  | 'recent'
+  | 'collections'
+  | 'promo_banner';
+
 export interface AnimeManagementFirestoreDoc {
   configId: string;
   featuredAnimeIds: number[];
@@ -151,10 +180,33 @@ export interface AnimeManagementFirestoreDoc {
   pinnedSeasonal: FeaturedAnimeItem[];
   collections: CustomAnimeCollection[];
   promoBanner: PromoBannerConfig;
+  sectionOrder?: string[];
+  enabledSections?: Record<string, boolean>;
   updatedByUid: string;
   updatedByEmail: string;
   createdAt?: unknown;
   updatedAt?: unknown;
+}
+
+export interface PlayerSettingsConfig {
+  defaultAudio: 'sub' | 'dub';
+  defaultQuality: 'auto' | '1080p' | '720p' | '480p';
+  autoPlayNext: boolean;
+  autoSkipIntro: boolean;
+  autoSkipOutro: boolean;
+}
+
+export interface ProviderSettingsConfig {
+  seriesProvider: 'megaplay';
+  movieProvider: 'zokoanime';
+  allowStreamFallback: boolean;
+  streamTimeoutMs: number;
+}
+
+export interface PerformanceSettingsConfig {
+  catalogCacheTtlSeconds: number;
+  episodeCacheTtlSeconds: number;
+  enableEdgeCaching: boolean;
 }
 
 export interface SiteConfigFirestoreDoc {
@@ -165,8 +217,12 @@ export interface SiteConfigFirestoreDoc {
   autoArtworkScan: boolean;
   artworkCacheTtlMinutes: number;
   maintenanceMode: boolean;
+  maintenanceMessage?: string;
   require2FAForAdmins: boolean;
   sessionTimeoutMinutes: number;
+  playerSettings?: PlayerSettingsConfig;
+  providerSettings?: ProviderSettingsConfig;
+  performanceSettings?: PerformanceSettingsConfig;
   updatedByUid: string;
   updatedByEmail: string;
   createdAt?: unknown;
@@ -175,13 +231,45 @@ export interface SiteConfigFirestoreDoc {
 
 export interface StreamingMonitorLogEntry {
   id: string;
-  provider: 'aniscroll' | 'hoshika' | 'anilist' | 'aniskip' | 'fanart';
+  provider: 'aniscroll' | 'hoshika' | 'anilist' | 'aniskip' | 'fanart' | 'megaplay' | 'zokoanime';
   endpoint: string;
   status: 'operational' | 'degraded' | 'outage';
   responseTimeMs: number;
   statusCode: number;
   errorMessage: string;
   checkedAt: string;
+  createdAt?: unknown;
+}
+
+export interface ModerationReportDoc {
+  id: string;
+  reporterUid: string;
+  reporterLabel?: string;
+  targetType: 'user' | 'anime' | 'episode' | 'other';
+  targetId: string;
+  targetName?: string;
+  reason: string;
+  details?: string;
+  status: 'open' | 'in_review' | 'resolved' | 'dismissed';
+  actionTaken?: string;
+  resolutionNote?: string;
+  resolvedByUid?: string;
+  resolvedByEmail?: string;
+  resolvedAt?: string;
+  createdAt?: unknown;
+  updatedAt?: unknown;
+}
+
+export interface ErrorLogDoc {
+  id: string;
+  severity: 'info' | 'warning' | 'error' | 'critical';
+  category: 'api' | 'stream' | 'artwork' | 'auth' | 'database' | 'system';
+  provider: string;
+  endpoint?: string;
+  code?: string;
+  statusCode?: number;
+  message: string;
+  timestamp: string;
   createdAt?: unknown;
 }
 
@@ -223,6 +311,8 @@ export async function recordAdminActivity(params: {
   targetId: string | number;
   targetName: string;
   details: string;
+  adminRole?: string;
+  status?: string;
 }): Promise<void> {
   const user = auth.currentUser;
   if (!user) return;
@@ -233,11 +323,13 @@ export async function recordAdminActivity(params: {
     id,
     adminUid: user.uid,
     adminEmail: cleanString(user.email, 256, 'admin@aniscroll.app'),
+    ...(params.adminRole ? { adminRole: cleanString(params.adminRole, 32, 'staff') } : {}),
     category: params.category,
-    action: cleanString(params.action, 120, 'Admin Action'),
+    action: redactSensitiveText(cleanString(params.action, 120, 'Admin Action'), 120),
     targetId: cleanString(String(params.targetId), 128, 'global'),
-    targetName: cleanString(params.targetName, 300, 'System'),
-    details: cleanString(params.details, 2000, ''),
+    targetName: redactSensitiveText(cleanString(params.targetName, 300, 'System'), 300),
+    details: redactSensitiveText(cleanString(params.details, 2000, ''), 2000),
+    ...(params.status ? { status: cleanString(params.status, 32, 'success') } : {}),
     timestamp: new Date().toISOString(),
     createdAt: serverTimestamp(),
   };
@@ -690,7 +782,7 @@ export async function getActiveAnnouncementsForPublic(): Promise<AnnouncementFir
     return snap.docs
       .map((d) => d.data() as AnnouncementFirestoreDoc)
       .filter((item) => {
-        if (item.status === 'draft') return false;
+        if (item.status === 'draft' || item.status === 'archived') return false;
         if (item.startsAt && item.startsAt > nowIso && item.status === 'scheduled') return false;
         if (item.expiresAt && item.expiresAt < nowIso) return false;
         return item.status === 'published' || (item.status === 'scheduled' && item.startsAt <= nowIso);
@@ -718,6 +810,7 @@ export async function saveAnnouncement(
     message: cleanString(input.message, 2000, ''),
     type: input.type || 'notice',
     status: input.status || 'draft',
+    priority: input.priority === 'high' ? 'high' : 'normal',
     dismissible: Boolean(input.dismissible),
     ctaText: cleanString(input.ctaText, 80, ''),
     ctaLink: cleanString(input.ctaLink, 512, ''),
@@ -799,6 +892,24 @@ export const DEFAULT_ANIME_MANAGEMENT_CONFIG: Omit<
     backgroundUrl: '',
     ctaText: 'Watch Now',
   },
+  sectionOrder: [
+    'continue_watching',
+    'trending',
+    'seasonal',
+    'popular',
+    'recent',
+    'collections',
+    'promo_banner',
+  ],
+  enabledSections: {
+    continue_watching: true,
+    trending: true,
+    seasonal: true,
+    popular: true,
+    recent: true,
+    collections: true,
+    promo_banner: true,
+  },
   updatedByUid: 'system',
   updatedByEmail: 'system@aniscroll.app',
 };
@@ -807,7 +918,23 @@ export async function getAnimeManagementDoc(): Promise<AnimeManagementFirestoreD
   try {
     const snap = await getDoc(doc(db, 'animeManagement', 'homepage'));
     if (!snap.exists()) return DEFAULT_ANIME_MANAGEMENT_CONFIG;
-    return snap.data() as AnimeManagementFirestoreDoc;
+    const raw = snap.data() as Partial<AnimeManagementFirestoreDoc>;
+    return {
+      ...DEFAULT_ANIME_MANAGEMENT_CONFIG,
+      ...raw,
+      promoBanner: {
+        ...DEFAULT_ANIME_MANAGEMENT_CONFIG.promoBanner,
+        ...(raw.promoBanner || {}),
+      },
+      sectionOrder:
+        Array.isArray(raw.sectionOrder) && raw.sectionOrder.length > 0
+          ? raw.sectionOrder
+          : DEFAULT_ANIME_MANAGEMENT_CONFIG.sectionOrder,
+      enabledSections: {
+        ...DEFAULT_ANIME_MANAGEMENT_CONFIG.enabledSections,
+        ...(raw.enabledSections || {}),
+      },
+    };
   } catch {
     return DEFAULT_ANIME_MANAGEMENT_CONFIG;
   }
@@ -830,6 +957,12 @@ export async function saveAnimeManagementDoc(
     pinnedSeasonal: (input.pinnedSeasonal || []).slice(0, 30),
     collections: (input.collections || []).slice(0, 20),
     promoBanner: input.promoBanner || DEFAULT_ANIME_MANAGEMENT_CONFIG.promoBanner,
+    sectionOrder:
+      Array.isArray(input.sectionOrder) && input.sectionOrder.length > 0
+        ? input.sectionOrder.slice(0, 20)
+        : DEFAULT_ANIME_MANAGEMENT_CONFIG.sectionOrder,
+    enabledSections:
+      input.enabledSections || DEFAULT_ANIME_MANAGEMENT_CONFIG.enabledSections,
     updatedByUid: user.uid,
     updatedByEmail: cleanString(user.email, 256, 'admin@aniscroll.app'),
   };
@@ -852,7 +985,7 @@ export async function saveAnimeManagementDoc(
     }
 
     await recordAdminActivity({
-      category: 'anime',
+      category: 'homepage',
       action: 'Updated homepage anime curation',
       targetId: 'homepage',
       targetName: 'Homepage Curation & Collections',
@@ -877,8 +1010,28 @@ export const DEFAULT_SITE_CONFIG: Omit<SiteConfigFirestoreDoc, 'createdAt' | 'up
   autoArtworkScan: true,
   artworkCacheTtlMinutes: 60,
   maintenanceMode: false,
+  maintenanceMessage:
+    'AniScroll is undergoing scheduled maintenance. Streaming and metadata endpoints will resume shortly.',
   require2FAForAdmins: true,
   sessionTimeoutMinutes: 120,
+  playerSettings: {
+    defaultAudio: 'sub',
+    defaultQuality: 'auto',
+    autoPlayNext: true,
+    autoSkipIntro: true,
+    autoSkipOutro: false,
+  },
+  providerSettings: {
+    seriesProvider: 'megaplay',
+    movieProvider: 'zokoanime',
+    allowStreamFallback: false,
+    streamTimeoutMs: 8500,
+  },
+  performanceSettings: {
+    catalogCacheTtlSeconds: 300,
+    episodeCacheTtlSeconds: 180,
+    enableEdgeCaching: true,
+  },
   updatedByUid: 'system',
   updatedByEmail: 'system@aniscroll.app',
 };
@@ -887,7 +1040,23 @@ export async function getSiteConfigDoc(): Promise<SiteConfigFirestoreDoc> {
   try {
     const snap = await getDoc(doc(db, 'siteConfig', 'global'));
     if (!snap.exists()) return DEFAULT_SITE_CONFIG;
-    return snap.data() as SiteConfigFirestoreDoc;
+    const raw = snap.data() as Partial<SiteConfigFirestoreDoc>;
+    return {
+      ...DEFAULT_SITE_CONFIG,
+      ...raw,
+      playerSettings: {
+        ...DEFAULT_SITE_CONFIG.playerSettings!,
+        ...(raw.playerSettings || {}),
+      },
+      providerSettings: {
+        ...DEFAULT_SITE_CONFIG.providerSettings!,
+        ...(raw.providerSettings || {}),
+      },
+      performanceSettings: {
+        ...DEFAULT_SITE_CONFIG.performanceSettings!,
+        ...(raw.performanceSettings || {}),
+      },
+    };
   } catch {
     return DEFAULT_SITE_CONFIG;
   }
@@ -910,8 +1079,16 @@ export async function saveSiteConfigDoc(
     autoArtworkScan: Boolean(input.autoArtworkScan),
     artworkCacheTtlMinutes: Math.min(10080, Math.max(1, Number(input.artworkCacheTtlMinutes) || 60)),
     maintenanceMode: Boolean(input.maintenanceMode),
+    maintenanceMessage: cleanString(
+      input.maintenanceMessage,
+      500,
+      DEFAULT_SITE_CONFIG.maintenanceMessage || ''
+    ),
     require2FAForAdmins: Boolean(input.require2FAForAdmins),
     sessionTimeoutMinutes: Math.min(10080, Math.max(5, Number(input.sessionTimeoutMinutes) || 120)),
+    playerSettings: input.playerSettings || DEFAULT_SITE_CONFIG.playerSettings,
+    providerSettings: input.providerSettings || DEFAULT_SITE_CONFIG.providerSettings,
+    performanceSettings: input.performanceSettings || DEFAULT_SITE_CONFIG.performanceSettings,
     updatedByUid: user.uid,
     updatedByEmail: cleanString(user.email, 256, 'admin@aniscroll.app'),
   };
@@ -938,7 +1115,7 @@ export async function saveSiteConfigDoc(
       action: 'Updated global site configuration',
       targetId: 'global',
       targetName: 'Site Settings',
-      details: `English Logo Priority: ${payload.preferEnglishLogos}, Cache TTL: ${payload.artworkCacheTtlMinutes}m`,
+      details: `English Logo Priority: ${payload.preferEnglishLogos}, Cache TTL: ${payload.artworkCacheTtlMinutes}m, Maintenance: ${payload.maintenanceMode}`,
     });
 
     return payload;
@@ -960,11 +1137,11 @@ export async function recordStreamingMonitorLog(
     await setDoc(doc(db, 'streamingLogs', id), {
       id,
       provider: entry.provider,
-      endpoint: cleanString(entry.endpoint, 512, '/api'),
+      endpoint: redactSensitiveText(cleanString(entry.endpoint, 512, '/api'), 512),
       status: entry.status,
       responseTimeMs: Math.max(0, Math.round(Number(entry.responseTimeMs) || 0)),
       statusCode: Math.max(0, Math.round(Number(entry.statusCode) || 200)),
-      errorMessage: cleanString(entry.errorMessage, 1024, ''),
+      errorMessage: redactSensitiveText(cleanString(entry.errorMessage, 1024, ''), 1024),
       checkedAt: entry.checkedAt || new Date().toISOString(),
       createdAt: serverTimestamp(),
     });
@@ -979,6 +1156,32 @@ export async function listStreamingMonitorLogs(maxItems = 50): Promise<Streaming
     const q = query(collection(db, 'streamingLogs'), orderBy('checkedAt', 'desc'), limit(maxItems));
     const snap = await getDocs(q);
     return snap.docs.map((d) => d.data() as StreamingMonitorLogEntry);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+// ============================================================================
+// 8b. MODERATION REPORTS (/reports/{reportId}) & ERROR LOGS (/errorLogs/{logId})
+// ============================================================================
+
+export async function listModerationReports(maxItems = 100): Promise<ModerationReportDoc[]> {
+  const path = 'reports';
+  try {
+    const q = query(collection(db, 'reports'), orderBy('createdAt', 'desc'), limit(maxItems));
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => d.data() as ModerationReportDoc);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, path);
+  }
+}
+
+export async function listErrorLogs(maxItems = 100): Promise<ErrorLogDoc[]> {
+  const path = 'errorLogs';
+  try {
+    const q = query(collection(db, 'errorLogs'), orderBy('timestamp', 'desc'), limit(maxItems));
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => d.data() as ErrorLogDoc);
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, path);
   }

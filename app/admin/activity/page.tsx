@@ -9,30 +9,53 @@ import {
   CheckCircle2,
   Loader2,
   ExternalLink,
+  Search,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
-import { hasAdminPermission } from '@/lib/admin/admin-auth';
+import { getAdminAuthHeaders, hasAdminPermission } from '@/lib/admin/admin-auth';
 import {
   AdminActivityLogEntry,
   ArtworkAuditLogEntry,
   getAnimeArtworkOverride,
-  listAdminActivityLogs,
-  listArtworkAuditLogs,
   recordArtworkAuditLog,
   saveAnimeArtworkOverride,
 } from '@/lib/admin/admin-firestore';
 import { DEFAULT_LOGO_DISPLAY_SETTINGS } from '@/types/artwork';
 
-export default function AdminActivityAndAuditLogsPage() {
-  const { adminRecord } = useAuth();
-  const canRestoreArtwork = hasAdminPermission(adminRecord, 'manageArtwork');
+const ADMIN_CATEGORIES = [
+  'all',
+  'moderation',
+  'users',
+  'artwork',
+  'scanner',
+  'anime',
+  'episodes',
+  'homepage',
+  'announcements',
+  'admins',
+  'settings',
+  'cache',
+  'monitoring',
+  'errors',
+] as const;
 
-  const [tab, setTab] = useState<'artwork' | 'system'>('artwork');
+const MOD_CATEGORIES = ['all', 'moderation', 'users'] as const;
+
+export default function AdminActivityAndAuditLogsPage() {
+  const { adminRecord, effectiveRole } = useAuth();
+  const isMod = effectiveRole === 'mod';
+  const canRestoreArtwork =
+    !isMod && hasAdminPermission(adminRecord, 'manageArtwork');
+
+  const [tab, setTab] = useState<'artwork' | 'system'>(isMod ? 'system' : 'artwork');
   const [categoryFilter, setCategoryFilter] = useState<string>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [restrictedArtworkLogs, setRestrictedArtworkLogs] = useState(isMod);
   const [artworkLogs, setArtworkLogs] = useState<ArtworkAuditLogEntry[]>([]);
   const [activityLogs, setActivityLogs] = useState<AdminActivityLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const showToast = (msg: string) => {
@@ -40,22 +63,50 @@ export default function AdminActivityAndAuditLogsPage() {
     setTimeout(() => setToast(null), 3500);
   };
 
+  useEffect(() => {
+    if (isMod && tab === 'artwork') {
+      setTab('system');
+    }
+  }, [isMod, tab]);
+
   const loadLogs = useCallback(async () => {
     setLoading(true);
+    setErrorMsg(null);
     try {
-      const [audits, activities] = await Promise.all([
-        listArtworkAuditLogs(100).catch(() => []),
-        listAdminActivityLogs(100).catch(() => []),
-      ]);
-      setArtworkLogs(audits);
-      setActivityLogs(activities);
+      const headers = await getAdminAuthHeaders();
+      const params = new URLSearchParams();
+      params.set('category', categoryFilter);
+      if (searchQuery.trim()) {
+        params.set('q', searchQuery.trim());
+      }
+      const res = await fetch(`/api/admin/activity?${params.toString()}`, {
+        headers,
+        cache: 'no-store',
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) {
+        throw new Error(data?.error || `Failed to load activity logs (${res.status})`);
+      }
+
+      const restricted = Boolean(data.restrictedArtworkLogs);
+      setRestrictedArtworkLogs(restricted);
+      if (restricted) {
+        setTab('system');
+      }
+      setActivityLogs(Array.isArray(data.activityLogs) ? data.activityLogs : []);
+      setArtworkLogs(Array.isArray(data.artworkLogs) ? data.artworkLogs : []);
+    } catch (err) {
+      setErrorMsg(err instanceof Error ? err.message : 'Failed to fetch logs');
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [categoryFilter, searchQuery]);
 
   useEffect(() => {
-    loadLogs();
+    const timer = setTimeout(() => {
+      loadLogs();
+    }, 200);
+    return () => clearTimeout(timer);
   }, [loadLogs]);
 
   const handleRestoreFromAudit = async (entry: ArtworkAuditLogEntry) => {
@@ -104,9 +155,7 @@ export default function AdminActivityAndAuditLogsPage() {
     }
   };
 
-  const filteredActivities = activityLogs.filter((act) =>
-    categoryFilter === 'all' ? true : act.category === categoryFilter
-  );
+  const categories = restrictedArtworkLogs || isMod ? MOD_CATEGORIES : ADMIN_CATEGORIES;
 
   return (
     <div className="space-y-6">
@@ -120,12 +169,18 @@ export default function AdminActivityAndAuditLogsPage() {
       {/* Header */}
       <div className="bg-[#0A0A0A] border border-[#292929] rounded-xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-lg sm:text-xl font-black text-white flex items-center gap-2">
-            <FileClock size={20} />
-            <span>Artwork Audit Trail & Administrator Activity Logs</span>
+          <h2 className="text-lg sm:text-xl font-bold text-white flex items-center gap-2">
+            <FileClock size={19} />
+            <span>
+              {restrictedArtworkLogs
+                ? 'Moderation & User Activity Logs'
+                : 'Artwork Audit Trail & Staff Activity Logs'}
+            </span>
           </h2>
           <p className="text-xs text-[#A0A0A0] mt-0.5">
-            Immutable audit history of all logo overrides, custom uploads, and administrative actions with 1-click logo rollback.
+            {restrictedArtworkLogs
+              ? 'Scoped moderator audit history for user actions and moderation report resolutions.'
+              : 'Server-verified audit history of logo overrides, moderation actions, and administrative changes.'}
           </p>
         </div>
 
@@ -133,70 +188,74 @@ export default function AdminActivityAndAuditLogsPage() {
           type="button"
           onClick={loadLogs}
           disabled={loading}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#141414] border border-[#292929] hover:border-white text-xs font-semibold text-white cursor-pointer"
+          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-[#141414] border border-[#292929] hover:border-white text-xs font-semibold text-white cursor-pointer disabled:opacity-50"
         >
           <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
           <span>Refresh Logs</span>
         </button>
       </div>
 
-      {/* Tab Switcher */}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="inline-flex rounded-xl bg-[#0A0A0A] border border-[#292929] p-1 text-xs">
-          <button
-            type="button"
-            onClick={() => setTab('artwork')}
-            className={`px-4 py-2 rounded-lg font-bold transition-colors cursor-pointer ${
-              tab === 'artwork'
-                ? 'bg-white text-black'
-                : 'text-[#A0A0A0] hover:text-white'
-            }`}
-          >
-            Artwork Change Audit ({artworkLogs.length})
-          </button>
+      {errorMsg && (
+        <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 text-xs text-red-300">
+          {errorMsg}
+        </div>
+      )}
+
+      {/* Search + Tabs */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
+        <div className="inline-flex rounded-xl bg-[#0A0A0A] border border-[#292929] p-1 text-xs self-start">
+          {!restrictedArtworkLogs && (
+            <button
+              type="button"
+              onClick={() => setTab('artwork')}
+              className={`px-4 py-2 rounded-lg font-bold transition-colors cursor-pointer ${
+                tab === 'artwork' ? 'bg-white text-black' : 'text-[#A0A0A0] hover:text-white'
+              }`}
+            >
+              Artwork Change Audit ({artworkLogs.length})
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setTab('system')}
             className={`px-4 py-2 rounded-lg font-bold transition-colors cursor-pointer ${
-              tab === 'system'
-                ? 'bg-white text-black'
-                : 'text-[#A0A0A0] hover:text-white'
+              tab === 'system' ? 'bg-white text-black' : 'text-[#A0A0A0] hover:text-white'
             }`}
           >
-            System Admin Activity ({activityLogs.length})
+            System Staff Activity ({activityLogs.length})
           </button>
         </div>
 
-        {tab === 'system' && (
-          <div className="flex flex-wrap items-center gap-1.5 text-xs">
-            {(
-              [
-                'all',
-                'artwork',
-                'scanner',
-                'users',
-                'anime',
-                'announcements',
-                'admins',
-                'settings',
-              ] as const
-            ).map((cat) => (
-              <button
-                key={cat}
-                type="button"
-                onClick={() => setCategoryFilter(cat)}
-                className={`px-2.5 py-1 rounded-lg font-mono uppercase transition-colors cursor-pointer ${
-                  categoryFilter === cat
-                    ? 'bg-white text-black font-bold'
-                    : 'bg-[#0A0A0A] border border-[#292929] text-[#A0A0A0] hover:text-white'
-                }`}
-              >
-                {cat}
-              </button>
-            ))}
-          </div>
-        )}
+        <div className="relative w-full lg:w-72">
+          <Search size={14} className="absolute left-3 top-2.5 text-[#707070]" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search action, target, or staff email..."
+            className="w-full pl-9 pr-3 py-2 rounded-xl bg-[#0A0A0A] border border-[#292929] focus:border-white text-xs text-white placeholder-[#707070] focus:outline-none"
+          />
+        </div>
       </div>
+
+      {tab === 'system' && (
+        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+          {categories.map((cat) => (
+            <button
+              key={cat}
+              type="button"
+              onClick={() => setCategoryFilter(cat)}
+              className={`px-2.5 py-1 rounded-lg font-mono uppercase transition-colors cursor-pointer ${
+                categoryFilter === cat
+                  ? 'bg-white text-black font-bold'
+                  : 'bg-[#0A0A0A] border border-[#292929] text-[#A0A0A0] hover:text-white'
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
+      )}
 
       {/* Log Content */}
       <div className="bg-[#0A0A0A] border border-[#292929] rounded-xl overflow-hidden">
@@ -204,10 +263,10 @@ export default function AdminActivityAndAuditLogsPage() {
           <div className="p-12 flex justify-center">
             <Loader2 size={22} className="animate-spin text-white" />
           </div>
-        ) : tab === 'artwork' ? (
+        ) : tab === 'artwork' && !restrictedArtworkLogs ? (
           artworkLogs.length === 0 ? (
             <div className="p-10 text-center text-xs text-[#A0A0A0]">
-              No artwork changes logged yet. Select or upload a logo in Artwork Management to generate audit records.
+              No artwork changes logged matching this filter.
             </div>
           ) : (
             <div className="overflow-x-auto">
@@ -233,14 +292,12 @@ export default function AdminActivityAndAuditLogsPage() {
                       </td>
                       <td className="py-3.5 px-4">
                         <span className="px-2 py-0.5 rounded bg-white text-black font-mono text-[10px] font-bold uppercase">
-                          {log.action.replace(/_/g, ' ')}
+                          {String(log.action || '').replace(/_/g, ' ')}
                         </span>
                       </td>
                       <td className="py-3.5 px-4 font-mono text-[11px] text-[#A0A0A0]">
                         {log.previousSource} →{' '}
-                        <span className="text-white font-bold">
-                          {log.newSource}
-                        </span>
+                        <span className="text-white font-bold">{log.newSource}</span>
                       </td>
                       <td className="py-3.5 px-4 font-mono text-[11px] text-[#A0A0A0]">
                         {log.changedByEmail}
@@ -276,9 +333,9 @@ export default function AdminActivityAndAuditLogsPage() {
               </table>
             </div>
           )
-        ) : filteredActivities.length === 0 ? (
+        ) : activityLogs.length === 0 ? (
           <div className="p-10 text-center text-xs text-[#A0A0A0]">
-            No administrator activity logs found for this filter.
+            No staff activity logs found for this filter.
           </div>
         ) : (
           <div className="overflow-x-auto">
@@ -289,21 +346,19 @@ export default function AdminActivityAndAuditLogsPage() {
                   <th className="py-3 px-4">Action</th>
                   <th className="py-3 px-4">Target</th>
                   <th className="py-3 px-4">Details</th>
-                  <th className="py-3 px-4">Administrator</th>
+                  <th className="py-3 px-4">Staff</th>
                   <th className="py-3 px-4 text-right">Timestamp</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#292929]">
-                {filteredActivities.map((act) => (
+                {activityLogs.map((act) => (
                   <tr key={act.id} className="hover:bg-[#141414]/40">
                     <td className="py-3.5 px-4">
                       <span className="px-2 py-0.5 rounded bg-[#141414] border border-[#292929] font-mono text-[10px] text-white uppercase">
                         {act.category}
                       </span>
                     </td>
-                    <td className="py-3.5 px-4 font-bold text-white">
-                      {act.action}
-                    </td>
+                    <td className="py-3.5 px-4 font-bold text-white">{act.action}</td>
                     <td className="py-3.5 px-4 font-mono text-[11px] text-white">
                       {act.targetName}
                     </td>
@@ -314,7 +369,7 @@ export default function AdminActivityAndAuditLogsPage() {
                       {act.adminEmail}
                     </td>
                     <td className="py-3.5 px-4 text-right font-mono text-[11px] text-[#707070]">
-                      {new Date(act.timestamp).toLocaleString()}
+                      {act.timestamp ? new Date(act.timestamp).toLocaleString() : '—'}
                     </td>
                   </tr>
                 ))}

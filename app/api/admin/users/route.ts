@@ -22,12 +22,21 @@ import {
   userRoleToAdminRole,
 } from '@/lib/roles';
 import { generateDefaultUsername } from '@/lib/profile-privacy';
+import { logAdminActionServer } from '@/lib/admin/server-audit';
 
 export async function GET(req: NextRequest) {
   const verified = await verifyAdminRequest(req);
   if (!verified || !hasAdminPermission(verified.admin, 'manageUsers')) {
     return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
   }
+
+  const { searchParams } = new URL(req.url);
+  const q = (searchParams.get('q') || '').trim().toLowerCase();
+  const roleFilter = (searchParams.get('role') || 'all').trim().toLowerCase();
+  const statusFilter = (searchParams.get('status') || 'all').trim().toLowerCase();
+  const sortBy = (searchParams.get('sort') || 'role').trim().toLowerCase();
+  const pageParam = searchParams.get('page');
+  const limitParam = searchParams.get('limit');
 
   const [publicProfiles, adminDocs, privateProfiles] = await Promise.all([
     listFirestoreCollectionRest('publicProfiles', 250, verified.idToken),
@@ -140,7 +149,30 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  const users = Array.from(merged.values()).sort((a, b) => {
+  let users = Array.from(merged.values());
+
+  if (q) {
+    users = users.filter((u) => {
+      const hay = `${u.displayName || ''} ${u.username || ''} ${u.email || ''} ${u.uid || ''}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }
+
+  if (roleFilter !== 'all') {
+    users = users.filter((u) => normalizeUserRole(u.role) === roleFilter);
+  }
+
+  if (statusFilter !== 'all') {
+    users = users.filter((u) => String(u.status || 'active').toLowerCase() === statusFilter);
+  }
+
+  users.sort((a, b) => {
+    if (sortBy === 'name') {
+      return String(a.displayName || '').localeCompare(String(b.displayName || ''));
+    }
+    if (sortBy === 'recent') {
+      return String(b.createdAt || '').localeCompare(String(a.createdAt || ''));
+    }
     const rankDiff =
       USER_ROLE_RANK[normalizeUserRole(b.role)] -
       USER_ROLE_RANK[normalizeUserRole(a.role)];
@@ -148,9 +180,30 @@ export async function GET(req: NextRequest) {
     return String(a.displayName || '').localeCompare(String(b.displayName || ''));
   });
 
+  const total = users.length;
+  if (pageParam || limitParam) {
+    const page = Math.max(1, parseInt(pageParam || '1', 10) || 1);
+    const limit = Math.min(100, Math.max(1, parseInt(limitParam || '25', 10) || 25));
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const safePage = Math.min(page, totalPages);
+    const paged = users.slice((safePage - 1) * limit, safePage * limit);
+    return NextResponse.json({
+      source,
+      users: paged,
+      total,
+      page: safePage,
+      limit,
+      totalPages,
+    });
+  }
+
   return NextResponse.json({
     source,
     users,
+    total,
+    page: 1,
+    limit: total || 25,
+    totalPages: 1,
   });
 }
 
@@ -423,6 +476,17 @@ export async function POST(req: NextRequest) {
     }
   }
 
+  await logAdminActionServer(verified, {
+    category: 'users',
+    action: `${action === 'enable' ? 'Re-enabled' : action === 'ban' ? 'Banned' : action === 'disable' ? 'Disabled' : 'Deleted'} user account`,
+    targetId: uid,
+    targetName:
+      targetEmail ||
+      targetPublic?.displayName ||
+      targetPrivate?.displayName ||
+      uid,
+    details: `Executed ${action} action on ${uid} (role: ${targetCurrentRole})`,
+  });
+
   return NextResponse.json({ ok: true, uid, action });
 }
-

@@ -10,15 +10,12 @@ import {
   Loader2,
   Eye,
   Send,
+  Archive,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
-import { hasAdminPermission } from '@/lib/admin/admin-auth';
-import {
-  AnnouncementFirestoreDoc,
-  deleteAnnouncement,
-  listAnnouncements,
-  saveAnnouncement,
-} from '@/lib/admin/admin-firestore';
+import { getAdminAuthHeaders, hasAdminPermission } from '@/lib/admin/admin-auth';
+import { AnnouncementFirestoreDoc } from '@/lib/admin/admin-firestore';
+import { AdminConfirmModal } from '@/components/admin/ui/AdminConfirmModal';
 
 export default function AdminAnnouncementsPage() {
   const { adminRecord } = useAuth();
@@ -35,14 +32,19 @@ export default function AdminAnnouncementsPage() {
   const [type, setType] = useState<'feature' | 'maintenance' | 'notice' | 'alert'>(
     'feature'
   );
-  const [status, setStatus] = useState<'draft' | 'published' | 'scheduled'>(
-    'published'
-  );
+  const [status, setStatus] = useState<
+    'draft' | 'published' | 'scheduled' | 'archived'
+  >('published');
+  const [priority, setPriority] = useState<'normal' | 'high'>('normal');
   const [dismissible, setDismissible] = useState(true);
   const [ctaText, setCtaText] = useState('');
   const [ctaLink, setCtaLink] = useState('');
   const [startsAt, setStartsAt] = useState(new Date().toISOString().slice(0, 16));
   const [expiresAt, setExpiresAt] = useState('');
+
+  const [deleteTarget, setDeleteTarget] =
+    useState<AnnouncementFirestoreDoc | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const showToast = (msg: string) => {
     setToast(msg);
@@ -52,8 +54,12 @@ export default function AdminAnnouncementsPage() {
   const loadAnnouncements = useCallback(async () => {
     setLoading(true);
     try {
-      const list = await listAnnouncements();
-      setAnnouncements(list);
+      const headers = await getAdminAuthHeaders();
+      const res = await fetch('/api/admin/announcements', { headers });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.ok) {
+        setAnnouncements(data.announcements || []);
+      }
     } finally {
       setLoading(false);
     }
@@ -69,6 +75,7 @@ export default function AdminAnnouncementsPage() {
     setMessage('');
     setType('feature');
     setStatus('published');
+    setPriority('normal');
     setDismissible(true);
     setCtaText('');
     setCtaLink('');
@@ -82,6 +89,7 @@ export default function AdminAnnouncementsPage() {
     setMessage(item.message);
     setType(item.type);
     setStatus(item.status);
+    setPriority(item.priority === 'high' ? 'high' : 'normal');
     setDismissible(item.dismissible);
     setCtaText(item.ctaText || '');
     setCtaLink(item.ctaLink || '');
@@ -93,17 +101,34 @@ export default function AdminAnnouncementsPage() {
     setExpiresAt(item.expiresAt ? item.expiresAt.slice(0, 16) : '');
   };
 
+  const saveAnnouncementPayload = async (
+    payload: Partial<AnnouncementFirestoreDoc> & { title: string; message: string }
+  ) => {
+    const headers = await getAdminAuthHeaders();
+    const res = await fetch('/api/admin/announcements', {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json().catch(() => null);
+    if (!res.ok || !data?.ok || !data?.announcement) {
+      throw new Error(data?.error || 'Failed to save announcement.');
+    }
+    return data.announcement as AnnouncementFirestoreDoc;
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canManage || !title.trim() || !message.trim()) return;
     setSaving(true);
     try {
-      const saved = await saveAnnouncement({
+      const saved = await saveAnnouncementPayload({
         id: editingId,
         title: title.trim(),
         message: message.trim(),
         type,
         status,
+        priority,
         dismissible,
         ctaText: ctaText.trim(),
         ctaLink: ctaLink.trim(),
@@ -132,14 +157,47 @@ export default function AdminAnnouncementsPage() {
     }
   };
 
-  const handleDelete = async (item: AnnouncementFirestoreDoc) => {
+  const handleQuickStatus = async (
+    item: AnnouncementFirestoreDoc,
+    nextStatus: 'published' | 'archived'
+  ) => {
     if (!canManage) return;
     try {
-      await deleteAnnouncement(item.id, item.title);
-      setAnnouncements((prev) => prev.filter((a) => a.id !== item.id));
-      showToast(`Deleted announcement "${item.title}".`);
+      const saved = await saveAnnouncementPayload({
+        ...item,
+        status: nextStatus,
+      });
+      setAnnouncements((prev) =>
+        prev.map((a) => (a.id === saved.id ? saved : a))
+      );
+      showToast(`Announcement "${item.title}" marked as ${nextStatus}.`);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Failed to update status.');
+    }
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!deleteTarget || !canManage) return;
+    setDeleting(true);
+    try {
+      const headers = await getAdminAuthHeaders();
+      const res = await fetch(
+        `/api/admin/announcements?id=${encodeURIComponent(
+          deleteTarget.id
+        )}&title=${encodeURIComponent(deleteTarget.title)}`,
+        { method: 'DELETE', headers }
+      );
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) {
+        throw new Error(data?.error || 'Failed to delete announcement.');
+      }
+      setAnnouncements((prev) => prev.filter((a) => a.id !== deleteTarget.id));
+      showToast(`Deleted announcement "${deleteTarget.title}".`);
+      setDeleteTarget(null);
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Failed to delete announcement.');
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -152,6 +210,21 @@ export default function AdminAnnouncementsPage() {
         </div>
       )}
 
+      <AdminConfirmModal
+        open={Boolean(deleteTarget)}
+        title="Delete Announcement"
+        description={
+          deleteTarget
+            ? `Permanently delete announcement "${deleteTarget.title}"? Users will no longer see this banner.`
+            : ''
+        }
+        confirmLabel="Delete Announcement"
+        destructive
+        loading={deleting}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={handleConfirmDelete}
+      />
+
       {/* Header */}
       <div className="bg-[#0A0A0A] border border-[#292929] rounded-xl p-5 flex items-center justify-between gap-4">
         <div>
@@ -160,7 +233,7 @@ export default function AdminAnnouncementsPage() {
             <span>Global Announcements & Maintenance Notices</span>
           </h2>
           <p className="text-xs text-[#A0A0A0] mt-0.5">
-            Create, schedule, and publish site-wide announcement banners displayed across AniScroll.
+            Create, prioritize, schedule, archive, and publish site-wide banners displayed across AniScroll.
           </p>
         </div>
       </div>
@@ -173,6 +246,11 @@ export default function AdminAnnouncementsPage() {
         </div>
         <div className="bg-[#141414] border border-[#292929] rounded-lg px-4 py-2.5 text-xs text-white flex items-center justify-between gap-3">
           <div className="flex items-center gap-2.5 min-w-0">
+            {priority === 'high' && (
+              <span className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-200 font-mono font-bold text-[10px] uppercase shrink-0">
+                HIGH PRIORITY
+              </span>
+            )}
             <span className="px-2 py-0.5 rounded bg-white text-black font-mono font-bold text-[10px] uppercase tracking-wider shrink-0">
               {type}
             </span>
@@ -214,7 +292,7 @@ export default function AdminAnnouncementsPage() {
             )}
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <div className="md:col-span-2">
               <label className="block text-xs font-medium text-[#A0A0A0] mb-1.5">
                 Headline Title
@@ -229,26 +307,26 @@ export default function AdminAnnouncementsPage() {
               />
             </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <label className="block text-xs font-medium text-[#A0A0A0] mb-1.5">
-                  Banner Type
-                </label>
-                <select
-                  value={type}
-                  onChange={(e) => setType(e.target.value as any)}
-                  className="w-full px-3 py-2 rounded-xl bg-[#141414] border border-[#292929] text-xs text-white focus:outline-none"
-                >
-                  <option value="feature">Feature</option>
-                  <option value="maintenance">Maintenance</option>
-                  <option value="notice">Notice</option>
-                  <option value="alert">Alert</option>
-                </select>
-              </div>
+            <div>
+              <label className="block text-xs font-medium text-[#A0A0A0] mb-1.5">
+                Banner Type
+              </label>
+              <select
+                value={type}
+                onChange={(e) => setType(e.target.value as any)}
+                className="w-full px-3 py-2 rounded-xl bg-[#141414] border border-[#292929] text-xs text-white focus:outline-none"
+              >
+                <option value="feature">Feature</option>
+                <option value="maintenance">Maintenance</option>
+                <option value="notice">Notice</option>
+                <option value="alert">Alert</option>
+              </select>
+            </div>
 
+            <div className="grid grid-cols-2 gap-2">
               <div>
                 <label className="block text-xs font-medium text-[#A0A0A0] mb-1.5">
-                  Publish Status
+                  Status
                 </label>
                 <select
                   value={status}
@@ -258,6 +336,20 @@ export default function AdminAnnouncementsPage() {
                   <option value="published">Published</option>
                   <option value="scheduled">Scheduled</option>
                   <option value="draft">Draft</option>
+                  <option value="archived">Archived</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[#A0A0A0] mb-1.5">
+                  Priority
+                </label>
+                <select
+                  value={priority}
+                  onChange={(e) => setPriority(e.target.value as 'normal' | 'high')}
+                  className="w-full px-3 py-2 rounded-xl bg-[#141414] border border-[#292929] text-xs text-white focus:outline-none"
+                >
+                  <option value="normal">Normal</option>
+                  <option value="high">High</option>
                 </select>
               </div>
             </div>
@@ -387,6 +479,11 @@ export default function AdminAnnouncementsPage() {
                     <span className="px-2 py-0.5 rounded bg-black border border-[#292929] font-mono text-[10px] text-white uppercase">
                       {item.type}
                     </span>
+                    {item.priority === 'high' && (
+                      <span className="px-2 py-0.5 rounded bg-amber-500/20 border border-amber-500/40 text-amber-200 font-mono text-[10px] font-bold uppercase">
+                        HIGH
+                      </span>
+                    )}
                     <span className="text-xs font-bold text-white">
                       {item.title}
                     </span>
@@ -399,7 +496,27 @@ export default function AdminAnnouncementsPage() {
                 </div>
 
                 {canManage && (
-                  <div className="flex items-center gap-2 shrink-0">
+                  <div className="flex flex-wrap items-center gap-2 shrink-0">
+                    {item.status !== 'published' && (
+                      <button
+                        type="button"
+                        onClick={() => handleQuickStatus(item, 'published')}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-white text-black font-bold text-xs cursor-pointer"
+                      >
+                        <Send size={12} />
+                        <span>Publish</span>
+                      </button>
+                    )}
+                    {item.status !== 'archived' && (
+                      <button
+                        type="button"
+                        onClick={() => handleQuickStatus(item, 'archived')}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-black border border-[#292929] hover:border-white text-xs text-[#A0A0A0] hover:text-white cursor-pointer"
+                      >
+                        <Archive size={12} />
+                        <span>Archive</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       onClick={() => handleEdit(item)}
@@ -410,8 +527,9 @@ export default function AdminAnnouncementsPage() {
                     </button>
                     <button
                       type="button"
-                      onClick={() => handleDelete(item)}
+                      onClick={() => setDeleteTarget(item)}
                       className="p-1.5 rounded-lg bg-black border border-[#292929] text-[#A0A0A0] hover:text-white hover:border-white cursor-pointer"
+                      aria-label={`Delete ${item.title}`}
                     >
                       <Trash2 size={14} />
                     </button>
