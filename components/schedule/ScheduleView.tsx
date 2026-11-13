@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import { Film, Clock } from 'lucide-react';
 import { ScheduleItem } from '@/types/anime';
 
@@ -114,20 +114,18 @@ export function ScheduleView({ scheduleItems }: ScheduleViewProps) {
               >
                 {/* Poster */}
                 <div className="relative w-16 h-24 bg-[#0A0A0A] rounded-lg overflow-hidden shrink-0 border border-[#292929]">
-                  {item.coverImage ? (
-                    <Image
-                      src={item.coverImage}
-                      alt={title}
-                      fill
-                      sizes="64px"
-                      className="object-cover group-hover:scale-105 transition-transform duration-200"
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-[#707070]">
-                      <Film size={20} />
-                    </div>
-                  )}
+                  <ResilientImage
+                    src={item.coverImage}
+                    alt={title}
+                    fill
+                    sizes="64px"
+                    className="object-cover group-hover:scale-105 transition-transform duration-200"
+                    fallback={
+                      <div className="w-full h-full flex items-center justify-center text-[#707070]">
+                        <Film size={20} />
+                      </div>
+                    }
+                  />
 
                   {/* Release Time Badge */}
                   <div className="absolute bottom-1 left-1 right-1 bg-black/90 backdrop-blur-sm text-[10px] font-mono text-center text-white py-0.5 rounded flex items-center justify-center gap-1">

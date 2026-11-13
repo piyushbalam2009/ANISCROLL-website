@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import Link from 'next/link';
 import {
   Film,
@@ -273,13 +273,12 @@ export default function AdminAnimeManagementPage() {
                   <div className="flex items-center gap-3 min-w-0">
                     {anime.coverImage && (
                       <div className="w-10 h-14 rounded-lg overflow-hidden relative shrink-0">
-                        <Image
+                        <ResilientImage
                           src={anime.coverImage}
                           alt={title}
                           fill
                           sizes="48px"
                           className="object-cover"
-                          referrerPolicy="no-referrer"
                         />
                       </div>
                     )}
@@ -345,13 +344,12 @@ export default function AdminAnimeManagementPage() {
                   <div className="flex items-center gap-3 min-w-0">
                     {item.coverImage && (
                       <div className="w-9 h-12 rounded overflow-hidden relative shrink-0">
-                        <Image
+                        <ResilientImage
                           src={item.coverImage}
                           alt={item.title}
                           fill
                           sizes="40px"
                           className="object-cover"
-                          referrerPolicy="no-referrer"
                         />
                       </div>
                     )}
@@ -411,13 +409,12 @@ export default function AdminAnimeManagementPage() {
                   <div className="flex items-center gap-3 min-w-0">
                     {item.coverImage && (
                       <div className="w-9 h-12 rounded overflow-hidden relative shrink-0">
-                        <Image
+                        <ResilientImage
                           src={item.coverImage}
                           alt={item.title}
                           fill
                           sizes="40px"
                           className="object-cover"
-                          referrerPolicy="no-referrer"
                         />
                       </div>
                     )}

@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import { Play, Trash2 } from 'lucide-react';
 import { WatchHistoryEntry } from '@/types/streaming';
 import {
@@ -23,16 +23,6 @@ export function ContinueWatchingCard({ item, onRemove }: ContinueWatchingCardPro
     [item]
   );
 
-  const [candidateIndex, setCandidateIndex] = useState(0);
-  const candidatesKey = candidates.join('|');
-
-  useEffect(() => {
-    setCandidateIndex(0);
-  }, [candidatesKey]);
-
-  const activeImageUrl =
-    candidateIndex < candidates.length ? candidates[candidateIndex] : null;
-
   const animeTitle = resolveDisplayAnimeTitle(item);
   const episodeTitle = resolveDisplayEpisodeTitle(item);
   const episodeNumber = Math.max(1, Number(item.episodeNumber || 1));
@@ -46,10 +36,6 @@ export function ContinueWatchingCard({ item, onRemove }: ContinueWatchingCardPro
   const audioParam = item.audioType === 'dub' || item.audioType === 'sub' ? `&type=${item.audioType}` : '';
   const watchHref = `/watch/${item.hoshikaId}/${episodeNumber}?resume=1&t=${resumeSeconds}${audioParam}`;
 
-  const handleImageError = () => {
-    setCandidateIndex((prev) => prev + 1);
-  };
-
   return (
     <div
       data-testid={`continue-watching-card-${item.hoshikaId}-${episodeNumber}`}
@@ -62,28 +48,24 @@ export function ContinueWatchingCard({ item, onRemove }: ContinueWatchingCardPro
       >
         {/* Thumbnail Area */}
         <div className="relative aspect-video w-full bg-[#161616] overflow-hidden">
-          {activeImageUrl ? (
-            <Image
-              key={activeImageUrl}
-              src={activeImageUrl}
-              alt={`${animeTitle} - ${episodeTitle}`}
-              fill
-              sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 320px"
-              className="object-cover group-hover:scale-[1.03] transition-transform duration-200"
-              referrerPolicy="no-referrer"
-              onError={handleImageError}
-            />
-          ) : (
-            /* Clean neutral placeholder only when no image is available */
-            <div className="w-full h-full flex flex-col items-center justify-center bg-[#141414] px-4 text-center select-none">
-              <span className="text-xs font-semibold text-[#A0A0A0] line-clamp-1">
-                {animeTitle}
-              </span>
-              <span className="text-[11px] font-mono text-[#666666] mt-0.5">
-                Episode {episodeNumber}
-              </span>
-            </div>
-          )}
+          <ResilientImage
+            src={candidates[0]}
+            fallbackSrcs={candidates.slice(1)}
+            alt={`${animeTitle} - ${episodeTitle}`}
+            fill
+            sizes="(max-width: 640px) 100vw, (max-width: 1024px) 50vw, 320px"
+            className="object-cover group-hover:scale-[1.03] transition-transform duration-200"
+            fallback={
+              <div className="w-full h-full flex flex-col items-center justify-center bg-[#141414] px-4 text-center select-none">
+                <span className="text-xs font-semibold text-[#A0A0A0] line-clamp-1">
+                  {animeTitle}
+                </span>
+                <span className="text-[11px] font-mono text-[#666666] mt-0.5">
+                  Episode {episodeNumber}
+                </span>
+              </div>
+            }
+          />
 
           {/* Subtle Play Hover Affordance */}
           <div className="absolute inset-0 bg-black/35 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-150">

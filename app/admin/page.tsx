@@ -2,7 +2,7 @@
 
 import React, { useEffect, useState, useCallback } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import {
   Users,
   Image as ImageIcon,
@@ -422,20 +422,18 @@ export default function AdminOverviewPage() {
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <div className="w-16 h-9 rounded bg-black border border-[#292929] relative flex items-center justify-center shrink-0 overflow-hidden">
-                      {item.selectedLogoUrl ? (
-                        <Image
-                          src={item.selectedLogoUrl}
-                          alt={item.title}
-                          fill
-                          sizes="80px"
-                          className="object-contain p-1"
-                          referrerPolicy="no-referrer"
-                        />
-                      ) : (
-                        <span className="text-[9px] font-mono text-[#707070]">
-                          TEXT
-                        </span>
-                      )}
+                      <ResilientImage
+                        src={item.selectedLogoUrl}
+                        alt={item.title}
+                        fill
+                        sizes="80px"
+                        className="object-contain p-1"
+                        fallback={
+                          <span className="text-[9px] font-mono text-[#707070]">
+                            TEXT
+                          </span>
+                        }
+                      />
                     </div>
                     <div className="min-w-0">
                       <div className="text-xs font-bold text-white truncate">

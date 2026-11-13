@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import { User } from 'lucide-react';
 import { HoshikaCharacter } from '@/types/anime';
 
@@ -27,20 +27,18 @@ export function CharacterList({ characters = [] }: CharacterListProps) {
             {/* Character Info */}
             <div className="flex items-center gap-2.5 min-w-0">
               <div className="relative w-11 h-11 rounded-lg overflow-hidden bg-[#0A0A0A] shrink-0 border border-[#292929]">
-                {char.avatar ? (
-                  <Image
-                    src={char.avatar}
-                    alt={char.name}
-                    fill
-                    sizes="44px"
-                    className="object-cover"
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <div className="w-full h-full flex items-center justify-center text-[#707070]">
-                    <User size={16} />
-                  </div>
-                )}
+                <ResilientImage
+                  src={char.avatar}
+                  alt={char.name}
+                  fill
+                  sizes="44px"
+                  className="object-cover"
+                  fallback={
+                    <div className="w-full h-full flex items-center justify-center text-[#707070]">
+                      <User size={16} />
+                    </div>
+                  }
+                />
               </div>
               <div className="min-w-0">
                 <div className="text-xs font-semibold text-white truncate" title={char.name}>
@@ -64,20 +62,18 @@ export function CharacterList({ characters = [] }: CharacterListProps) {
                   </div>
                 </div>
                 <div className="relative w-9 h-9 rounded-full overflow-hidden bg-[#0A0A0A] shrink-0 border border-[#292929]">
-                  {char.seiyuu.avatar ? (
-                    <Image
-                      src={char.seiyuu.avatar}
-                      alt={char.seiyuu.name}
-                      fill
-                      sizes="36px"
-                      className="object-cover"
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <div className="w-full h-full flex items-center justify-center text-[#707070]">
-                      <User size={14} />
-                    </div>
-                  )}
+                  <ResilientImage
+                    src={char.seiyuu.avatar}
+                    alt={char.seiyuu.name}
+                    fill
+                    sizes="36px"
+                    className="object-cover"
+                    fallback={
+                      <div className="w-full h-full flex items-center justify-center text-[#707070]">
+                        <User size={14} />
+                      </div>
+                    }
+                  />
                 </div>
               </div>
             )}

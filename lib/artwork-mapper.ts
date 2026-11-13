@@ -44,37 +44,45 @@ const HOTLINK_PROXIED_HOSTS = new Set([
 ]);
 
 /**
- * Universal base64url encoder that works in both Node.js and browser runtimes.
+ * Universal base64url encoder that works in both Node.js and browser runtimes
+ * without depending on polyfilled Buffer 'base64url' support.
  */
 export function encodeBase64Url(input: string): string {
-  if (typeof Buffer !== 'undefined') {
-    return Buffer.from(input, 'utf8').toString('base64url');
+  if (typeof btoa === 'function' && typeof TextEncoder !== 'undefined') {
+    const utf8Bytes = new TextEncoder().encode(input);
+    let binary = '';
+    for (let i = 0; i < utf8Bytes.length; i++) {
+      binary += String.fromCharCode(utf8Bytes[i]);
+    }
+    return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
   }
-  const utf8Bytes = new TextEncoder().encode(input);
-  let binary = '';
-  for (let i = 0; i < utf8Bytes.length; i++) {
-    binary += String.fromCharCode(utf8Bytes[i]);
-  }
-  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+  return Buffer.from(input, 'utf8')
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/, '');
 }
 
 /**
- * Universal base64url decoder that works in both Node.js and browser runtimes.
+ * Universal base64url decoder that works in both Node.js and browser runtimes
+ * without depending on polyfilled Buffer 'base64url' support.
  */
 export function decodeBase64Url(encoded: string): string | null {
   if (!encoded || typeof encoded !== 'string') return null;
   try {
-    if (typeof Buffer !== 'undefined') {
-      return Buffer.from(encoded, 'base64url').toString('utf8');
-    }
     const base64 = encoded.replace(/-/g, '+').replace(/_/g, '/');
     const pad = base64.length % 4 === 0 ? '' : '='.repeat(4 - (base64.length % 4));
-    const binary = atob(base64 + pad);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i++) {
-      bytes[i] = binary.charCodeAt(i);
+    const standardBase64 = base64 + pad;
+
+    if (typeof atob === 'function' && typeof TextDecoder !== 'undefined') {
+      const binary = atob(standardBase64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+      }
+      return new TextDecoder().decode(bytes);
     }
-    return new TextDecoder().decode(bytes);
+    return Buffer.from(standardBase64, 'base64').toString('utf8');
   } catch {
     return null;
   }
@@ -348,11 +356,31 @@ export function matchTitleToTvdbId(title?: string | null): number | null {
   return null;
 }
 
-// Cache upstream image reachability checks for 30 minutes
+// Cache upstream image reachability checks
 const upstreamReachabilityCache = new Map<
   string,
   { ok: boolean; expiresAt: number }
 >();
+const inFlightProbeMap = new Map<string, Promise<boolean>>();
+
+function getProbeReferer(hostname: string): string {
+  const host = hostname.toLowerCase();
+  if (host.includes('fanart.tv')) return 'https://fanart.tv/';
+  if (host.includes('thetvdb.com')) return 'https://thetvdb.com/';
+  if (host.includes('anilist.co')) return 'https://anilist.co/';
+  if (host.includes('tmdb.org')) return 'https://www.themoviedb.org/';
+  return 'https://hoshika.app/';
+}
+
+function isAcceptableUpstreamContentType(contentType: string): boolean {
+  const ct = contentType.toLowerCase().split(';')[0].trim();
+  if (!ct) return true;
+  if (ct.startsWith('image/') && ct !== 'image/svg+xml') return true;
+  if (ct === 'application/octet-stream' || ct === 'binary/octet-stream') {
+    return true;
+  }
+  return false;
+}
 
 /**
  * Verifies whether an external Fanart.tv / TVDB image URL actually exists (HTTP 200 + image/*)
@@ -371,61 +399,104 @@ export async function verifyUpstreamArtworkUrl(
     return cached.ok;
   }
 
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), 2500);
-  try {
-    const res = await fetch(rawUrl, {
-      method: 'HEAD',
-      headers: {
-        Accept: 'image/avif,image/webp,image/apng,image/png,image/*,*/*;q=0.8',
-        Referer: 'https://fanart.tv/',
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-      },
-      signal: controller.signal,
-      cache: 'no-store',
-    });
+  const existingProbe = inFlightProbeMap.get(rawUrl);
+  if (existingProbe) {
+    return existingProbe;
+  }
 
-    let ok = res.status === 200;
-    const ct = (res.headers.get('content-type') || '').toLowerCase();
-    if (ok && ct && !ct.startsWith('image/') && !ct.includes('octet-stream')) {
-      ok = false;
+  const probePromise = (async (): Promise<boolean> => {
+    let referer = 'https://fanart.tv/';
+    try {
+      referer = getProbeReferer(new URL(rawUrl).hostname);
+    } catch {
+      return false;
     }
 
-    // Some CDNs reject HEAD with 405; fall back to range GET if 405
-    if (res.status === 405) {
-      const getRes = await fetch(rawUrl, {
-        method: 'GET',
+    const headController = new AbortController();
+    const headTimeout = setTimeout(() => headController.abort(), 3200);
+    let definitiveFailure = false;
+
+    try {
+      const res = await fetch(rawUrl, {
+        method: 'HEAD',
+        redirect: 'follow',
         headers: {
-          Range: 'bytes=0-63',
-          Accept: 'image/*,*/*;q=0.8',
-          Referer: 'https://fanart.tv/',
+          Accept: 'image/avif,image/webp,image/apng,image/png,image/*,*/*;q=0.8',
+          Referer: referer,
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
         },
-        signal: controller.signal,
+        signal: headController.signal,
         cache: 'no-store',
       });
-      const getCt = (getRes.headers.get('content-type') || '').toLowerCase();
-      ok =
-        (getRes.status === 200 || getRes.status === 206) &&
-        (!getCt || getCt.startsWith('image/'));
-    }
+      clearTimeout(headTimeout);
 
-    upstreamReachabilityCache.set(rawUrl, {
-      ok,
-      expiresAt: now + (ok ? 30 * 60 * 1000 : 10 * 60 * 1000),
-    });
-    return ok;
-  } catch {
-    upstreamReachabilityCache.set(rawUrl, {
-      ok: false,
-      expiresAt: now + 5 * 60 * 1000,
-    });
-    return false;
-  } finally {
-    clearTimeout(timeout);
-  }
+      let ok = res.status === 200;
+      const ct = res.headers.get('content-type') || '';
+      if (ok && !isAcceptableUpstreamContentType(ct)) {
+        ok = false;
+        definitiveFailure = true;
+      }
+
+      if (res.status === 404 || res.status === 410) {
+        definitiveFailure = true;
+      }
+
+      // Some CDNs/origins reject HEAD with 405, 403, or 501; fall back to a fresh-timeout Range GET
+      if (res.status === 405 || res.status === 403 || res.status === 501) {
+        const getController = new AbortController();
+        const getTimeout = setTimeout(() => getController.abort(), 3200);
+        try {
+          const getRes = await fetch(rawUrl, {
+            method: 'GET',
+            redirect: 'follow',
+            headers: {
+              Range: 'bytes=0-63',
+              Accept: 'image/avif,image/webp,image/apng,image/png,image/*,*/*;q=0.8',
+              Referer: referer,
+              'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+            },
+            signal: getController.signal,
+            cache: 'no-store',
+          });
+          const getCt = getRes.headers.get('content-type') || '';
+          ok =
+            (getRes.status === 200 || getRes.status === 206) &&
+            isAcceptableUpstreamContentType(getCt);
+          if (getRes.status === 404 || getRes.status === 410 || !isAcceptableUpstreamContentType(getCt)) {
+            definitiveFailure = true;
+          }
+        } finally {
+          clearTimeout(getTimeout);
+        }
+      }
+
+      upstreamReachabilityCache.set(rawUrl, {
+        ok,
+        expiresAt:
+          Date.now() +
+          (ok ? 30 * 60 * 1000 : definitiveFailure ? 10 * 60 * 1000 : 30 * 1000),
+      });
+      return ok;
+    } catch {
+      // Short 20s negative TTL on transient cold-start timeouts so valid artwork recovers fast
+      upstreamReachabilityCache.set(rawUrl, {
+        ok: false,
+        expiresAt: Date.now() + 20 * 1000,
+      });
+      return false;
+    } finally {
+      clearTimeout(headTimeout);
+    }
+  })();
+
+  inFlightProbeMap.set(rawUrl, probePromise);
+  probePromise.finally(() => {
+    inFlightProbeMap.delete(rawUrl);
+  });
+
+  return probePromise;
 }
 
 /**
@@ -1221,13 +1292,16 @@ function parseRestFields(
 async function fetchPublicArtworkOverrideRest(
   hoshikaId: number
 ): Promise<AnimeArtworkFirestoreDoc | null | undefined> {
-  const projectId =
+  const projectId = (
     process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
-    firebaseAppletConfig.projectId;
-  const databaseId =
+    firebaseAppletConfig.projectId ||
+    ''
+  ).trim();
+  const databaseId = (
     process.env.NEXT_PUBLIC_FIREBASE_DATABASE_ID ||
     firebaseAppletConfig.firestoreDatabaseId ||
-    '(default)';
+    '(default)'
+  ).trim();
 
   if (!projectId) return undefined;
 

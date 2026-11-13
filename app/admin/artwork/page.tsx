@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import {
   Search,
   SlidersHorizontal,
@@ -199,13 +199,12 @@ export default function AdminArtworkCataloguePage() {
                       <div className="flex items-center gap-3 min-w-0">
                         {anime.coverImage && (
                           <div className="w-10 h-14 rounded-lg overflow-hidden relative shrink-0 border border-[#292929]">
-                            <Image
+                            <ResilientImage
                               src={anime.coverImage}
                               alt={title}
                               fill
                               sizes="48px"
                               className="object-cover"
-                              referrerPolicy="no-referrer"
                             />
                           </div>
                         )}
@@ -279,25 +278,23 @@ export default function AdminArtworkCataloguePage() {
 
                 {/* Transparent Logo Canvas */}
                 <div className="relative h-28 w-full rounded-xl bg-[#050505] border border-[#292929] flex items-center justify-center p-4 overflow-hidden">
-                  {item.selectedLogoUrl ? (
-                    <Image
-                      src={item.selectedLogoUrl}
-                      alt={item.title}
-                      fill
-                      sizes="320px"
-                      className="object-contain p-3"
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <div className="text-center">
-                      <div className="text-base font-black text-white/90 truncate px-2">
-                        {item.title}
+                  <ResilientImage
+                    src={item.selectedLogoUrl}
+                    alt={item.title}
+                    fill
+                    sizes="320px"
+                    className="object-contain p-3"
+                    fallback={
+                      <div className="text-center">
+                        <div className="text-base font-black text-white/90 truncate px-2">
+                          {item.title}
+                        </div>
+                        <div className="text-[10px] font-mono text-[#707070] uppercase mt-0.5">
+                          Typography Fallback
+                        </div>
                       </div>
-                      <div className="text-[10px] font-mono text-[#707070] uppercase mt-0.5">
-                        Typography Fallback
-                      </div>
-                    </div>
-                  )}
+                    }
+                  />
                 </div>
 
                 {/* Metadata Badges */}

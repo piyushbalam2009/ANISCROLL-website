@@ -1,4 +1,5 @@
 import { WatchHistoryEntry } from '@/types/streaming';
+import { normalizeCandidateImageUrl } from './image-url';
 
 /**
  * Checks whether an episode title is missing, placeholder, or generic (e.g., "Episode 1", "EP 1").
@@ -38,17 +39,7 @@ export function isGenericEpisodeTitle(
  * Sanitizes an image URL and rejects invalid, empty, or dead legacy Fanart.tv URLs.
  */
 export function sanitizeArtworkUrl(url?: string | null): string | undefined {
-  if (!url || typeof url !== 'string') return undefined;
-  const trimmed = url.trim();
-  if (!trimmed || trimmed === 'undefined' || trimmed === 'null') return undefined;
-  if (!trimmed.startsWith('http://') && !trimmed.startsWith('https://') && !trimmed.startsWith('/')) {
-    return undefined;
-  }
-  // Reject dead legacy /fanart/tv/ placeholder URLs
-  if (/assets\.fanart\.tv\/fanart\/tv\//i.test(trimmed)) {
-    return undefined;
-  }
-  return trimmed;
+  return normalizeCandidateImageUrl(url) ?? undefined;
 }
 
 /**

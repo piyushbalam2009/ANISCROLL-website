@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import { History, Trash2, Play } from 'lucide-react';
 import { WatchHistoryEntry } from '@/types/streaming';
 import { getWatchHistory, clearWatchHistory, removeHistoryEntry } from '@/lib/storage';
@@ -147,20 +147,19 @@ export default function HistoryPage() {
                       className="flex items-center gap-4 flex-1 min-w-0"
                     >
                       <div className="relative w-28 sm:w-32 aspect-video bg-[#0A0A0A] rounded-lg overflow-hidden shrink-0 border border-[#292929]">
-                        {thumbUrl ? (
-                          <Image
-                            src={thumbUrl}
-                            alt={`${animeTitle} - ${epTitle}`}
-                            fill
-                            sizes="128px"
-                            className="object-cover"
-                            referrerPolicy="no-referrer"
-                          />
-                        ) : (
-                          <div className="w-full h-full flex items-center justify-center bg-[#141414] text-[10px] font-mono text-[#707070]">
-                            EP {item.episodeNumber}
-                          </div>
-                        )}
+                        <ResilientImage
+                          src={thumbUrl}
+                          fallbackSrcs={thumbCandidates.slice(1)}
+                          alt={`${animeTitle} - ${epTitle}`}
+                          fill
+                          sizes="128px"
+                          className="object-cover"
+                          fallback={
+                            <div className="w-full h-full flex items-center justify-center bg-[#141414] text-[10px] font-mono text-[#707070]">
+                              EP {item.episodeNumber}
+                            </div>
+                          }
+                        />
                         <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
                           <Play size={15} fill="white" className="text-white" />
                         </div>

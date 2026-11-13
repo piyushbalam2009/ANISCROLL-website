@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { HoshikaAnimeItem } from '@/types/anime';
@@ -159,14 +159,17 @@ export function HomeHeroCarousel({
             className="pointer-events-none fixed -left-[9999px] -top-[9999px] w-1 h-1 overflow-hidden opacity-0"
             aria-hidden="true"
           >
-            <Image
-              key={nextBackdropUrl}
+            <ResilientImage
               src={nextBackdropUrl}
+              fallbackSrcs={[
+                ...(nextSlide?.artwork?.backdropCandidates || []),
+                nextSlide?.anime.bannerImage,
+                nextSlide?.anime.coverImage,
+              ]}
               alt=""
               width={1280}
               height={720}
               sizes="100vw"
-              referrerPolicy="no-referrer"
             />
           </div>
         )}

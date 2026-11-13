@@ -125,18 +125,22 @@ export async function GET(req: NextRequest) {
       provider: 'fanart',
       name: 'Fanart.tv Artwork CDN & API',
       description: 'Transparent HDTV logos, clearlogos, and high-res showbackgrounds',
-      endpointLabel: 'HEAD https://assets.fanart.tv/fanart/tv/*',
-      url: 'https://assets.fanart.tv/fanart/tv/389597/hdtvlogo/solo-leveling-6599749994162.png',
+      endpointLabel: 'HEAD https://assets.fanart.tv/fanart/*',
+      url: 'https://assets.fanart.tv/fanart/demon-slayer-kimetsu-no-yaiba-5ce04655066e4.png',
       init: { method: 'HEAD' },
     }),
   ]);
 
+  const fanartKey = (
+    process.env.FANART_API_KEY ||
+    process.env.FANART_TV_API_KEY ||
+    ''
+  ).trim();
+
   return NextResponse.json({
     checkedAt: new Date().toISOString(),
     fanartApiKeyConfigured: Boolean(
-      process.env.FANART_API_KEY &&
-        process.env.FANART_API_KEY !== 'MY_FANART_API_KEY' &&
-        process.env.FANART_API_KEY.length > 5
+      fanartKey && fanartKey !== 'MY_FANART_API_KEY' && fanartKey.length > 5
     ),
     probes,
   });

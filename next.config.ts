@@ -15,6 +15,12 @@ const nextConfig: NextConfig = {
         pathname: '/api/artwork-image/**',
       },
       {
+        pathname: '/api/image-proxy',
+      },
+      {
+        pathname: '/assets/**',
+      },
+      {
         pathname: '/**',
         search: '',
       },
@@ -28,7 +34,19 @@ const nextConfig: NextConfig = {
       },
       {
         protocol: 'https',
+        hostname: '**.hoshika.app',
+        port: '',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
         hostname: 'assets.fanart.tv',
+        port: '',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: 'images.fanart.tv',
         port: '',
         pathname: '/**',
       },
@@ -46,13 +64,49 @@ const nextConfig: NextConfig = {
       },
       {
         protocol: 'https',
+        hostname: '**.thetvdb.com',
+        port: '',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
         hostname: 's4.anilist.co',
         port: '',
         pathname: '/**',
       },
       {
         protocol: 'https',
+        hostname: '**.anilist.co',
+        port: '',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
         hostname: 'image.tmdb.org',
+        port: '',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: 'cdn.myanimelist.net',
+        port: '',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: 'media.kitsu.io',
+        port: '',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: 'media.kitsu.app',
+        port: '',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: 'i.ytimg.com',
         port: '',
         pathname: '/**',
       },
@@ -65,6 +119,12 @@ const nextConfig: NextConfig = {
       {
         protocol: 'https',
         hostname: 'lh3.googleusercontent.com',
+        port: '',
+        pathname: '/**',
+      },
+      {
+        protocol: 'https',
+        hostname: '**.googleusercontent.com',
         port: '',
         pathname: '/**',
       },

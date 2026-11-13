@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import {
   AlertTriangle,
   RefreshCw,
@@ -419,20 +419,18 @@ export default function AdminMissingLogosScannerPage() {
 
                     <td className="py-3.5 px-4">
                       <div className="w-36 h-12 rounded-lg bg-[#050505] border border-[#292929] relative flex items-center justify-center p-1.5 overflow-hidden">
-                        {item.selectedLogoUrl ? (
-                          <Image
-                            src={item.selectedLogoUrl}
-                            alt={item.title}
-                            fill
-                            sizes="150px"
-                            className="object-contain p-1.5"
-                            referrerPolicy="no-referrer"
-                          />
-                        ) : (
-                          <span className="text-[10px] font-mono text-[#707070] uppercase">
-                            Typography Fallback
-                          </span>
-                        )}
+                        <ResilientImage
+                          src={item.selectedLogoUrl}
+                          alt={item.title}
+                          fill
+                          sizes="150px"
+                          className="object-contain p-1.5"
+                          fallback={
+                            <span className="text-[10px] font-mono text-[#707070] uppercase">
+                              Typography Fallback
+                            </span>
+                          }
+                        />
                       </div>
                     </td>
 

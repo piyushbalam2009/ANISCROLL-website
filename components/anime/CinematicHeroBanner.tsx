@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useMemo } from 'react';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import Link from 'next/link';
 import { Play, Bookmark, Star, Tv } from 'lucide-react';
 import { HoshikaAnimeItem } from '@/types/anime';
@@ -26,7 +26,6 @@ export function CinematicHeroBanner({
 }: CinematicHeroBannerProps) {
   const [inWatchlist, setInWatchlist] = useState(false);
   const [logoError, setLogoError] = useState(false);
-  const [candidateIndex, setCandidateIndex] = useState(0);
 
   const artwork = useRealtimeArtworkOverride(
     anime.shortId,
@@ -37,10 +36,6 @@ export function CinematicHeroBanner({
   useEffect(() => {
     setLogoError(false);
   }, [artwork?.logoUrl, anime.shortId]);
-
-  useEffect(() => {
-    setCandidateIndex(0);
-  }, [anime.shortId, artwork?.backgroundUrl]);
 
   const title =
     anime.titleEnglish ||
@@ -93,13 +88,7 @@ export function CinematicHeroBanner({
     anime.coverImage,
   ]);
 
-  const backgroundUrl = backdropCandidates[candidateIndex] || null;
-
-  const handleBackdropError = () => {
-    setCandidateIndex((prev) =>
-      prev + 1 < backdropCandidates.length ? prev + 1 : backdropCandidates.length
-    );
-  };
+  const primaryBackdrop = backdropCandidates[0] || null;
 
   // Logo: Fanart.tv hdtvlogo / clearlogo / custom override -> Typography fallback
   const hasLogo = !logoError && Boolean(artwork?.logoUrl);
@@ -119,18 +108,19 @@ export function CinematicHeroBanner({
   return (
     <div className="relative w-full h-[80vh] sm:h-[85vh] md:h-[88vh] lg:h-[90vh] min-h-[580px] max-h-[920px] flex items-end select-none overflow-hidden bg-[#000000]">
       {/* 1. Full-Bleed Edge-to-Edge Background Artwork (Full Brightness + Localized Gradients) */}
-      {backgroundUrl ? (
+      {primaryBackdrop ? (
         <div className="absolute inset-0 z-0 overflow-hidden">
-          <Image
-            key={`${anime.shortId}-${backgroundUrl}`}
-            src={backgroundUrl}
+          <ResilientImage
+            src={primaryBackdrop}
+            fallbackSrcs={backdropCandidates.slice(1)}
             alt={title}
             fill
             priority={priority}
             sizes="100vw"
             className="object-cover object-center opacity-100 transition-transform duration-700 hover:scale-102"
-            referrerPolicy="no-referrer"
-            onError={handleBackdropError}
+            fallback={
+              <div className="w-full h-full bg-gradient-to-br from-[#141414] via-[#0A0A0A] to-black" />
+            }
           />
           {/* Localized Left & Bottom Gradients (Preserves bright original artwork while protecting text legibility) */}
           <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/35 via-38% to-transparent pointer-events-none" />
@@ -149,16 +139,14 @@ export function CinematicHeroBanner({
             <div
               className={`relative w-full ${logoSizingClasses} filter drop-shadow-[0_4px_24px_rgba(0,0,0,0.95)] transition-transform duration-300`}
             >
-              <Image
-                key={`${anime.shortId}-${artwork!.logoUrl!}`}
+              <ResilientImage
                 src={artwork!.logoUrl!}
                 alt={title}
                 fill
                 priority={priority}
                 sizes="(min-width: 1024px) 520px, 340px"
                 className="object-contain object-left-bottom"
-                referrerPolicy="no-referrer"
-                onError={() => setLogoError(true)}
+                onAllFailed={() => setLogoError(true)}
               />
             </div>
           ) : (

@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import Link from 'next/link';
 import { Play, Info, Bookmark, Star } from 'lucide-react';
 import { HoshikaAnimeItem } from '@/types/anime';
@@ -46,14 +46,14 @@ export function AnimeHero({ anime }: AnimeHeroProps) {
       {/* Background Artwork */}
       {backdrop && (
         <div className="absolute inset-0 z-0">
-          <Image
+          <ResilientImage
             src={backdrop}
+            fallbackSrcs={[anime.coverImage]}
             alt={title}
             fill
             priority
             sizes="100vw"
             className="object-cover object-center opacity-100 scale-102"
-            referrerPolicy="no-referrer"
           />
           {/* Localized Monochrome Contrast Scrims */}
           <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 via-30% to-transparent pointer-events-none" />

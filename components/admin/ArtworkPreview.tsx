@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import {
   Monitor,
   Smartphone,
@@ -125,13 +125,15 @@ export function ArtworkPreview({
           {/* Background */}
           {backgroundUrl ? (
             <div className="absolute inset-0">
-              <Image
+              <ResilientImage
                 src={backgroundUrl}
                 alt={animeTitle}
                 fill
                 sizes="100vw"
                 className="object-cover object-center opacity-100"
-                referrerPolicy="no-referrer"
+                fallback={
+                  <div className="w-full h-full bg-gradient-to-br from-[#141414] to-black" />
+                }
               />
               <div className="absolute inset-0 bg-gradient-to-r from-black/80 via-black/40 via-40% to-transparent pointer-events-none" />
               <div className="absolute inset-0 bg-gradient-to-t from-black via-black/35 via-25% to-transparent pointer-events-none" />
@@ -143,14 +145,13 @@ export function ArtworkPreview({
           {/* Content Layout */}
           <div className="relative z-10 h-full px-6 sm:px-10 py-8 flex items-center gap-6 sm:gap-10">
             {heroType === 'details' && viewportMode === 'desktop' && posterUrl && (
-              <div className="w-[150px] sm:w-[175px] aspect-[2/3] relative rounded-xl overflow-hidden border border-white/15 shadow-2xl shrink-0 hidden sm:block">
-                <Image
+              <div className="w-[150px] sm:w-[175px] aspect-[2/3] relative rounded-xl overflow-hidden border border-white/15 shadow-2xl shrink-0 hidden sm:block bg-[#0A0A0A]">
+                <ResilientImage
                   src={posterUrl}
                   alt={animeTitle}
                   fill
                   sizes="180px"
                   className="object-cover"
-                  referrerPolicy="no-referrer"
                 />
               </div>
             )}
@@ -167,13 +168,17 @@ export function ArtworkPreview({
                   <div
                     className={`relative w-full ${logoClasses} filter drop-shadow-[0_4px_20px_rgba(0,0,0,0.95)] transition-all`}
                   >
-                    <Image
+                    <ResilientImage
                       src={logoUrl}
                       alt={animeTitle}
                       fill
                       sizes="520px"
                       className="object-contain object-left"
-                      referrerPolicy="no-referrer"
+                      fallback={
+                        <h2 className="text-2xl sm:text-4xl font-black tracking-tight text-white">
+                          {animeTitle}
+                        </h2>
+                      }
                     />
                   </div>
                 ) : (

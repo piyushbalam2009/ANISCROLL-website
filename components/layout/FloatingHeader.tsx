@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import {
   Search,
   Loader2,
@@ -337,20 +337,18 @@ export function FloatingHeader({
                         }`}
                       >
                         <div className="relative w-10 h-14 bg-[#141414] rounded-lg overflow-hidden shrink-0 border border-white/10 shadow-sm">
-                          {anime.coverImage ? (
-                            <Image
-                              src={anime.coverImage}
-                              alt={title}
-                              fill
-                              className="object-cover"
-                              sizes="40px"
-                              referrerPolicy="no-referrer"
-                            />
-                          ) : (
-                            <div className="w-full h-full flex items-center justify-center text-[#707070]">
-                              <Film size={14} />
-                            </div>
-                          )}
+                          <ResilientImage
+                            src={anime.coverImage}
+                            alt={title}
+                            fill
+                            className="object-cover"
+                            sizes="40px"
+                            fallback={
+                              <div className="w-full h-full flex items-center justify-center text-[#707070]">
+                                <Film size={14} />
+                              </div>
+                            }
+                          />
                         </div>
 
                         <div className="flex-1 min-w-0">
@@ -460,13 +458,13 @@ export function FloatingHeader({
               title="Account"
             >
               {user && photoURL ? (
-                <Image
+                <ResilientImage
                   src={photoURL}
                   alt={displayName}
                   fill
                   sizes="40px"
                   className="object-cover"
-                  referrerPolicy="no-referrer"
+                  fallback={<span>{initials}</span>}
                 />
               ) : user ? (
                 <span>{initials}</span>

@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import {
   Check,
   EyeOff,
@@ -96,13 +96,18 @@ export function LogoSelector({
 
                     {/* Dark Transparent Canvas */}
                     <div className="relative h-28 w-full rounded-lg bg-[#050505] border border-[#292929] flex items-center justify-center p-3 overflow-hidden">
-                      <Image
+                      <ResilientImage
                         src={custom.url}
+                        fallbackSrcs={[custom.proxyUrl]}
                         alt={custom.fileName}
                         fill
                         sizes="320px"
                         className="object-contain p-3"
-                        referrerPolicy="no-referrer"
+                        fallback={
+                          <span className="text-[11px] font-mono text-[#707070] truncate px-2">
+                            {custom.fileName}
+                          </span>
+                        }
                       />
                     </div>
 
@@ -217,13 +222,18 @@ export function LogoSelector({
 
                     {/* Transparent Logo Preview Container */}
                     <div className="relative h-28 w-full rounded-lg bg-[#050505] border border-[#292929] flex items-center justify-center p-3 overflow-hidden">
-                      <Image
+                      <ResilientImage
                         src={logo.proxyUrl || logo.url}
+                        fallbackSrcs={[logo.url]}
                         alt={logo.label || logo.category}
                         fill
                         sizes="320px"
                         className="object-contain p-3"
-                        referrerPolicy="no-referrer"
+                        fallback={
+                          <span className="text-[11px] font-mono text-[#707070]">
+                            Logo preview unavailable
+                          </span>
+                        }
                       />
                     </div>
                   </div>

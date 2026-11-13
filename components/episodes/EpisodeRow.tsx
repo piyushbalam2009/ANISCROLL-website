@@ -1,8 +1,8 @@
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import { Play, Film, Check, Radio } from 'lucide-react';
 import { HoshikaEpisodeItem } from '@/types/anime';
 import { WatchHistoryEntry } from '@/types/streaming';
@@ -30,12 +30,6 @@ export function EpisodeRow({
   const isCompleted = historyEntry?.completed || percent >= 90;
   const isPartiallyWatched = !isCompleted && percent > 0;
 
-  const [thumbnailError, setThumbnailError] = useState(false);
-
-  useEffect(() => {
-    setThumbnailError(false);
-  }, [episode.thumbnail, episode.number]);
-
   const titleText = episode.title?.trim() || `Episode ${episode.number}`;
 
   return (
@@ -51,22 +45,18 @@ export function EpisodeRow({
       <div className="flex items-center gap-3 sm:gap-4 min-w-0 flex-1">
         {/* Compact Thumbnail */}
         <div className="relative w-24 sm:w-28 aspect-video bg-[#0A0A0A] rounded-lg overflow-hidden shrink-0 border border-[#292929]">
-          {episode.thumbnail && !thumbnailError ? (
-            <Image
-              key={episode.thumbnail}
-              src={episode.thumbnail}
-              alt={titleText}
-              fill
-              sizes="(max-width: 640px) 96px, 112px"
-              className="object-cover group-hover:scale-105 transition-transform duration-200"
-              referrerPolicy="no-referrer"
-              onError={() => setThumbnailError(true)}
-            />
-          ) : (
-            <div className="w-full h-full flex items-center justify-center text-[#707070]">
-              <Film size={18} />
-            </div>
-          )}
+          <ResilientImage
+            src={episode.thumbnail}
+            alt={titleText}
+            fill
+            sizes="(max-width: 640px) 96px, 112px"
+            className="object-cover group-hover:scale-105 transition-transform duration-200"
+            fallback={
+              <div className="w-full h-full flex items-center justify-center text-[#707070]">
+                <Film size={18} />
+              </div>
+            }
+          />
 
           {/* Hover Play Overlay */}
           <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">

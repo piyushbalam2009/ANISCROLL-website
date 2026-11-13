@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  ALLOWED_ARTWORK_PROXY_HOSTS,
-  encodeBase64Url,
-} from '@/lib/artwork-mapper';
+import { ALLOWED_ARTWORK_PROXY_HOSTS } from '@/lib/artwork-mapper';
+import { proxyValidatedArtworkUrl } from '@/lib/artwork/proxy-handler';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 export async function GET(req: NextRequest) {
   const rawUrl = req.nextUrl.searchParams.get('url');
@@ -33,17 +34,8 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  const encoded = encodeBase64Url(parsedUrl.toString());
-  const redirectUrl = new URL(`/api/artwork-image/${encoded}`, req.url);
   const v = req.nextUrl.searchParams.get('v');
-  const refresh = req.nextUrl.searchParams.get('refresh');
-  if (v) redirectUrl.searchParams.set('v', v);
-  if (refresh) redirectUrl.searchParams.set('refresh', refresh);
+  const forceRefresh = req.nextUrl.searchParams.get('refresh') === 'true';
 
-  const response = NextResponse.redirect(redirectUrl, 307);
-  response.headers.set(
-    'Cache-Control',
-    refresh === 'true' ? 'no-store, max-age=0' : 'public, max-age=1800, s-maxage=3600'
-  );
-  return response;
+  return proxyValidatedArtworkUrl(parsedUrl, v, forceRefresh);
 }

@@ -17,14 +17,21 @@ import {
  * with the user's verified Bearer token when running without a service account private key.
  */
 
-const PROJECT_ID =
-  process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || firebaseAppletConfig.projectId;
-const API_KEY =
-  process.env.NEXT_PUBLIC_FIREBASE_API_KEY || firebaseAppletConfig.apiKey;
-const DATABASE_ID =
+const PROJECT_ID = (
+  process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID ||
+  firebaseAppletConfig.projectId ||
+  ''
+).trim();
+const API_KEY = (
+  process.env.NEXT_PUBLIC_FIREBASE_API_KEY ||
+  firebaseAppletConfig.apiKey ||
+  ''
+).trim();
+const DATABASE_ID = (
   process.env.NEXT_PUBLIC_FIREBASE_DATABASE_ID ||
   firebaseAppletConfig.firestoreDatabaseId ||
-  '(default)';
+  '(default)'
+).trim();
 
 export function getFirebaseAdminApp(): App | null {
   const apps = getApps();
@@ -32,7 +39,7 @@ export function getFirebaseAdminApp(): App | null {
     return apps[0]!;
   }
 
-  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
+  const clientEmail = process.env.FIREBASE_CLIENT_EMAIL?.trim();
   const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
 
   if (clientEmail && privateKey && PROJECT_ID) {

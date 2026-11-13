@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import { Film, Play, Bookmark, Star } from 'lucide-react';
 import { HoshikaAnimeItem } from '@/types/anime';
 import { isInWatchlist, toggleWatchlist } from '@/lib/storage';
@@ -14,17 +14,12 @@ interface AnimeCardProps {
 
 export function AnimeCard({ anime, priority = false }: AnimeCardProps) {
   const [inWatchlist, setInWatchlist] = useState(false);
-  const [imageError, setImageError] = useState(false);
 
   const title =
     anime.titleEnglish ||
     anime.titleRomaji ||
     anime.titleLocalized ||
     'Unknown Title';
-
-  useEffect(() => {
-    setImageError(false);
-  }, [anime.shortId, anime.coverImage]);
 
   useEffect(() => {
     setInWatchlist(isInWatchlist(anime.shortId));
@@ -50,24 +45,21 @@ export function AnimeCard({ anime, priority = false }: AnimeCardProps) {
   return (
     <div className="group relative flex flex-col bg-[#141414] rounded-xl overflow-hidden border border-[#292929] hover:border-[#404040] transition-all duration-200">
       <Link href={`/anime/${anime.shortId}`} className="block relative aspect-[3/4] overflow-hidden bg-[#0A0A0A]">
-        {anime.coverImage && !imageError ? (
-          <Image
-            key={`${anime.shortId}-${anime.coverImage}`}
-            src={anime.coverImage}
-            alt={title}
-            fill
-            sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
-            priority={priority}
-            className="object-cover group-hover:scale-105 transition-transform duration-300 ease-out"
-            referrerPolicy="no-referrer"
-            onError={() => setImageError(true)}
-          />
-        ) : (
-          <div className="w-full h-full flex flex-col items-center justify-center text-[#707070] p-4 text-center">
-            <Film size={28} className="mb-2" />
-            <span className="text-xs">{title}</span>
-          </div>
-        )}
+        <ResilientImage
+          src={anime.coverImage}
+          fallbackSrcs={[anime.bannerImage]}
+          alt={title}
+          fill
+          sizes="(max-width: 640px) 50vw, (max-width: 1024px) 33vw, 20vw"
+          priority={priority}
+          className="object-cover group-hover:scale-105 transition-transform duration-300 ease-out"
+          fallback={
+            <div className="w-full h-full flex flex-col items-center justify-center text-[#707070] p-4 text-center">
+              <Film size={28} className="mb-2" />
+              <span className="text-xs">{title}</span>
+            </div>
+          }
+        />
 
         {/* Hover Gradient Overlay */}
         <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-3">

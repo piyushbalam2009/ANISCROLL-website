@@ -3,7 +3,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Search, Loader2, X, ArrowRight, Film } from 'lucide-react';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import { HoshikaAnimeItem } from '@/types/anime';
 
 // Client-side search cache (5 minute TTL) to prevent redundant requests on backspace/retype
@@ -245,20 +245,18 @@ export function GlobalSearch() {
                   >
                     {/* Poster Thumbnail */}
                     <div className="relative w-10 h-14 bg-[#0A0A0A] rounded overflow-hidden shrink-0 border border-[#292929]">
-                      {anime.coverImage ? (
-                        <Image
-                          src={anime.coverImage}
-                          alt={title}
-                          fill
-                          className="object-cover"
-                          sizes="40px"
-                          referrerPolicy="no-referrer"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center text-[#707070]">
-                          <Film size={14} />
-                        </div>
-                      )}
+                      <ResilientImage
+                        src={anime.coverImage}
+                        alt={title}
+                        fill
+                        className="object-cover"
+                        sizes="40px"
+                        fallback={
+                          <div className="w-full h-full flex items-center justify-center text-[#707070]">
+                            <Film size={14} />
+                          </div>
+                        }
+                      />
                     </div>
 
                     {/* Metadata */}

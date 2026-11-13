@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import Link from 'next/link';
 import {
   Play,
@@ -55,8 +55,6 @@ export function AnimeDetailsHero({
   const [subscribed, setSubscribed] = useState(false);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
   const [logoError, setLogoError] = useState(false);
-  const [posterError, setPosterError] = useState(false);
-  const [candidateIndex, setCandidateIndex] = useState(0);
 
   const artwork = useRealtimeArtworkOverride(
     anime.shortId,
@@ -67,14 +65,6 @@ export function AnimeDetailsHero({
   useEffect(() => {
     setLogoError(false);
   }, [artwork?.logoUrl, anime.shortId]);
-
-  useEffect(() => {
-    setPosterError(false);
-  }, [artwork?.posterUrl, anime.coverImage, anime.shortId]);
-
-  useEffect(() => {
-    setCandidateIndex(0);
-  }, [anime.shortId, artwork?.backgroundUrl]);
 
   const dropdownRef = useRef<HTMLDivElement>(null);
 
@@ -196,13 +186,7 @@ export function AnimeDetailsHero({
     anime.coverImage,
   ]);
 
-  const backgroundUrl = backdropCandidates[candidateIndex] || null;
-
-  const handleBackdropError = () => {
-    setCandidateIndex((prev) =>
-      prev + 1 < backdropCandidates.length ? prev + 1 : backdropCandidates.length
-    );
-  };
+  const primaryBackdrop = backdropCandidates[0] || null;
 
   // 2. Transparent Anime Title Logo: Fanart.tv hdtvlogo/clearlogo/custom override
   const hasLogo = !logoError && Boolean(artwork?.logoUrl);
@@ -254,18 +238,19 @@ export function AnimeDetailsHero({
   return (
     <div className="relative w-full overflow-hidden bg-[#000000] min-h-[620px] md:min-h-[660px] lg:h-[720px] max-h-[800px] flex items-center select-none pt-24 sm:pt-28 pb-12">
       {/* 1. Full-Width Landscape Backdrop Layer (Full Brightness + Localized Gradients) */}
-      {backgroundUrl ? (
+      {primaryBackdrop ? (
         <div className="absolute inset-0 z-0 overflow-hidden">
-          <Image
-            key={`${anime.shortId}-${backgroundUrl}`}
-            src={backgroundUrl}
+          <ResilientImage
+            src={primaryBackdrop}
+            fallbackSrcs={backdropCandidates.slice(1)}
             alt={title}
             fill
             priority={priority}
             sizes="100vw"
             className="object-cover object-center opacity-100 transition-transform duration-700 hover:scale-102"
-            referrerPolicy="no-referrer"
-            onError={handleBackdropError}
+            fallback={
+              <div className="w-full h-full bg-gradient-to-br from-[#141414] via-[#0A0A0A] to-black" />
+            }
           />
           {/* Localized Readability Gradients (Preserves vibrant backdrop artwork while keeping poster and metadata clear) */}
           <div className="absolute inset-0 bg-gradient-to-r from-black/82 via-black/45 via-42% to-black/10 pointer-events-none" />
@@ -279,34 +264,26 @@ export function AnimeDetailsHero({
       {/* 2. Hero Content Container: Left Poster + Right Information */}
       <div className="relative z-20 w-full max-w-[1600px] mx-auto h-full px-6 sm:px-10 md:px-14 lg:px-16 flex flex-col md:flex-row items-center gap-8 md:gap-12 lg:gap-16 justify-center md:justify-start">
         {/* Left Side: Anime Poster (Aspect 2:3, ~325px wide on desktop) */}
-        {(() => {
-          const primaryPoster =
-            !posterError && artwork?.posterUrl
-              ? artwork.posterUrl
-              : anime.coverImage;
-          if (!primaryPoster) return null;
-          return (
-            <div className="w-full max-w-[200px] sm:max-w-[240px] md:w-[240px] lg:w-[325px] flex-shrink-0 aspect-[2/3] relative rounded-2xl overflow-hidden shadow-2xl shadow-black ring-1 ring-white/15 group">
-              <Image
-                key={`${anime.shortId}-${primaryPoster}`}
-                src={primaryPoster}
-                alt={`${title} poster`}
-                fill
-                priority
-                sizes="(min-width: 1024px) 325px, (min-width: 768px) 240px, 200px"
-                className="object-cover transition-transform duration-500 group-hover:scale-105"
-                referrerPolicy="no-referrer"
-                onError={() => {
-                  if (!posterError && artwork?.posterUrl && anime.coverImage && artwork.posterUrl !== anime.coverImage) {
-                    setPosterError(true);
-                  }
-                }}
-              />
-              {/* Subtle gloss highlight on edge */}
-              <div className="absolute inset-0 pointer-events-none rounded-2xl ring-1 ring-inset ring-white/10" />
-            </div>
-          );
-        })()}
+        {(artwork?.posterUrl || anime.coverImage) && (
+          <div className="w-full max-w-[200px] sm:max-w-[240px] md:w-[240px] lg:w-[325px] flex-shrink-0 aspect-[2/3] relative rounded-2xl overflow-hidden shadow-2xl shadow-black ring-1 ring-white/15 bg-[#0A0A0A] group">
+            <ResilientImage
+              src={artwork?.posterUrl || anime.coverImage}
+              fallbackSrcs={[anime.coverImage, anime.bannerImage]}
+              alt={`${title} poster`}
+              fill
+              priority
+              sizes="(min-width: 1024px) 325px, (min-width: 768px) 240px, 200px"
+              className="object-cover transition-transform duration-500 group-hover:scale-105"
+              fallback={
+                <div className="w-full h-full flex items-center justify-center p-4 text-center text-xs font-semibold text-[#A0A0A0]">
+                  {title}
+                </div>
+              }
+            />
+            {/* Subtle gloss highlight on edge */}
+            <div className="absolute inset-0 pointer-events-none rounded-2xl ring-1 ring-inset ring-white/10" />
+          </div>
+        )}
 
         {/* Right Side: Anime Content & Actions */}
         <div className="flex-1 min-w-0 flex flex-col justify-center space-y-3.5 lg:space-y-4 text-left w-full">
@@ -321,16 +298,14 @@ export function AnimeDetailsHero({
               <div
                 className={`relative w-full ${logoSizingClasses} filter drop-shadow-[0_4px_24px_rgba(0,0,0,0.95)] transition-transform duration-300`}
               >
-                <Image
-                  key={`${anime.shortId}-${artwork!.logoUrl!}`}
+                <ResilientImage
                   src={artwork!.logoUrl!}
                   alt={title}
                   fill
                   priority={priority}
                   sizes="(min-width: 1024px) 580px, 420px"
                   className="object-contain object-left"
-                  referrerPolicy="no-referrer"
-                  onError={() => setLogoError(true)}
+                  onAllFailed={() => setLogoError(true)}
                 />
               </div>
             ) : (

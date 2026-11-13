@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import { Bookmark, Film, Trash2, Play, Compass } from 'lucide-react';
 import { WatchlistEntry } from '@/types/streaming';
 import { getWatchlist, toggleWatchlist } from '@/lib/storage';
@@ -88,20 +88,18 @@ export default function WatchlistPage() {
                     href={`/anime/${item.hoshikaId}`}
                     className="relative aspect-[3/4] overflow-hidden bg-[#0A0A0A]"
                   >
-                    {item.coverImage ? (
-                      <Image
-                        src={item.coverImage}
-                        alt={item.title}
-                        fill
-                        sizes="(max-width: 640px) 50vw, 20vw"
-                        className="object-cover group-hover:scale-105 transition-transform duration-300"
-                        referrerPolicy="no-referrer"
-                      />
-                    ) : (
-                      <div className="w-full h-full flex items-center justify-center text-[#707070]">
-                        <Film size={28} />
-                      </div>
-                    )}
+                    <ResilientImage
+                      src={item.coverImage}
+                      alt={item.title}
+                      fill
+                      sizes="(max-width: 640px) 50vw, 20vw"
+                      className="object-cover group-hover:scale-105 transition-transform duration-300"
+                      fallback={
+                        <div className="w-full h-full flex items-center justify-center text-[#707070]">
+                          <Film size={28} />
+                        </div>
+                      }
+                    />
 
                     {/* Hover Play Overlay */}
                     <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">

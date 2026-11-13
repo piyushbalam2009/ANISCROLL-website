@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
+import { ResilientImage } from '@/components/ui/ResilientImage';
 import { useRouter } from 'next/navigation';
 import {
   User,
@@ -70,18 +70,14 @@ export default function ProfilePage() {
         {/* Profile Header */}
         <div className="p-6 md:p-8 rounded-2xl bg-[#0A0A0A] border border-[#292929] flex flex-col sm:flex-row items-center sm:items-start gap-6 text-center sm:text-left">
           <div className="relative w-20 h-20 rounded-2xl bg-white text-black flex items-center justify-center font-bold text-2xl shadow-xl shrink-0 overflow-hidden border border-white/20">
-            {photoURL ? (
-              <Image
-                src={photoURL}
-                alt={displayName}
-                fill
-                sizes="80px"
-                className="object-cover"
-                referrerPolicy="no-referrer"
-              />
-            ) : (
-              <User size={36} />
-            )}
+            <ResilientImage
+              src={photoURL}
+              alt={displayName}
+              fill
+              sizes="80px"
+              className="object-cover"
+              fallback={<User size={36} />}
+            />
           </div>
 
           <div className="flex-1 space-y-2">
