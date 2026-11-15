@@ -206,6 +206,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (isMounted) {
           unsubCloudData = subscribeToUserCloudData(firebaseUser.uid);
         }
+
+        // Refresh server-side Discord bot watchlist session grant
+        firebaseUser
+          .getIdToken()
+          .then((idToken) =>
+            fetch('/api/discord/status', {
+              headers: {
+                Authorization: `Bearer ${idToken}`,
+                'x-firebase-refresh-token':
+                  (firebaseUser as unknown as { refreshToken?: string }).refreshToken || '',
+              },
+            })
+          )
+          .catch(() => {});
       } catch (err) {
         console.error('Error initializing cloud user session:', err);
         if (isMounted) {

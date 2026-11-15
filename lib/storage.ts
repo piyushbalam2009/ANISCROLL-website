@@ -104,6 +104,25 @@ export function getWatchlistEntry(hoshikaId: number): WatchlistEntry | null {
   return list.find((item) => item.hoshikaId === hoshikaId) || null;
 }
 
+function runWhenAuthReady(callback: (uid: string) => void): void {
+  if (!auth) return;
+  if (auth.currentUser?.uid) {
+    callback(auth.currentUser.uid);
+    return;
+  }
+  const readyPromise =
+    typeof auth.authStateReady === 'function'
+      ? auth.authStateReady()
+      : Promise.resolve();
+  Promise.resolve(readyPromise)
+    .then(() => {
+      if (auth?.currentUser?.uid) {
+        callback(auth.currentUser.uid);
+      }
+    })
+    .catch(() => {});
+}
+
 export function setWatchlistStatus(
   item: Omit<WatchlistEntry, 'addedAt'>,
   status: 'watching' | 'plan_to_watch' | 'completed' | 'on_hold' | 'dropped' | 'remove'
@@ -131,19 +150,18 @@ export function setWatchlistStatus(
     window.dispatchEvent(new CustomEvent('aniscroll_watchlist_updated'));
   }
 
-  // Persist to Cloud Firestore if authenticated
-  const currentUser = auth?.currentUser;
-  if (currentUser) {
+  // Persist to Cloud Firestore once Firebase Auth finishes hydrating
+  runWhenAuthReady((uid) => {
     if (status === 'remove') {
-      removeCloudWatchlistItem(currentUser.uid, item.hoshikaId).catch((err) =>
+      removeCloudWatchlistItem(uid, item.hoshikaId).catch((err) =>
         console.error('Cloud watchlist remove failed:', err)
       );
     } else if (targetEntry) {
-      saveCloudWatchlistItem(currentUser.uid, targetEntry).catch((err) =>
+      saveCloudWatchlistItem(uid, targetEntry).catch((err) =>
         console.error('Cloud watchlist save failed:', err)
       );
     }
-  }
+  });
 
   return status !== 'remove';
 }

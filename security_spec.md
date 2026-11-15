@@ -1,4 +1,4 @@
-# AniScroll Security Specification (User & Admin RBAC)
+# AniScroll Security Specification (User, Admin RBAC & Discord Bot Watchlist Integration)
 
 ## 1. Data Invariants
 1. **Default-Deny Catch-All**: Every unreferenced path in `/databases/{database}/documents` is denied (`allow read, write: if false;`).
@@ -25,6 +25,9 @@
    - `/publicProfiles/{uid}` excludes all email/private PII and enforces `privacy.profileVisibility` (`public`, `members`, `private`) at both Firestore rules and API route level.
    - Four-tier role hierarchy (`member`, `mod`, `admin`, `owner`) prevents Members/Mods from escalating roles and prevents Admins from altering Owner or other Admin accounts.
    - `/usernames/{username}` prevents enumeration (`allow list: if false;`) and binds handle ownership to `request.auth.uid`.
+8. **Server-Only Discord Account Links & OAuth States (`/discordAccountLinks/{discordUserId}`, `/discordOAuthStates/{stateId}`)**:
+   - Explicitly denied to all direct browser/client reads and writes (`allow read, write: if false;`).
+   - Accessible exclusively by trusted server-side routes using the Firebase Admin SDK.
 
 ## 2. The "Dirty Dozen" Payloads
 1. **Unauthenticated Profile Write** -> `PERMISSION_DENIED`
@@ -38,5 +41,4 @@
 9. **Invalid Enum Value in Preferences (`defaultAudio: 'french'`)** -> `PERMISSION_DENIED`
 10. **Zero/Negative Duration in Continue Watching** -> `PERMISSION_DENIED`
 11. **Non-Admin Attempting to Write `/animeArtwork/{animeId}`** -> `PERMISSION_DENIED`
-12. **Non-Owner Attempting to Self-Assign `/admins/{uid}` Role or Admin Attempting to Downgrade Owner** -> `PERMISSION_DENIED`
-
+12. **Direct Browser Client Read or Write to `/discordAccountLinks/{discordUserId}` or `/discordOAuthStates/{stateId}`** -> `PERMISSION_DENIED`

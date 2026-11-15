@@ -87,7 +87,7 @@ export function AppShell({ children }: AppShellProps) {
 
       {/* Main Content Area */}
       <div
-        className={`flex-1 flex flex-col min-h-screen relative transition-all duration-200 ease-in-out ${
+        className={`flex-1 min-w-0 flex flex-col min-h-screen relative transition-all duration-200 ease-in-out ${
           collapsed ? 'md:pl-[76px]' : 'md:pl-[240px]'
         }`}
       >

@@ -121,6 +121,13 @@ export interface WatchHistoryEntry {
   completed?: boolean;
 }
 
+export type WatchlistStatus =
+  | 'watching'
+  | 'plan_to_watch'
+  | 'completed'
+  | 'on_hold'
+  | 'dropped';
+
 export interface WatchlistEntry {
   hoshikaId: number;
   title: string;
@@ -128,7 +135,8 @@ export interface WatchlistEntry {
   format?: string;
   rating?: number;
   seasonYear?: number;
-  status?: 'watching' | 'plan_to_watch' | 'completed' | 'on_hold' | 'dropped';
+  status?: WatchlistStatus;
+  episodeProgress?: number;
   addedAt: number;
 }
 

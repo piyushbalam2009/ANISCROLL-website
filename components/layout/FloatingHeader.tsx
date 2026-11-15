@@ -263,7 +263,7 @@ export function FloatingHeader({
               }}
               onKeyDown={handleKeyDown}
               placeholder="Search anime..."
-              className="w-full h-10 sm:h-11 pl-11 pr-20 bg-black/60 hover:bg-black/75 focus:bg-black/90 backdrop-blur-xl text-white placeholder-[#888888] text-xs sm:text-sm rounded-full border border-white/15 focus:border-white/40 focus:outline-none transition-all shadow-2xl shadow-black/80"
+              className="w-full h-10 sm:h-11 pl-11 pr-9 sm:pr-20 bg-black/60 hover:bg-black/75 focus:bg-black/90 backdrop-blur-xl text-white placeholder-[#888888] text-xs sm:text-sm rounded-full border border-white/15 focus:border-white/40 focus:outline-none transition-all shadow-2xl shadow-black/80"
               aria-label="Search anime"
             />
 

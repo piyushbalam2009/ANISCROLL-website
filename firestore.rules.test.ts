@@ -96,14 +96,23 @@ function evaluateRule(ctx: {
   if (collection === 'watchlist') {
     const valid =
       hasAllKeys(data, ['uid', 'hoshikaId', 'title', 'addedAt', 'createdAt', 'updatedAt']) &&
-      hasOnlyKeys(data, ['uid', 'hoshikaId', 'title', 'coverImage', 'format', 'rating', 'seasonYear', 'status', 'addedAt', 'createdAt', 'updatedAt']) &&
+      hasOnlyKeys(data, ['uid', 'hoshikaId', 'title', 'coverImage', 'format', 'rating', 'seasonYear', 'status', 'episodeProgress', 'addedAt', 'createdAt', 'updatedAt']) &&
       typeof data.uid === 'string' && data.uid === ctx.auth.uid &&
       typeof data.hoshikaId === 'number' && data.hoshikaId > 0 &&
       typeof data.title === 'string' && data.title.length >= 1 && data.title.length <= 300 &&
+      (data.episodeProgress === undefined || data.episodeProgress === null || (typeof data.episodeProgress === 'number' && data.episodeProgress >= 0 && data.episodeProgress <= 10000)) &&
       typeof data.addedAt === 'number' && data.addedAt > 0;
     if (!valid) return 'PERMISSION_DENIED';
     if (ctx.operation === 'create') {
       return data.createdAt === reqTime && data.updatedAt === reqTime ? 'ALLOW' : 'PERMISSION_DENIED';
+    }
+    if (ctx.operation === 'update' && ctx.existing) {
+      const okUpdate =
+        data.uid === ctx.existing.uid &&
+        data.createdAt === ctx.existing.createdAt &&
+        data.updatedAt === reqTime &&
+        affectedKeysOnly(data, ctx.existing, ['title', 'coverImage', 'format', 'rating', 'seasonYear', 'status', 'episodeProgress', 'addedAt', 'updatedAt']);
+      return okUpdate ? 'ALLOW' : 'PERMISSION_DENIED';
     }
   }
 
@@ -195,6 +204,36 @@ test('firestore.rules file contains all required match blocks and validation blu
   assert.ok(rulesText.includes("'selectedLogo'"));
   assert.ok(rulesText.includes("'maintenanceMessage'"));
   assert.ok(rulesText.includes("'sectionOrder'"));
+  assert.ok(rulesText.includes('match /discordAccountLinks/{discordUserId}'));
+  assert.ok(rulesText.includes('match /discordOAuthStates/{stateId}'));
+});
+
+test('/discordAccountLinks and /discordOAuthStates deny all direct client reads and writes', () => {
+  for (const op of ['get', 'list', 'create', 'update', 'delete'] as const) {
+    assert.equal(
+      evaluateRule({
+        auth: { uid: 'user_1' },
+        path: '/discordAccountLinks/987654321098765432',
+        operation: op,
+        incoming: {
+          discordUserId: '987654321098765432',
+          firebaseUid: 'user_1',
+          discordUsername: 'otaku',
+          linkedAt: SERVER_TIME,
+          updatedAt: SERVER_TIME,
+        },
+      }),
+      'PERMISSION_DENIED'
+    );
+    assert.equal(
+      evaluateRule({
+        auth: { uid: 'ClYKhPNBohZuDPPS3upXVyQvUEq2' },
+        path: '/discordOAuthStates/state_hash_123',
+        operation: op,
+      }),
+      'PERMISSION_DENIED'
+    );
+  }
 });
 
 test('Mod RBAC boundaries and /reports + /errorLogs security invariants', () => {

@@ -141,6 +141,10 @@ export function subscribeToUserCloudData(uid: string): () => void {
           rating: typeof d.rating === 'number' ? d.rating : undefined,
           seasonYear: typeof d.seasonYear === 'number' ? d.seasonYear : undefined,
           status: d.status || 'watching',
+          episodeProgress:
+            typeof d.episodeProgress === 'number' && d.episodeProgress >= 0
+              ? d.episodeProgress
+              : undefined,
           addedAt: Number(d.addedAt || Date.now()),
         });
       });

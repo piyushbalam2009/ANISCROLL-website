@@ -228,7 +228,32 @@ export async function getUserProfileDoc(uid: string): Promise<CloudUserProfile |
   }
 }
 
+const upsertLocks = new Map<string, Promise<unknown>>();
+
 export async function upsertUserProfileDoc(profile: {
+  uid: string;
+  displayName: string;
+  email: string;
+  photoURL?: string | null;
+  provider: 'password' | 'google';
+  migrationCompleted?: boolean;
+  forcePhotoUpdate?: boolean;
+}): Promise<CloudUserProfile> {
+  const prev = upsertLocks.get(profile.uid) || Promise.resolve();
+  const next = prev
+    .catch(() => {})
+    .then(() => runUpsertUserProfileDoc(profile));
+  upsertLocks.set(profile.uid, next);
+  try {
+    return await next;
+  } finally {
+    if (upsertLocks.get(profile.uid) === next) {
+      upsertLocks.delete(profile.uid);
+    }
+  }
+}
+
+async function runUpsertUserProfileDoc(profile: {
   uid: string;
   displayName: string;
   email: string;
@@ -410,6 +435,10 @@ export async function getCloudWatchlist(uid: string): Promise<WatchlistEntry[]> 
         rating: typeof d.rating === 'number' ? d.rating : undefined,
         seasonYear: typeof d.seasonYear === 'number' ? d.seasonYear : undefined,
         status: d.status || 'watching',
+        episodeProgress:
+          typeof d.episodeProgress === 'number' && d.episodeProgress >= 0
+            ? d.episodeProgress
+            : undefined,
         addedAt: Number(d.addedAt || Date.now()),
       });
     });
@@ -440,6 +469,14 @@ export async function saveCloudWatchlistItem(
     status: safeStatus,
     addedAt: item.addedAt > 0 ? item.addedAt : Date.now(),
   };
+
+  if (
+    typeof item.episodeProgress === 'number' &&
+    Number.isFinite(item.episodeProgress) &&
+    item.episodeProgress >= 0
+  ) {
+    baseFields.episodeProgress = Math.floor(item.episodeProgress);
+  }
 
   try {
     const snap = await getDoc(ref);

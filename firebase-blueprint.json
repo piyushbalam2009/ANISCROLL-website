@@ -174,6 +174,7 @@
           "enum": ["watching", "plan_to_watch", "completed", "on_hold", "dropped"],
           "maxLength": 40
         },
+        "episodeProgress": { "type": "number" },
         "addedAt": { "type": "number" },
         "createdAt": { "type": "string", "format": "date-time" },
         "updatedAt": { "type": "string", "format": "date-time" }
@@ -573,6 +574,66 @@
         "createdAt": { "type": "string", "format": "date-time" }
       },
       "required": ["id", "severity", "category", "provider", "message", "timestamp", "createdAt"]
+    },
+    "DiscordAccountLink": {
+      "title": "DiscordAccountLink",
+      "description": "Server-only mapping between a Discord User ID and a Firebase Auth UID under /discordAccountLinks/{discordUserId}",
+      "type": "object",
+      "properties": {
+        "discordUserId": {
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[0-9]{17,22}$",
+          "description": "Discord user snowflake ID (document ID)"
+        },
+        "firebaseUid": {
+          "type": "string",
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Linked AniScroll website Firebase Auth UID"
+        },
+        "discordUsername": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Discord username handle"
+        },
+        "discordGlobalName": {
+          "type": "string",
+          "maxLength": 64,
+          "description": "Discord global display name"
+        },
+        "discordAvatar": {
+          "type": "string",
+          "maxLength": 1024,
+          "description": "Discord CDN avatar URL"
+        },
+        "linkedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when Discord account was linked"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server timestamp when link was last updated"
+        }
+      },
+      "required": ["discordUserId", "firebaseUid", "discordUsername", "linkedAt", "updatedAt"]
+    },
+    "DiscordOAuthState": {
+      "title": "DiscordOAuthState",
+      "description": "Server-only single-use Discord OAuth2 CSRF state record under /discordOAuthStates/{stateId}",
+      "type": "object",
+      "properties": {
+        "stateHash": { "type": "string", "maxLength": 128 },
+        "firebaseUid": { "type": "string", "maxLength": 128 },
+        "nonceHash": { "type": "string", "maxLength": 128 },
+        "redirectUri": { "type": "string", "maxLength": 1024 },
+        "consumed": { "type": "boolean" },
+        "createdAt": { "type": "number" },
+        "expiresAt": { "type": "number" }
+      },
+      "required": ["stateHash", "firebaseUid", "nonceHash", "redirectUri", "consumed", "createdAt", "expiresAt"]
     }
   },
   "firestore": {
@@ -643,6 +704,14 @@
     "/errorLogs/{logId}": {
       "schema": "ErrorLog",
       "description": "Redacted server, streaming, and upstream API error logs"
+    },
+    "/discordAccountLinks/{discordUserId}": {
+      "schema": "DiscordAccountLink",
+      "description": "Server-only Discord user ID to Firebase UID account links (direct client access denied)"
+    },
+    "/discordOAuthStates/{stateId}": {
+      "schema": "DiscordOAuthState",
+      "description": "Server-only single-use OAuth2 state nonces (direct client access denied)"
     }
   }
 }

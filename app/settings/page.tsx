@@ -19,6 +19,10 @@ import {
   ExternalLink,
   AlertCircle,
   Lock,
+  Link2,
+  Unlink,
+  RefreshCw,
+  Terminal,
 } from 'lucide-react';
 import { UserPreferences } from '@/types/streaming';
 import {
@@ -87,6 +91,21 @@ export default function SettingsPage() {
   const [resetError, setResetError] = useState<string | null>(null);
   const [sendingReset, setSendingReset] = useState(false);
 
+  // Discord Account Link state
+  const [discordLoading, setDiscordLoading] = useState(false);
+  const [discordConnecting, setDiscordConnecting] = useState(false);
+  const [discordDisconnecting, setDiscordDisconnecting] = useState(false);
+  const [confirmDisconnectOpen, setConfirmDisconnectOpen] = useState(false);
+  const [discordError, setDiscordError] = useState<string | null>(null);
+  const [discordLink, setDiscordLink] = useState<{
+    discordUserId: string;
+    discordUsername: string;
+    discordGlobalName: string | null;
+    discordAvatar: string | null;
+    linkedAt: number;
+    updatedAt: number;
+  } | null>(null);
+
   const showSaved = (msg: string) => {
     setSavedNotification(msg);
     setTimeout(() => setSavedNotification(null), 2600);
@@ -95,6 +114,57 @@ export default function SettingsPage() {
   useEffect(() => {
     setMounted(true);
     setPrefs(getUserPreferences());
+
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      const sec = params.get('section') as SettingsSection | null;
+      if (
+        sec &&
+        (['profile', 'appearance', 'privacy', 'playback', 'account'] as const).includes(sec)
+      ) {
+        setActiveSection(sec);
+      }
+
+      const discordStatusParam = params.get('discord');
+      const discordUserParam = params.get('discord_username');
+      const discordErrParam = params.get('discord_error');
+
+      if (discordStatusParam === 'connected') {
+        setActiveSection('account');
+        showSaved(
+          discordUserParam
+            ? `Discord connected (@${discordUserParam})`
+            : 'Discord account connected'
+        );
+      } else if (discordErrParam) {
+        setActiveSection('account');
+        const errorMap: Record<string, string> = {
+          access_denied: 'Discord authorization was cancelled.',
+          missing_code_or_state: 'Missing OAuth authorization code or state parameter.',
+          state_not_found: 'Invalid OAuth state. Please click Connect Discord again.',
+          state_already_consumed: 'This Discord authorization link has already been used.',
+          state_expired: 'Your Discord authorization session expired. Please try again.',
+          csrf_cookie_mismatch:
+            'Security verification failed (CSRF state mismatch). Please try again from this browser.',
+          discord_already_linked:
+            'That Discord account is already linked to another AniScroll user.',
+          firebase_already_linked:
+            'Your AniScroll account is already linked to a different Discord user. Disconnect first to switch.',
+          token_exchange_failed: 'Failed to exchange authorization code with Discord.',
+          discord_profile_failed: 'Failed to retrieve your Discord identity from Discord API.',
+          invalid_discord_identity: 'Discord returned an invalid user identity.',
+        };
+        setDiscordError(
+          errorMap[discordErrParam] ||
+            `Unable to complete Discord linking (${discordErrParam}).`
+        );
+      }
+
+      if (discordStatusParam || discordErrParam) {
+        const cleanUrl = sec ? `/settings?section=${sec}` : '/settings?section=account';
+        window.history.replaceState({}, '', cleanUrl);
+      }
+    }
 
     const handleUpdate = () => setPrefs(getUserPreferences());
     window.addEventListener('aniscroll_preferences_updated', handleUpdate);
@@ -220,10 +290,369 @@ export default function SettingsPage() {
     router.push('/');
   };
 
+  const fetchDiscordStatus = React.useCallback(async () => {
+    if (!user) return;
+    setDiscordLoading(true);
+    try {
+      const token = await user.getIdToken();
+      const refreshToken =
+        (user as unknown as { refreshToken?: string }).refreshToken || '';
+      const res = await fetch('/api/discord/status', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'x-firebase-refresh-token': refreshToken,
+        },
+      });
+      const data = await res.json().catch(() => null);
+      if (res.ok && data?.ok) {
+        setDiscordLink(data.connected && data.link ? data.link : null);
+      }
+    } catch {
+      // Ignore transient status fetch failure
+    } finally {
+      setDiscordLoading(false);
+    }
+  }, [user]);
+
+  useEffect(() => {
+    if (!user?.uid) {
+      setDiscordLink(null);
+      return;
+    }
+    fetchDiscordStatus();
+  }, [user?.uid, fetchDiscordStatus]);
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (!event?.data || event.data.type !== 'ANISCROLL_DISCORD_OAUTH_RESULT') {
+        return;
+      }
+      if (event.data.status === 'connected') {
+        setDiscordError(null);
+        showSaved(
+          event.data.discordUsername
+            ? `Discord connected (@${event.data.discordUsername})`
+            : 'Discord account connected'
+        );
+        fetchDiscordStatus();
+      } else if (event.data.error) {
+        setDiscordError(String(event.data.error));
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [fetchDiscordStatus]);
+
+  const handleConnectDiscord = async () => {
+    if (!user) return;
+    setDiscordConnecting(true);
+    setDiscordError(null);
+    try {
+      const token = await user.getIdToken();
+      const refreshToken =
+        (user as unknown as { refreshToken?: string }).refreshToken || undefined;
+      const res = await fetch('/api/discord/connect', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        credentials: 'include',
+        body: JSON.stringify({
+          refreshToken,
+          returnTo: '/settings?section=account',
+        }),
+      });
+      const data = await res.json().catch(() => null);
+      const targetUrl = data?.authorizeUrl || data?.url;
+      if (!res.ok || !data?.ok || !targetUrl) {
+        throw new Error(data?.error || 'Unable to start Discord OAuth linking.');
+      }
+      window.location.assign(targetUrl);
+    } catch (err) {
+      setDiscordError(
+        err instanceof Error ? err.message : 'Unable to start Discord OAuth linking.'
+      );
+      setDiscordConnecting(false);
+    }
+  };
+
+  const handleDisconnectDiscord = async () => {
+    if (!user) return;
+    setDiscordDisconnecting(true);
+    setDiscordError(null);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch('/api/discord/disconnect', {
+        method: 'DELETE',
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data?.ok) {
+        throw new Error(data?.error || 'Failed to disconnect Discord account.');
+      }
+      setDiscordLink(null);
+      setConfirmDisconnectOpen(false);
+      showSaved('Discord disconnected. Your watchlist remains intact.');
+    } catch (err) {
+      setDiscordError(
+        err instanceof Error ? err.message : 'Failed to disconnect Discord account.'
+      );
+    } finally {
+      setDiscordDisconnecting(false);
+    }
+  };
+
   const photoURL = profile?.photoURL || user?.photoURL || '';
   const currentEmail = profile?.email || user?.email || '';
   const provider = profile?.provider || 'password';
   const usernamePreview = validateUsername(username);
+
+  const renderDiscordConnectionCard = () => (
+    <section
+      data-testid="discord-connection-section"
+      className="p-6 rounded-2xl bg-[#0A0A0A] border border-[#292929] space-y-5"
+    >
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-[#292929]">
+        <div className="flex items-center gap-2.5">
+          <Link2 size={18} className="text-white" />
+          <div>
+            <h2 className="text-base font-bold text-white">
+              Discord Account & Watchlist Bot
+            </h2>
+            <p className="text-xs text-[#707070] mt-0.5">
+              Link your Discord account to manage your AniScroll Firebase watchlist directly from Discord.
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 self-start sm:self-center">
+          <span
+            data-testid="discord-connection-status"
+            className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-mono uppercase border ${
+              discordLink
+                ? 'bg-white text-black border-white font-bold'
+                : 'bg-[#141414] text-[#A0A0A0] border-[#292929]'
+            }`}
+          >
+            <span
+              className={`w-1.5 h-1.5 rounded-full ${
+                discordLink ? 'bg-black' : 'bg-[#707070]'
+              }`}
+            />
+            {discordLoading
+              ? 'Checking...'
+              : discordLink
+              ? 'Connected'
+              : 'Disconnected'}
+          </span>
+          <button
+            type="button"
+            onClick={fetchDiscordStatus}
+            disabled={discordLoading}
+            title="Refresh Discord connection status"
+            aria-label="Refresh Discord connection status"
+            className="p-1.5 rounded-lg bg-[#141414] border border-[#292929] hover:border-white text-[#A0A0A0] hover:text-white transition-colors cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={discordLoading ? 'animate-spin' : ''} />
+          </button>
+        </div>
+      </div>
+
+      {discordError && (
+        <div
+          data-testid="discord-connection-error"
+          className="p-3.5 rounded-xl bg-[#141414] border border-white/40 text-xs text-white flex items-start gap-2.5"
+        >
+          <AlertCircle size={15} className="shrink-0 mt-0.5" />
+          <span>{discordError}</span>
+        </div>
+      )}
+
+      {discordLink ? (
+        <div className="space-y-4">
+          <div className="p-4 rounded-xl bg-[#141414] border border-[#292929] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3.5">
+              <div className="relative w-12 h-12 rounded-xl bg-black border border-white/20 overflow-hidden flex items-center justify-center font-bold text-sm text-white shrink-0">
+                {discordLink.discordAvatar ? (
+                  <ResilientImage
+                    src={discordLink.discordAvatar}
+                    alt={discordLink.discordUsername}
+                    fill
+                    sizes="48px"
+                    className="object-cover"
+                    fallback={<User size={20} />}
+                  />
+                ) : (
+                  <span>
+                    {(discordLink.discordGlobalName || discordLink.discordUsername || 'D')
+                      .slice(0, 2)
+                      .toUpperCase()}
+                  </span>
+                )}
+              </div>
+
+              <div className="min-w-0">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span
+                    data-testid="discord-connected-username"
+                    className="text-sm font-bold text-white font-mono"
+                  >
+                    @{discordLink.discordUsername}
+                  </span>
+                  {discordLink.discordGlobalName && (
+                    <span className="text-xs text-[#A0A0A0]">
+                      ({discordLink.discordGlobalName})
+                    </span>
+                  )}
+                </div>
+                <div className="text-[11px] font-mono text-[#707070] mt-0.5">
+                  Discord ID: {discordLink.discordUserId}
+                </div>
+                <div
+                  data-testid="discord-connected-date"
+                  className="text-[11px] text-[#A0A0A0] mt-0.5"
+                >
+                  Connected on{' '}
+                  {new Date(discordLink.linkedAt).toLocaleDateString(undefined, {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {!confirmDisconnectOpen ? (
+              <button
+                type="button"
+                data-testid="discord-disconnect-btn"
+                onClick={() => setConfirmDisconnectOpen(true)}
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-[#0A0A0A] border border-[#292929] hover:border-white text-xs font-semibold text-white transition-colors cursor-pointer shrink-0"
+              >
+                <Unlink size={14} />
+                <span>Disconnect Discord</span>
+              </button>
+            ) : (
+              <div
+                data-testid="discord-disconnect-confirm-box"
+                className="flex items-center gap-2 shrink-0"
+              >
+                <button
+                  type="button"
+                  data-testid="discord-confirm-disconnect-btn"
+                  disabled={discordDisconnecting}
+                  onClick={handleDisconnectDiscord}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-white text-black font-bold text-xs hover:bg-neutral-200 transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  {discordDisconnecting ? (
+                    <>
+                      <Loader2 size={13} className="animate-spin" />
+                      <span>Disconnecting...</span>
+                    </>
+                  ) : (
+                    <span>Confirm Disconnect</span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  data-testid="discord-cancel-disconnect-btn"
+                  disabled={discordDisconnecting}
+                  onClick={() => setConfirmDisconnectOpen(false)}
+                  className="px-3 py-2 rounded-xl bg-[#0A0A0A] border border-[#292929] hover:border-white text-xs text-[#A0A0A0] hover:text-white transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+
+          {confirmDisconnectOpen && (
+            <div className="p-3.5 rounded-xl bg-[#141414] border border-[#292929] text-xs text-[#A0A0A0]">
+              Disconnecting removes the link between Discord user{' '}
+              <span className="text-white font-mono">@{discordLink.discordUsername}</span> and
+              your AniScroll account. Your website watchlist and watch history will remain intact,
+              and you can reconnect or link a different account at any time.
+            </div>
+          )}
+
+          <div className="p-4 rounded-xl bg-[#141414] border border-[#292929] space-y-2">
+            <div className="flex items-center gap-2 text-xs font-semibold text-white">
+              <Terminal size={14} />
+              <span>Available Discord Bot Commands</span>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs font-mono text-[#A0A0A0]">
+              <div className="p-2 rounded-lg bg-[#0A0A0A] border border-[#292929]">
+                <span className="text-white">/watchlist add</span> — Add an anime to your watchlist
+              </div>
+              <div className="p-2 rounded-lg bg-[#0A0A0A] border border-[#292929]">
+                <span className="text-white">/watchlist show</span> — View your synced watchlist
+              </div>
+              <div className="p-2 rounded-lg bg-[#0A0A0A] border border-[#292929]">
+                <span className="text-white">/watchlist status</span> — Update watching/completed status
+              </div>
+              <div className="p-2 rounded-lg bg-[#0A0A0A] border border-[#292929]">
+                <span className="text-white">/watchlist remove</span> — Remove an anime from watchlist
+              </div>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="space-y-4">
+          <div className="p-4 rounded-xl bg-[#141414] border border-[#292929] space-y-3">
+            <div className="text-xs font-semibold text-white">
+              How Discord Watchlist Sync Works
+            </div>
+            <ol className="text-xs text-[#A0A0A0] space-y-1.5 list-decimal list-inside">
+              <li>
+                Click <span className="text-white font-semibold">Connect Discord</span> below to
+                authorize with Discord OAuth2 (<span className="font-mono text-white">identify</span>{' '}
+                scope only).
+              </li>
+              <li>
+                Your Discord snowflake ID is securely linked 1:1 to your AniScroll Firebase account.
+              </li>
+              <li>
+                Use <span className="font-mono text-white">/watchlist add</span>,{' '}
+                <span className="font-mono text-white">/watchlist show</span>,{' '}
+                <span className="font-mono text-white">/watchlist status</span>, and{' '}
+                <span className="font-mono text-white">/watchlist remove</span> in Discord — all
+                changes sync in real time with your website watchlist.
+              </li>
+            </ol>
+          </div>
+
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="text-[11px] text-[#707070]">
+              We only verify your Discord identity (<span className="font-mono">identify</span>). We
+              never read private messages or store your Discord access token.
+            </div>
+            <button
+              type="button"
+              data-testid="discord-connect-btn"
+              disabled={discordConnecting}
+              onClick={handleConnectDiscord}
+              className="inline-flex items-center justify-center gap-2 px-5 py-2.5 rounded-xl bg-white text-black font-bold text-xs hover:bg-neutral-200 transition-colors cursor-pointer disabled:opacity-50 shrink-0"
+            >
+              {discordConnecting ? (
+                <>
+                  <Loader2 size={14} className="animate-spin" />
+                  <span>Redirecting to Discord...</span>
+                </>
+              ) : (
+                <>
+                  <Link2 size={14} />
+                  <span>Connect Discord</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
+    </section>
+  );
 
   return (
     <ProtectedRoute>
@@ -270,7 +699,7 @@ export default function SettingsPage() {
 
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
             {/* Section Navigation */}
-            <aside className="lg:col-span-3 flex lg:flex-col gap-1.5 overflow-x-auto no-scrollbar pb-1 lg:pb-0">
+            <aside className="min-w-0 lg:col-span-3 flex lg:flex-col gap-1.5 overflow-x-auto no-scrollbar pb-1 lg:pb-0">
               {SECTIONS.map((sec) => {
                 const Icon = sec.icon;
                 const active = activeSection === sec.id;
@@ -279,7 +708,7 @@ export default function SettingsPage() {
                     key={sec.id}
                     type="button"
                     onClick={() => setActiveSection(sec.id)}
-                    className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer border ${
+                    className={`flex items-center gap-2.5 px-3.5 py-2.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer border shrink-0 ${
                       active
                         ? 'bg-white text-black border-white shadow-sm'
                         : 'bg-[#0A0A0A] text-[#A0A0A0] border-[#292929] hover:text-white hover:border-[#404040]'
@@ -293,7 +722,7 @@ export default function SettingsPage() {
             </aside>
 
             {/* Section Content */}
-            <div className="lg:col-span-9 space-y-6">
+            <div className="min-w-0 lg:col-span-9 space-y-6">
               {/* 1. PROFILE SECTION */}
               {activeSection === 'profile' && (
                 <section className="p-6 rounded-2xl bg-[#0A0A0A] border border-[#292929] space-y-6">
@@ -452,6 +881,8 @@ export default function SettingsPage() {
                   </form>
                 </section>
               )}
+
+              {activeSection === 'profile' && renderDiscordConnectionCard()}
 
               {/* 2. APPEARANCE SECTION */}
               {activeSection === 'appearance' && (
@@ -904,6 +1335,8 @@ export default function SettingsPage() {
               )}
 
               {/* 5. ACCOUNT SECTION */}
+              {activeSection === 'account' && renderDiscordConnectionCard()}
+
               {activeSection === 'account' && (
                 <section className="p-6 rounded-2xl bg-[#0A0A0A] border border-[#292929] space-y-6">
                   <div className="flex items-center justify-between pb-3 border-b border-[#292929]">
