@@ -1,9 +1,18 @@
 import React from 'react';
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { getHoshikaGenres } from '@/lib/hoshika';
+import { buildBrowseSocialMetadata } from '@/lib/social-metadata';
 import { Layers, ArrowRight } from 'lucide-react';
 
 export const revalidate = 86400;
+
+export const metadata: Metadata = buildBrowseSocialMetadata({
+  title: 'Anime Genres',
+  description:
+    'Browse anime titles categorised by mood, theme, and storytelling genre on AniScroll.',
+  path: '/genres',
+});
 
 export default async function GenresPage() {
   const genres = await getHoshikaGenres();

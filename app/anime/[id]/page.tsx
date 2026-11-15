@@ -1,10 +1,17 @@
-import React from 'react';
+import React, { cache } from 'react';
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { getHoshikaAnime, getHoshikaEpisodes } from '@/lib/hoshika';
 import { resolveAnimeArtwork } from '@/lib/artwork-mapper';
 import { getCachedOrWarmServerAudioAvailability } from '@/lib/aniscroll';
 import { loadAnimeDetailData } from '@/lib/anime-detail-episodes';
+import {
+  buildAnimeJsonLd,
+  buildAnimeSocialMetadata,
+  resolveCanonicalOrigin,
+  safeJsonLdStringify,
+} from '@/lib/social-metadata';
 import { AnimeDetailsHero } from '@/components/anime/AnimeDetailsHero';
 import { EpisodeSection } from '@/components/episodes/EpisodeSection';
 import { CharacterList } from '@/components/anime/CharacterList';
@@ -16,6 +23,16 @@ interface AnimePageProps {
 
 export const revalidate = 180;
 
+const getCachedHoshikaAnime = cache((id: string) => getHoshikaAnime(id, 'en'));
+
+export async function generateMetadata({
+  params,
+}: AnimePageProps): Promise<Metadata> {
+  const { id } = await params;
+  const anime = await getCachedHoshikaAnime(id).catch(() => null);
+  return buildAnimeSocialMetadata(anime, id);
+}
+
 export default async function AnimePage({ params }: AnimePageProps) {
   const { id } = await params;
   const {
@@ -26,7 +43,7 @@ export default async function AnimePage({ params }: AnimePageProps) {
     initialAvailability,
     artwork,
   } = await loadAnimeDetailData(id, {
-    getAnime: (animeId) => getHoshikaAnime(animeId, 'en'),
+    getAnime: (animeId) => getCachedHoshikaAnime(animeId),
     getEpisodes: (animeId) => getHoshikaEpisodes(animeId, 'en', undefined, 50),
     resolveArtwork: (animeId, item) => resolveAnimeArtwork(animeId, item),
     getCachedAvailability: getCachedOrWarmServerAudioAvailability,
@@ -42,8 +59,20 @@ export default async function AnimePage({ params }: AnimePageProps) {
     anime.titleLocalized ||
     'Anime Details';
 
+  const origin = resolveCanonicalOrigin();
+  const canonicalId = anime.shortId || id;
+  const jsonLd = buildAnimeJsonLd({
+    anime,
+    canonicalUrl: `${origin}/anime/${canonicalId}`,
+    imageUrl: `${origin}/api/og/anime/${canonicalId}`,
+  });
+
   return (
     <div className="w-full">
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: safeJsonLdStringify(jsonLd) }}
+      />
       {/* Edge-to-Edge Cinematic Anime Details Hero Banner with Fanart.tv Artwork & Left Poster */}
       <AnimeDetailsHero
         anime={anime}

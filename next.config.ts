@@ -161,7 +161,7 @@ const nextConfig: NextConfig = {
     ],
   },
   output: 'standalone',
-  serverExternalPackages: ['firebase-admin', 'jwks-rsa'],
+  serverExternalPackages: ['firebase-admin', 'jwks-rsa', 'sharp'],
   transpilePackages: ['motion'],
   webpack: (config, {dev}) => {
     // HMR is disabled in AI Studio via DISABLE_HMR env var.

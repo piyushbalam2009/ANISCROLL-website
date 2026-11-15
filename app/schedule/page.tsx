@@ -1,9 +1,18 @@
 import React from 'react';
+import type { Metadata } from 'next';
 import { getHoshikaSchedule } from '@/lib/hoshika';
 import { ScheduleView } from '@/components/schedule/ScheduleView';
+import { buildBrowseSocialMetadata } from '@/lib/social-metadata';
 import { Calendar } from 'lucide-react';
 
 export const revalidate = 600;
+
+export const metadata: Metadata = buildBrowseSocialMetadata({
+  title: 'Anime Airing Schedule',
+  description:
+    'Track daily broadcast dates and upcoming anime episode drops in your local timezone on AniScroll.',
+  path: '/schedule',
+});
 
 export default async function SchedulePage() {
   const items = await getHoshikaSchedule('en');

@@ -1,4 +1,5 @@
 import React from 'react';
+import type { Metadata } from 'next';
 import { getHoshikaBrowsePaginated } from '@/lib/hoshika';
 import { PaginatedBrowseSection } from '@/components/anime/PaginatedBrowseSection';
 import {
@@ -6,9 +7,17 @@ import {
   buildPaginatedResponse,
   sanitizePageNumber,
 } from '@/lib/explore-catalog';
+import { buildBrowseSocialMetadata } from '@/lib/social-metadata';
 import { Clock } from 'lucide-react';
 
 export const revalidate = 120;
+
+export const metadata: Metadata = buildBrowseSocialMetadata({
+  title: 'Recently Updated Anime',
+  description:
+    'Catch up on fresh episode releases and newly updated anime titles streaming on AniScroll.',
+  path: '/recent',
+});
 
 interface RecentPageProps {
   searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;

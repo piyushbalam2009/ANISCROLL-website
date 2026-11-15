@@ -1,4 +1,5 @@
 import React from 'react';
+import type { Metadata } from 'next';
 import { getHoshikaCatalog, getHoshikaGenres } from '@/lib/hoshika';
 import { ExploreCatalog } from '@/components/explore/ExploreCatalog';
 import {
@@ -7,12 +8,39 @@ import {
   parseGenresParam,
   sanitizePageNumber,
 } from '@/lib/explore-catalog';
+import { buildBrowseSocialMetadata } from '@/lib/social-metadata';
 import { Compass } from 'lucide-react';
 
 export const revalidate = 180;
 
 interface ExplorePageProps {
   searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;
+}
+
+export async function generateMetadata({
+  searchParams,
+}: ExplorePageProps): Promise<Metadata> {
+  const resolved = searchParams ? await searchParams : {};
+  const q = typeof resolved.q === 'string' ? resolved.q.trim() : '';
+  const genre = typeof resolved.genre === 'string' ? resolved.genre.trim() : '';
+  const format = typeof resolved.format === 'string' ? resolved.format.trim() : '';
+
+  const labelParts = [genre, format].filter(Boolean);
+  const title = q
+    ? `Explore "${q}"`
+    : labelParts.length > 0
+    ? `Explore ${labelParts.join(' ')} Anime`
+    : 'Explore Anime Catalogue';
+
+  const description = q
+    ? `Browse anime matching "${q}" by format, genre, and release year on AniScroll.`
+    : 'Browse, filter, and discover anime series and movies across all formats, years, and genres on AniScroll.';
+
+  return buildBrowseSocialMetadata({
+    title,
+    description,
+    path: '/explore',
+  });
 }
 
 export default async function ExplorePage({ searchParams }: ExplorePageProps) {

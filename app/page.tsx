@@ -1,4 +1,5 @@
 import React from 'react';
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import {
   ArrowRight,
@@ -22,9 +23,21 @@ import { HomeHeroCarousel, HeroSlideItem } from '@/components/anime/HomeHeroCaro
 import { AnimeGrid } from '@/components/anime/AnimeGrid';
 import { ContinueWatchingRow } from '@/components/anime/ContinueWatchingRow';
 import { ResilientImage } from '@/components/ui/ResilientImage';
+import {
+  DEFAULT_SITE_DESCRIPTION,
+  DEFAULT_SITE_TITLE,
+  buildBrowseSocialMetadata,
+} from '@/lib/social-metadata';
 
 // Revalidate home page every 3 minutes
 export const revalidate = 180;
+
+export const metadata: Metadata = buildBrowseSocialMetadata({
+  title: DEFAULT_SITE_TITLE,
+  description: DEFAULT_SITE_DESCRIPTION,
+  path: '/',
+  absoluteTitle: true,
+});
 
 function featuredToHoshikaItem(item: FeaturedAnimeItem): HoshikaAnimeItem {
   return {

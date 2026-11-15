@@ -1,4 +1,5 @@
 import React from 'react';
+import type { Metadata } from 'next';
 import { getHoshikaBrowsePaginated } from '@/lib/hoshika';
 import { PaginatedBrowseSection } from '@/components/anime/PaginatedBrowseSection';
 import {
@@ -6,9 +7,17 @@ import {
   buildPaginatedResponse,
   sanitizePageNumber,
 } from '@/lib/explore-catalog';
+import { buildBrowseSocialMetadata } from '@/lib/social-metadata';
 import { TrendingUp } from 'lucide-react';
 
 export const revalidate = 180;
+
+export const metadata: Metadata = buildBrowseSocialMetadata({
+  title: 'Trending Anime',
+  description:
+    'Discover the most watched and actively discussed trending anime series and movies on AniScroll.',
+  path: '/trending',
+});
 
 interface TrendingPageProps {
   searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;

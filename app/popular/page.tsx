@@ -1,4 +1,5 @@
 import React from 'react';
+import type { Metadata } from 'next';
 import { getHoshikaBrowsePaginated } from '@/lib/hoshika';
 import { PaginatedBrowseSection } from '@/components/anime/PaginatedBrowseSection';
 import {
@@ -6,9 +7,17 @@ import {
   buildPaginatedResponse,
   sanitizePageNumber,
 } from '@/lib/explore-catalog';
+import { buildBrowseSocialMetadata } from '@/lib/social-metadata';
 import { Flame } from 'lucide-react';
 
 export const revalidate = 180;
+
+export const metadata: Metadata = buildBrowseSocialMetadata({
+  title: 'All-Time Popular Anime',
+  description:
+    'Explore the highest rated and most celebrated anime series and movies of all time on AniScroll.',
+  path: '/popular',
+});
 
 interface PopularPageProps {
   searchParams?: Promise<{ [key: string]: string | string[] | undefined }>;

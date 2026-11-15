@@ -1,7 +1,9 @@
 import React from 'react';
+import type { Metadata } from 'next';
 import Link from 'next/link';
 import { getHoshikaGenreTitles, getHoshikaCatalog } from '@/lib/hoshika';
 import { AnimeGrid } from '@/components/anime/AnimeGrid';
+import { buildBrowseSocialMetadata } from '@/lib/social-metadata';
 import { Layers, ArrowLeft } from 'lucide-react';
 
 interface GenreDetailPageProps {
@@ -9,6 +11,25 @@ interface GenreDetailPageProps {
 }
 
 export const revalidate = 600;
+
+function formatGenreTitle(slug: string): string {
+  return decodeURIComponent(slug)
+    .split('-')
+    .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+    .join(' ');
+}
+
+export async function generateMetadata({
+  params,
+}: GenreDetailPageProps): Promise<Metadata> {
+  const { genre } = await params;
+  const formattedTitle = formatGenreTitle(genre);
+  return buildBrowseSocialMetadata({
+    title: `${formattedTitle} Anime`,
+    description: `Curated collection of ${formattedTitle} anime series and movies streaming on AniScroll.`,
+    path: `/genres/${encodeURIComponent(decodeURIComponent(genre))}`,
+  });
+}
 
 export default async function GenreDetailPage({ params }: GenreDetailPageProps) {
   const { genre } = await params;
