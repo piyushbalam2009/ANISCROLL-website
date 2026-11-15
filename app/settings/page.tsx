@@ -121,6 +121,13 @@ export default function SettingsPage() {
   ) => {
     const updated = saveUserPreferences({ [key]: value });
     setPrefs(updated);
+    if (key === 'defaultAudio' && typeof window !== 'undefined') {
+      try {
+        window.sessionStorage.removeItem('aniscroll_user_selected_audio_v1');
+      } catch {
+        // Ignore storage errors
+      }
+    }
     showSaved('Preferences synced to Cloud');
   };
 
@@ -748,6 +755,8 @@ export default function SettingsPage() {
                       <div className="flex items-center bg-[#141414] border border-[#292929] rounded-lg p-0.5">
                         <button
                           type="button"
+                          data-testid="settings-default-audio-sub"
+                          aria-pressed={prefs.defaultAudio === 'sub'}
                           onClick={() => updatePreference('defaultAudio', 'sub')}
                           className={`px-3 py-1 text-xs rounded font-medium transition-colors cursor-pointer ${
                             prefs.defaultAudio === 'sub'
@@ -759,6 +768,8 @@ export default function SettingsPage() {
                         </button>
                         <button
                           type="button"
+                          data-testid="settings-default-audio-dub"
+                          aria-pressed={prefs.defaultAudio === 'dub'}
                           onClick={() => updatePreference('defaultAudio', 'dub')}
                           className={`px-3 py-1 text-xs rounded font-medium transition-colors cursor-pointer ${
                             prefs.defaultAudio === 'dub'

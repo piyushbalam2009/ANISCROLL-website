@@ -193,22 +193,29 @@ export async function GET(req: NextRequest) {
         );
       }
 
-      return NextResponse.json({
-        ok: true,
-        provider,
-        format: resolvedFormat,
-        subAvailable: availability.subAvailable,
-        dubAvailable: availability.dubAvailable,
-        selectedType: effectiveType,
-        stream: activeStream,
-        subStream: availability.subStream,
-        dubStream: availability.dubStream,
-        subErrorCode: availability.subOutcome.errorCode,
-        dubErrorCode: availability.dubOutcome.errorCode,
-      });
+      return NextResponse.json(
+        {
+          ok: true,
+          provider,
+          format: resolvedFormat,
+          subAvailable: availability.subAvailable,
+          dubAvailable: availability.dubAvailable,
+          selectedType: effectiveType,
+          stream: activeStream,
+          subStream: availability.subStream,
+          dubStream: availability.dubStream,
+          subErrorCode: availability.subOutcome.errorCode,
+          dubErrorCode: availability.dubOutcome.errorCode,
+        },
+        {
+          headers: {
+            'Cache-Control': 'no-store, max-age=0',
+          },
+        }
+      );
     }
 
-    const singleType: 'sub' | 'dub' = requestedType || 'sub';
+    const singleType: 'sub' | 'dub' = preferredType || requestedType || 'sub';
     const outcome = await getAniScrollStreamDetailed(anilistId, episode, singleType, {
       provider,
       format: resolvedFormat,
@@ -239,13 +246,20 @@ export async function GET(req: NextRequest) {
       );
     }
 
-    return NextResponse.json({
-      ok: true,
-      provider,
-      format: resolvedFormat,
-      selectedType: singleType,
-      stream: outcome.stream,
-    });
+    return NextResponse.json(
+      {
+        ok: true,
+        provider,
+        format: resolvedFormat,
+        selectedType: singleType,
+        stream: outcome.stream,
+      },
+      {
+        headers: {
+          'Cache-Control': 'no-store, max-age=0',
+        },
+      }
+    );
   } catch {
     return NextResponse.json(
       {

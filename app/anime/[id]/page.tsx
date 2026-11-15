@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { getHoshikaAnime, getHoshikaEpisodes } from '@/lib/hoshika';
 import { resolveAnimeArtwork } from '@/lib/artwork-mapper';
 import { getCachedOrWarmServerAudioAvailability } from '@/lib/aniscroll';
+import { loadAnimeDetailData } from '@/lib/anime-detail-episodes';
 import { AnimeDetailsHero } from '@/components/anime/AnimeDetailsHero';
 import { EpisodeSection } from '@/components/episodes/EpisodeSection';
 import { CharacterList } from '@/components/anime/CharacterList';
@@ -17,30 +18,23 @@ export const revalidate = 180;
 
 export default async function AnimePage({ params }: AnimePageProps) {
   const { id } = await params;
-  const [anime, episodeData] = await Promise.all([
-    getHoshikaAnime(id, 'en'),
-    getHoshikaEpisodes(id, 'en', undefined, 50),
-  ]);
+  const {
+    anime,
+    showEpisodesSection,
+    episodes,
+    totalEpisodes,
+    initialAvailability,
+    artwork,
+  } = await loadAnimeDetailData(id, {
+    getAnime: (animeId) => getHoshikaAnime(animeId, 'en'),
+    getEpisodes: (animeId) => getHoshikaEpisodes(animeId, 'en', undefined, 50),
+    resolveArtwork: (animeId, item) => resolveAnimeArtwork(animeId, item),
+    getCachedAvailability: getCachedOrWarmServerAudioAvailability,
+  });
 
   if (!anime) {
     notFound();
   }
-
-  const totalEpisodeCount =
-    episodeData.total || anime.episodes || episodeData.items.length || 0;
-
-  // Return cached Sub/Dub availability synchronously if already warm in server cache (client loads lazily on mount)
-  const initialAvailability =
-    episodeData.items.length > 0 || totalEpisodeCount > 0
-      ? getCachedOrWarmServerAudioAvailability({
-          hoshikaId: anime.shortId || id,
-          anilistId: anime.anilistId ?? null,
-          episodeCount: totalEpisodeCount,
-          prefetchedAnime: anime,
-        })
-      : null;
-
-  const artwork = await resolveAnimeArtwork(anime.shortId || id, anime);
 
   const title =
     anime.titleEnglish ||
@@ -185,15 +179,24 @@ export default async function AnimePage({ params }: AnimePageProps) {
           )}
         </div>
 
-        {/* 3. Full-Width 50-Episode Pagination & Range Selector Section */}
-        <section className="p-4 sm:p-6 rounded-2xl bg-[#0A0A0A] border border-[#292929]">
-          <EpisodeSection
-            animeId={anime.shortId}
-            episodes={episodeData.items}
-            totalEpisodes={anime.episodes || episodeData.total}
-            initialAvailability={initialAvailability}
-          />
-        </section>
+        {/* 3. Full-Width 50-Episode Pagination & Range Selector Section (Hidden for Movies) */}
+        {showEpisodesSection && (
+          <section
+            data-testid="anime-episodes-section"
+            className="p-4 sm:p-6 rounded-2xl bg-[#0A0A0A] border border-[#292929]"
+          >
+            <EpisodeSection
+              animeId={anime.shortId}
+              episodes={episodes}
+              totalEpisodes={totalEpisodes}
+              format={anime.format}
+              isStandaloneMovie={
+                anime.isStandaloneMovie === true || anime.standaloneMovie === true
+              }
+              initialAvailability={initialAvailability}
+            />
+          </section>
+        )}
 
         {/* 4. Full-Width Characters & Seiyuu */}
         {anime.characters && anime.characters.length > 0 && (

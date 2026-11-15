@@ -503,28 +503,61 @@ export function selectInitialHlsLevelIndex(
   return highestAtOrBelow1080 ? highestAtOrBelow1080.levelIndex : sorted[0].levelIndex;
 }
 
+export type AudioMode = 'sub' | 'dub';
+
+/**
+ * Resolves the effective audio preference while keeping manual session selection
+ * logically separate from the persistent Default Audio Mode setting.
+ *
+ * Priority:
+ * 1. Explicit manual selection (`manualSelection`: 'sub' | 'dub')
+ * 2. Persistent Default Audio Mode (`defaultAudio`: 'sub' | 'dub')
+ * 3. Fallback default ('sub')
+ */
+export function resolveEffectiveAudioPreference(params: {
+  manualSelection?: AudioMode | null;
+  defaultAudio?: AudioMode | null;
+}): AudioMode {
+  if (params.manualSelection === 'dub' || params.manualSelection === 'sub') {
+    return params.manualSelection;
+  }
+  if (params.defaultAudio === 'dub' || params.defaultAudio === 'sub') {
+    return params.defaultAudio;
+  }
+  return 'sub';
+}
+
 /**
  * Resolves which version ('sub' | 'dub' | null) should be selected for an episode
- * given dynamic Sub/Dub availability and optional user manual selection.
+ * given dynamic Sub/Dub availability, optional manual user selection, and Default Audio Mode setting.
  *
  * Rules:
- * - Both available: default to 'sub', unless user manually selected 'dub'.
- * - Sub only: automatically select 'sub'.
- * - Dub only: automatically select 'dub'.
  * - Neither available: return null (do not initialize playback).
+ * - Preferred = 'dub' (manual override OR defaultAudio === 'dub'):
+ *   - Select 'dub' if available; otherwise fall back to 'sub' if available.
+ * - Preferred = 'sub' (manual override OR defaultAudio === 'sub'):
+ *   - Select 'sub' if available; otherwise fall back to 'dub' if available.
  */
 export function selectEpisodeAudioVersion(params: {
   subAvailable: boolean;
   dubAvailable: boolean;
-  userSelectedVersion?: 'sub' | 'dub' | null;
-}): 'sub' | 'dub' | null {
-  const { subAvailable, dubAvailable, userSelectedVersion } = params;
+  userSelectedVersion?: AudioMode | null;
+  defaultAudio?: AudioMode | null;
+}): AudioMode | null {
+  const { subAvailable, dubAvailable, userSelectedVersion, defaultAudio } = params;
 
-  if (subAvailable && dubAvailable) {
-    if (userSelectedVersion === 'dub') return 'dub';
-    return 'sub';
+  if (!subAvailable && !dubAvailable) {
+    return null;
   }
-  if (subAvailable) return 'sub';
-  if (dubAvailable) return 'dub';
-  return null;
+
+  const preferred = resolveEffectiveAudioPreference({
+    manualSelection: userSelectedVersion,
+    defaultAudio,
+  });
+
+  if (preferred === 'dub') {
+    return dubAvailable ? 'dub' : subAvailable ? 'sub' : null;
+  }
+
+  return subAvailable ? 'sub' : dubAvailable ? 'dub' : null;
 }

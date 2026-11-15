@@ -21,6 +21,7 @@ import {
   selectDefaultLanguage,
 } from '@/lib/episode-store';
 import { useEpisodeAvailability } from '@/hooks/useEpisodeAvailability';
+import { isMovieContent } from '@/lib/stream-provider-core';
 import { EpisodeRangeSelector } from './EpisodeRangeSelector';
 import { EpisodeList } from './EpisodeList';
 
@@ -35,6 +36,8 @@ interface EpisodeSectionProps {
   initialAvailability?: EpisodeAvailabilityResult | null;
   deferAvailability?: boolean;
   className?: string;
+  format?: string | null;
+  isStandaloneMovie?: boolean;
   onEpisodesLoaded?: (episodes: HoshikaEpisodeItem[]) => void;
   onAvailabilityResolved?: (availability: EpisodeAvailabilityResult) => void;
 }
@@ -50,25 +53,52 @@ export function EpisodeSection({
   initialAvailability = null,
   deferAvailability = false,
   className = '',
+  format,
+  isStandaloneMovie,
   onEpisodesLoaded,
   onAvailabilityResolved,
 }: EpisodeSectionProps) {
   const normalizedAnimeId = String(animeId).trim();
+  const hideForMovie = isMovieContent({ format, isStandaloneMovie });
 
   // Preferred language from user preferences if not externally controlled
+  const hasManuallyChangedRef = useRef(false);
   const [preferredType, setPreferredType] = useState<AudioLanguage>(() => {
     if (externalActiveType) return externalActiveType;
-    if (typeof window !== 'undefined') {
-      const prefs = getUserPreferences();
-      if (prefs.defaultAudio === 'dub' || prefs.defaultAudio === 'sub') {
-        return prefs.defaultAudio;
-      }
-    }
     return 'sub';
   });
 
   const [localActiveType, setLocalActiveType] = useState<AudioLanguage>(preferredType);
   const activeType: AudioLanguage = externalActiveType ?? localActiveType;
+
+  // Hydrate persistent Default Audio Mode after mount and react to Settings / Cloud updates
+  useEffect(() => {
+    if (externalActiveType) return;
+
+    const applyPreference = () => {
+      if (hasManuallyChangedRef.current) return;
+      const prefs = getUserPreferences();
+      const nextPref: AudioLanguage = prefs.defaultAudio === 'dub' ? 'dub' : 'sub';
+      setPreferredType(nextPref);
+      setLocalActiveType(nextPref);
+    };
+
+    applyPreference();
+
+    const handlePrefsUpdate = () => applyPreference();
+    const handleStorage = (e: StorageEvent) => {
+      if (e.key === 'aniscroll_preferences') {
+        applyPreference();
+      }
+    };
+
+    window.addEventListener('aniscroll_preferences_updated', handlePrefsUpdate);
+    window.addEventListener('storage', handleStorage);
+    return () => {
+      window.removeEventListener('aniscroll_preferences_updated', handlePrefsUpdate);
+      window.removeEventListener('storage', handleStorage);
+    };
+  }, [externalActiveType]);
 
   // Stabilize callbacks in refs to prevent useEffect request loops
   const onEpisodesLoadedRef = useRef(onEpisodesLoaded);
@@ -82,6 +112,7 @@ export function EpisodeSection({
   }, [onEpisodesLoaded, onAvailabilityResolved, externalOnChangeType]);
 
   const handleSelectLanguage = useCallback((type: AudioLanguage) => {
+    hasManuallyChangedRef.current = true;
     setPreferredType(type);
     setLocalActiveType(type);
     if (externalOnChangeTypeRef.current) {
@@ -89,7 +120,7 @@ export function EpisodeSection({
     }
   }, []);
 
-  // Resolve dynamic Sub/Dub availability for this anime
+  // Resolve dynamic Sub/Dub availability for this anime (skipped for movies)
   const {
     availability,
     isLoadingAvailability,
@@ -100,25 +131,24 @@ export function EpisodeSection({
   } = useEpisodeAvailability(normalizedAnimeId, {
     preferredLanguage: activeType,
     initialAvailability,
-    deferFetch: deferAvailability,
+    deferFetch: deferAvailability || hideForMovie,
   });
 
-  // Notify parent when availability resolves and auto-correct activeType if unavailable
+  // Notify parent when availability resolves and auto-correct uncontrolled localActiveType if unavailable
   useEffect(() => {
-    if (isLoadingAvailability) return;
+    if (hideForMovie || isLoadingAvailability) return;
 
     if (onAvailabilityResolvedRef.current) {
       onAvailabilityResolvedRef.current(availability);
     }
 
-    const recommended = selectDefaultLanguage(availability, activeType);
-    if (recommended && recommended !== activeType) {
-      setLocalActiveType(recommended);
-      if (externalOnChangeTypeRef.current) {
-        externalOnChangeTypeRef.current(recommended);
+    if (externalActiveType === undefined) {
+      const recommended = selectDefaultLanguage(availability, activeType);
+      if (recommended && recommended !== activeType) {
+        setLocalActiveType(recommended);
       }
     }
-  }, [availability, isLoadingAvailability, activeType]);
+  }, [hideForMovie, availability, isLoadingAvailability, activeType, externalActiveType]);
 
   // Search filter
   const [filterQuery, setFilterQuery] = useState('');
@@ -320,7 +350,7 @@ export function EpisodeSection({
       lang: AudioLanguage,
       options?: { forceRefresh?: boolean; signal?: AbortSignal }
     ) => {
-      if (!range) return;
+      if (hideForMovie || !range) return;
 
       const afterParam = range.start > 1 ? range.start - 1 : undefined;
       const attemptKey = `${normalizedAnimeId}:${lang}:after=${afterParam ?? 0}`;
@@ -432,11 +462,12 @@ export function EpisodeSection({
         }
       }
     },
-    [normalizedAnimeId]
+    [hideForMovie, normalizedAnimeId]
   );
 
-  // Trigger episode batch check only when animeId, selectedRangeIndex, or activeType changes
+  // Trigger episode batch check only when animeId, selectedRangeIndex, or activeType changes (skipped for movies)
   useEffect(() => {
+    if (hideForMovie) return;
     const range = ranges[selectedRangeIndex] || ranges[0];
     if (!range) return;
 
@@ -446,7 +477,7 @@ export function EpisodeSection({
     return () => {
       controller.abort();
     };
-  }, [normalizedAnimeId, selectedRangeIndex, activeType, ranges, loadRangeEpisodes]);
+  }, [hideForMovie, normalizedAnimeId, selectedRangeIndex, activeType, ranges, loadRangeEpisodes]);
 
   // Manual retry handler when episodes are unavailable
   const handleManualRetry = useCallback(async () => {
@@ -556,6 +587,10 @@ export function EpisodeSection({
     activeType,
     availability.dub,
   ]);
+
+  if (hideForMovie) {
+    return null;
+  }
 
   return (
     <div className={`space-y-4 ${className}`} data-testid="episode-section">

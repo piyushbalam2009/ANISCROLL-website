@@ -80,6 +80,8 @@ export interface HoshikaAnimeItem {
   malId?: number | null;
   thetvdbId?: string | number | null;
   themoviedbId?: string | number | null;
+  isStandaloneMovie?: boolean | null;
+  standaloneMovie?: boolean | null;
 }
 
 export interface HoshikaEpisodeItem {

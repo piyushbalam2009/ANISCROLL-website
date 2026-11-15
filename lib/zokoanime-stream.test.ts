@@ -7,6 +7,7 @@ import {
   selectNextFallbackQuality,
   normalizeSubtitleTracks,
   resolveSubtitleTrackForPreference,
+  resolveEffectiveAudioPreference,
   selectEpisodeAudioVersion,
 } from './zokoanime-stream';
 
@@ -273,3 +274,118 @@ test('Subtitle Tracks & Critical OFF Bug Fix: prefers proxy URL, preserves force
     'https://api.aniscroll.in/api/proxy/subtitle?url=en_forced'
   );
 });
+
+test('Default Audio Mode Priority: resolves effective preference and enforces all 4 availability combinations + manual override', () => {
+  // Effective preference separates manual session toggle from persistent defaultAudio
+  assert.equal(
+    resolveEffectiveAudioPreference({ manualSelection: null, defaultAudio: 'dub' }),
+    'dub'
+  );
+  assert.equal(
+    resolveEffectiveAudioPreference({ manualSelection: null, defaultAudio: 'sub' }),
+    'sub'
+  );
+  assert.equal(
+    resolveEffectiveAudioPreference({ manualSelection: 'sub', defaultAudio: 'dub' }),
+    'sub'
+  );
+  assert.equal(
+    resolveEffectiveAudioPreference({ manualSelection: 'dub', defaultAudio: 'sub' }),
+    'dub'
+  );
+
+  // Case 1: Default Audio Mode = Dub + Both Sub & Dub available -> Dub
+  assert.equal(
+    selectEpisodeAudioVersion({
+      subAvailable: true,
+      dubAvailable: true,
+      userSelectedVersion: null,
+      defaultAudio: 'dub',
+    }),
+    'dub'
+  );
+
+  // Case 2: Default Audio Mode = Sub + Both Sub & Dub available -> Sub
+  assert.equal(
+    selectEpisodeAudioVersion({
+      subAvailable: true,
+      dubAvailable: true,
+      userSelectedVersion: null,
+      defaultAudio: 'sub',
+    }),
+    'sub'
+  );
+
+  // Case 3: Default Audio Mode = Dub + Only Sub available -> Sub fallback
+  assert.equal(
+    selectEpisodeAudioVersion({
+      subAvailable: true,
+      dubAvailable: false,
+      userSelectedVersion: null,
+      defaultAudio: 'dub',
+    }),
+    'sub'
+  );
+
+  // Case 4: Default Audio Mode = Sub + Only Dub available -> Dub fallback
+  assert.equal(
+    selectEpisodeAudioVersion({
+      subAvailable: false,
+      dubAvailable: true,
+      userSelectedVersion: null,
+      defaultAudio: 'sub',
+    }),
+    'dub'
+  );
+
+  // Case 5: Manual user selection overrides Default Audio Mode
+  assert.equal(
+    selectEpisodeAudioVersion({
+      subAvailable: true,
+      dubAvailable: true,
+      userSelectedVersion: 'sub',
+      defaultAudio: 'dub',
+    }),
+    'sub'
+  );
+  assert.equal(
+    selectEpisodeAudioVersion({
+      subAvailable: true,
+      dubAvailable: true,
+      userSelectedVersion: 'dub',
+      defaultAudio: 'sub',
+    }),
+    'dub'
+  );
+
+  // Case 6: Multi-episode transition preserves defaultAudio without losing preference
+  // Ep 1 only has Sub (falls back to 'sub'), Ep 2 has both -> must pick 'dub' automatically
+  const defaultSetting: 'dub' = 'dub';
+  const ep1 = selectEpisodeAudioVersion({
+    subAvailable: true,
+    dubAvailable: false,
+    userSelectedVersion: null,
+    defaultAudio: defaultSetting,
+  });
+  assert.equal(ep1, 'sub');
+
+  const ep2 = selectEpisodeAudioVersion({
+    subAvailable: true,
+    dubAvailable: true,
+    userSelectedVersion: null,
+    defaultAudio: defaultSetting,
+  });
+  assert.equal(ep2, 'dub');
+
+  // Case 7: Neither available -> null even when defaultAudio is set
+  assert.equal(
+    selectEpisodeAudioVersion({
+      subAvailable: false,
+      dubAvailable: false,
+      userSelectedVersion: null,
+      defaultAudio: 'dub',
+    }),
+    null
+  );
+});
+

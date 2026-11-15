@@ -376,7 +376,12 @@ export function removeHistoryEntry(hoshikaId: number, episodeNumber: number): vo
 
 // User Settings
 export function getUserPreferences(): UserPreferences {
-  return getStored<UserPreferences>(SETTINGS_KEY, DEFAULT_PREFERENCES);
+  const stored = getStored<Partial<UserPreferences>>(SETTINGS_KEY, DEFAULT_PREFERENCES);
+  return {
+    ...DEFAULT_PREFERENCES,
+    ...(stored && typeof stored === 'object' ? stored : {}),
+    defaultAudio: stored?.defaultAudio === 'dub' ? 'dub' : 'sub',
+  };
 }
 
 export function saveUserPreferences(prefs: Partial<UserPreferences>): UserPreferences {
