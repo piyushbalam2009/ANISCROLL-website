@@ -376,3 +376,348 @@ export async function getAniListById(
     }
   );
 }
+
+export interface AniListPageResult {
+  items: AniListMedia[];
+  hasNextPage: boolean;
+  total: number;
+}
+
+function warmMediaCache(mediaList: AniListMedia[]): void {
+  for (const item of mediaList) {
+    if (item && typeof item.id === 'number' && item.id > 0) {
+      appCache.set(`anilist:media:v2:${item.id}`, item, 1800);
+    }
+  }
+}
+
+export function getCurrentAnimeSeasonAndYear(now: Date = new Date()): {
+  season: 'WINTER' | 'SPRING' | 'SUMMER' | 'FALL';
+  year: number;
+} {
+  const month = now.getUTCMonth() + 1;
+  const year = now.getUTCFullYear();
+  if (month >= 1 && month <= 3) return { season: 'WINTER', year };
+  if (month >= 4 && month <= 6) return { season: 'SPRING', year };
+  if (month >= 7 && month <= 9) return { season: 'SUMMER', year };
+  return { season: 'FALL', year };
+}
+
+export async function getAniListTrending(
+  page: number = 1,
+  perPage: number = 30,
+  forceRefresh: boolean = false
+): Promise<AniListPageResult> {
+  const safePage = Math.max(1, Math.floor(page || 1));
+  const safePerPage = Math.min(50, Math.max(1, Math.floor(perPage || 30)));
+  const cacheKey = `anilist:trending:v1:p${safePage}:${safePerPage}`;
+
+  return appCache.getOrSet<AniListPageResult>(
+    cacheKey,
+    async () => {
+      const query = `
+        query ($page: Int, $perPage: Int) {
+          Page(page: $page, perPage: $perPage) {
+            pageInfo {
+              total
+              hasNextPage
+            }
+            media(type: ANIME, sort: [TRENDING_DESC, POPULARITY_DESC], isAdult: false) {
+              ${MEDIA_FIELDS_FRAGMENT}
+            }
+          }
+        }
+      `;
+      const data = await executeAniListGraphQL<{
+        Page?: {
+          pageInfo?: { total?: number; hasNextPage?: boolean };
+          media?: AniListMedia[];
+        };
+      }>(query, { page: safePage, perPage: safePerPage }, `trending:p${safePage}`);
+
+      const items = Array.isArray(data?.Page?.media) ? data!.Page!.media! : [];
+      warmMediaCache(items);
+      return {
+        items,
+        hasNextPage: Boolean(data?.Page?.pageInfo?.hasNextPage),
+        total:
+          typeof data?.Page?.pageInfo?.total === 'number' && data.Page.pageInfo.total > 0
+            ? data.Page.pageInfo.total
+            : items.length,
+      };
+    },
+    {
+      ttlSeconds: 600,
+      staleWhileRevalidateSeconds: 1800,
+      shouldCache: (res) => Array.isArray(res?.items) && res.items.length > 0,
+      serveStaleOnError: true,
+      forceRefresh,
+    }
+  );
+}
+
+export async function getAniListPopular(
+  page: number = 1,
+  perPage: number = 30,
+  forceRefresh: boolean = false
+): Promise<AniListPageResult> {
+  const safePage = Math.max(1, Math.floor(page || 1));
+  const safePerPage = Math.min(50, Math.max(1, Math.floor(perPage || 30)));
+  const cacheKey = `anilist:popular:v1:p${safePage}:${safePerPage}`;
+
+  return appCache.getOrSet<AniListPageResult>(
+    cacheKey,
+    async () => {
+      const query = `
+        query ($page: Int, $perPage: Int) {
+          Page(page: $page, perPage: $perPage) {
+            pageInfo {
+              total
+              hasNextPage
+            }
+            media(type: ANIME, sort: [POPULARITY_DESC, SCORE_DESC], isAdult: false) {
+              ${MEDIA_FIELDS_FRAGMENT}
+            }
+          }
+        }
+      `;
+      const data = await executeAniListGraphQL<{
+        Page?: {
+          pageInfo?: { total?: number; hasNextPage?: boolean };
+          media?: AniListMedia[];
+        };
+      }>(query, { page: safePage, perPage: safePerPage }, `popular:p${safePage}`);
+
+      const items = Array.isArray(data?.Page?.media) ? data!.Page!.media! : [];
+      warmMediaCache(items);
+      return {
+        items,
+        hasNextPage: Boolean(data?.Page?.pageInfo?.hasNextPage),
+        total:
+          typeof data?.Page?.pageInfo?.total === 'number' && data.Page.pageInfo.total > 0
+            ? data.Page.pageInfo.total
+            : items.length,
+      };
+    },
+    {
+      ttlSeconds: 900,
+      staleWhileRevalidateSeconds: 3600,
+      shouldCache: (res) => Array.isArray(res?.items) && res.items.length > 0,
+      serveStaleOnError: true,
+      forceRefresh,
+    }
+  );
+}
+
+export async function getAniListSeasonal(params?: {
+  season?: string;
+  year?: number;
+  page?: number;
+  perPage?: number;
+  forceRefresh?: boolean;
+}): Promise<AniListPageResult & { season: string; year: number }> {
+  const current = getCurrentAnimeSeasonAndYear();
+  const validSeasons = new Set(['WINTER', 'SPRING', 'SUMMER', 'FALL']);
+  const rawSeason = params?.season?.trim().toUpperCase() || '';
+  const season = validSeasons.has(rawSeason) ? rawSeason : current.season;
+  const year =
+    typeof params?.year === 'number' && Number.isFinite(params.year) && params.year >= 1960
+      ? Math.floor(params.year)
+      : current.year;
+  const safePage = Math.max(1, Math.floor(params?.page || 1));
+  const safePerPage = Math.min(50, Math.max(1, Math.floor(params?.perPage || 30)));
+  const forceRefresh = Boolean(params?.forceRefresh);
+  const cacheKey = `anilist:seasonal:v1:${season}:${year}:p${safePage}:${safePerPage}`;
+
+  return appCache.getOrSet(
+    cacheKey,
+    async () => {
+      const query = `
+        query ($season: MediaSeason, $seasonYear: Int, $page: Int, $perPage: Int) {
+          Page(page: $page, perPage: $perPage) {
+            pageInfo {
+              total
+              hasNextPage
+            }
+            media(
+              type: ANIME
+              season: $season
+              seasonYear: $seasonYear
+              sort: [POPULARITY_DESC, SCORE_DESC]
+              isAdult: false
+            ) {
+              ${MEDIA_FIELDS_FRAGMENT}
+            }
+          }
+        }
+      `;
+      const data = await executeAniListGraphQL<{
+        Page?: {
+          pageInfo?: { total?: number; hasNextPage?: boolean };
+          media?: AniListMedia[];
+        };
+      }>(
+        query,
+        {
+          season,
+          seasonYear: year,
+          page: safePage,
+          perPage: safePerPage,
+        },
+        `seasonal:${season}:${year}:p${safePage}`
+      );
+
+      const items = Array.isArray(data?.Page?.media) ? data!.Page!.media! : [];
+      warmMediaCache(items);
+      return {
+        items,
+        season,
+        year,
+        hasNextPage: Boolean(data?.Page?.pageInfo?.hasNextPage),
+        total:
+          typeof data?.Page?.pageInfo?.total === 'number' && data.Page.pageInfo.total > 0
+            ? data.Page.pageInfo.total
+            : items.length,
+      };
+    },
+    {
+      ttlSeconds: 900,
+      staleWhileRevalidateSeconds: 3600,
+      shouldCache: (res) => Array.isArray(res?.items) && res.items.length > 0,
+      serveStaleOnError: true,
+      forceRefresh,
+    }
+  );
+}
+
+export async function getAniListCatalogFallback(params: {
+  q?: string;
+  genre?: string;
+  format?: string;
+  status?: string;
+  year?: string | number;
+  season?: string;
+  sort?: string;
+  page?: number;
+  perPage?: number;
+  forceRefresh?: boolean;
+}): Promise<AniListPageResult> {
+  const safePage = Math.max(1, Math.floor(params.page || 1));
+  const safePerPage = Math.min(50, Math.max(1, Math.floor(params.perPage || 30)));
+  const q = params.q?.trim() || undefined;
+  const rawFormat = params.format?.trim().toUpperCase() || '';
+  const format = VALID_ANILIST_FORMATS.has(rawFormat) ? rawFormat : undefined;
+  const validStatuses = new Set([
+    'FINISHED',
+    'RELEASING',
+    'NOT_YET_RELEASED',
+    'CANCELLED',
+    'HIATUS',
+  ]);
+  const rawStatus = params.status?.trim().toUpperCase() || '';
+  const status = validStatuses.has(rawStatus) ? rawStatus : undefined;
+  const validSeasons = new Set(['WINTER', 'SPRING', 'SUMMER', 'FALL']);
+  const rawSeason = params.season?.trim().toUpperCase() || '';
+  const season = validSeasons.has(rawSeason) ? rawSeason : undefined;
+  const parsedYear = Number(params.year);
+  const seasonYear =
+    Number.isFinite(parsedYear) && parsedYear >= 1960 && parsedYear <= 2100
+      ? Math.floor(parsedYear)
+      : undefined;
+  const genres = params.genre
+    ? params.genre
+        .split(',')
+        .map((g) => g.trim())
+        .filter(Boolean)
+    : undefined;
+
+  const sortLower = (params.sort || 'popularity').toLowerCase();
+  const sortList =
+    sortLower === 'trending'
+      ? ['TRENDING_DESC', 'POPULARITY_DESC']
+      : sortLower === 'score' || sortLower === 'top'
+      ? ['SCORE_DESC', 'POPULARITY_DESC']
+      : sortLower === 'newest' || sortLower === 'recent'
+      ? ['START_DATE_DESC', 'POPULARITY_DESC']
+      : ['POPULARITY_DESC', 'SCORE_DESC'];
+
+  const cacheKey = `anilist:catalog:v1:q=${q || ''}:g=${(genres || []).join(',')}:f=${
+    format || ''
+  }:st=${status || ''}:s=${season || ''}:y=${seasonYear || ''}:sort=${sortList[0]}:p${safePage}:${safePerPage}`;
+
+  return appCache.getOrSet<AniListPageResult>(
+    cacheKey,
+    async () => {
+      const query = `
+        query (
+          $page: Int
+          $perPage: Int
+          $search: String
+          $format: MediaFormat
+          $status: MediaStatus
+          $season: MediaSeason
+          $seasonYear: Int
+          $genreIn: [String]
+          $sort: [MediaSort]
+        ) {
+          Page(page: $page, perPage: $perPage) {
+            pageInfo {
+              total
+              hasNextPage
+            }
+            media(
+              type: ANIME
+              isAdult: false
+              search: $search
+              format: $format
+              status: $status
+              season: $season
+              seasonYear: $seasonYear
+              genre_in: $genreIn
+              sort: $sort
+            ) {
+              ${MEDIA_FIELDS_FRAGMENT}
+            }
+          }
+        }
+      `;
+      const variables: Record<string, unknown> = {
+        page: safePage,
+        perPage: safePerPage,
+        sort: sortList,
+      };
+      if (q) variables.search = q;
+      if (format) variables.format = format;
+      if (status) variables.status = status;
+      if (season) variables.season = season;
+      if (seasonYear) variables.seasonYear = seasonYear;
+      if (genres && genres.length > 0) variables.genreIn = genres;
+
+      const data = await executeAniListGraphQL<{
+        Page?: {
+          pageInfo?: { total?: number; hasNextPage?: boolean };
+          media?: AniListMedia[];
+        };
+      }>(query, variables, `catalog:p${safePage}`);
+
+      const items = Array.isArray(data?.Page?.media) ? data!.Page!.media! : [];
+      warmMediaCache(items);
+      return {
+        items,
+        hasNextPage: Boolean(data?.Page?.pageInfo?.hasNextPage),
+        total:
+          typeof data?.Page?.pageInfo?.total === 'number' && data.Page.pageInfo.total > 0
+            ? data.Page.pageInfo.total
+            : items.length,
+      };
+    },
+    {
+      ttlSeconds: 600,
+      staleWhileRevalidateSeconds: 1800,
+      shouldCache: (res) => Array.isArray(res?.items) && res.items.length > 0,
+      serveStaleOnError: true,
+      forceRefresh: Boolean(params.forceRefresh),
+    }
+  );
+}
+

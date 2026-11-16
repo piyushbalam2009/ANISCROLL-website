@@ -62,22 +62,46 @@ function featuredToHoshikaItem(item: FeaturedAnimeItem): HoshikaAnimeItem {
 }
 
 export default async function HomePage() {
-  const [homeRes, topRes, rawHomepageDoc] = await Promise.all([
+  const [homeSettled, topSettled, docSettled] = await Promise.allSettled([
     getHoshikaHomeDetailed('en'),
     getHoshikaBrowseDetailed('top', 'anime'),
     fetchFirestoreDocumentServer('animeManagement', 'homepage').catch(() => null),
   ]);
 
-  if (!homeRes.ok && !topRes.ok) {
-    noStore();
-    return (
-      <AnimeDetailErrorState
-        title="AniScroll Catalogue Temporarily Unavailable"
-        description="We could not load the anime catalogue right now due to an upstream connectivity issue. Please try again in a moment."
-        code={homeRes.error.category}
-      />
-    );
-  }
+  const homeRes =
+    homeSettled.status === 'fulfilled'
+      ? homeSettled.value
+      : ({
+          ok: false as const,
+          fromCache: false as const,
+          error: {
+            category: 'UPSTREAM_UNAVAILABLE' as const,
+            status: 503,
+            endpoint: '/api/v1/home',
+            message: 'Home feed unavailable',
+            retryable: true,
+            durationMs: 0,
+          },
+        });
+
+  const topRes =
+    topSettled.status === 'fulfilled'
+      ? topSettled.value
+      : ({
+          ok: false as const,
+          fromCache: false as const,
+          error: {
+            category: 'UPSTREAM_UNAVAILABLE' as const,
+            status: 503,
+            endpoint: '/api/v1/browse',
+            message: 'Popular feed unavailable',
+            retryable: true,
+            durationMs: 0,
+          },
+        });
+
+  const rawHomepageDoc =
+    docSettled.status === 'fulfilled' ? docSettled.value : null;
 
   if (!homeRes.ok || !topRes.ok) {
     noStore();
@@ -172,6 +196,35 @@ export default async function HomePage() {
   const trending = homeData.trending.slice(0, 12);
   const recent = homeData.recentlyAdded.slice(0, 12);
   const popular = topAnime.slice(0, 12);
+  const hasCuratedCollections = Boolean(
+    homepageConfig.collections?.some(
+      (c) => Array.isArray(c.animeItems) && c.animeItems.length > 0
+    )
+  );
+  const hasPromoBanner = Boolean(
+    homepageConfig.promoBanner?.enabled && homepageConfig.promoBanner?.title
+  );
+
+  // Only show full-page error state if every catalogue & admin-curated section is empty
+  if (
+    !homeRes.ok &&
+    !topRes.ok &&
+    heroSlides.length === 0 &&
+    trending.length === 0 &&
+    seasonal.length === 0 &&
+    popular.length === 0 &&
+    recent.length === 0 &&
+    !hasCuratedCollections &&
+    !hasPromoBanner
+  ) {
+    return (
+      <AnimeDetailErrorState
+        title="AniScroll Catalogue Temporarily Unavailable"
+        description="We could not load the anime catalogue right now due to an upstream connectivity issue. Please try again in a moment."
+        code={homeRes.error.category}
+      />
+    );
+  }
 
   const sectionOrder =
     homepageConfig.sectionOrder || DEFAULT_ANIME_MANAGEMENT_CONFIG.sectionOrder!;

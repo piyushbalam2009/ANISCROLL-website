@@ -48,7 +48,11 @@ export async function GET(req: NextRequest) {
 
   const idMap = await resolveAnimeIds(hoshikaId, anime).catch(() => null);
   const anilistId = idMap?.aniListId || idMap?.anilistId || anime.anilistId || null;
-  const provider = selectStreamingProvider({ format: anime.format });
+  const isStandaloneMovie = Boolean(anime.isStandaloneMovie || anime.standaloneMovie);
+  const provider = selectStreamingProvider({
+    format: anime.format,
+    isStandaloneMovie,
+  });
 
   const audioAvailability =
     checkAudio && anilistId
@@ -58,6 +62,7 @@ export async function GET(req: NextRequest) {
           episodeCount: episodesData.total || episodesData.items.length,
           prefetchedAnime: anime,
           format: anime.format,
+          isStandaloneMovie,
         }).catch(() => null)
       : null;
 

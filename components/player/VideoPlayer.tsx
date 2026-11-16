@@ -94,6 +94,7 @@ interface VideoPlayerProps {
   anilistId?: number | null;
   animeTitle: string;
   animeFormat?: string | null;
+  isStandaloneMovie?: boolean;
   coverImage?: string;
   bannerImage?: string;
   episodeNumber: number;
@@ -122,6 +123,7 @@ export function VideoPlayer({
   anilistId,
   animeTitle,
   animeFormat,
+  isStandaloneMovie = false,
   coverImage,
   bannerImage,
   episodeNumber,
@@ -2645,6 +2647,7 @@ export function VideoPlayer({
                     anilistId={anilistId}
                     animeTitle={animeTitle}
                     animeFormat={animeFormat}
+                    isStandaloneMovie={isStandaloneMovie}
                     episodeNumber={episodeNumber}
                     activeType={activeType}
                     hasSub={hasSub}

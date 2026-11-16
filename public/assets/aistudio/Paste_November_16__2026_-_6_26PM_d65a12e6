@@ -1,0 +1,1222 @@
+# ANISCROLL — COMPLETE REPOSITORY AUDIT REPAIR & PRODUCTION HARDENING
+
+You are working on my existing AniScroll website repository.
+
+Your task is to perform a complete engineering repair based on the repository's existing architecture, identify and fix all confirmed issues, improve reliability, and prepare the application for production.
+
+This is an implementation task, NOT a code review or a list of recommendations.
+
+You must inspect the actual repository, modify the necessary files, implement the fixes, and verify the results.
+
+Do not stop after identifying problems. Do not simply explain what should be changed. Implement the changes directly.
+
+---
+
+# 1. ABSOLUTE RULES — READ BEFORE MODIFYING ANYTHING
+
+1. Inspect the complete existing project structure before editing files.
+2. Read the existing implementation of every affected module and its dependencies.
+3. Understand the existing data flow before changing architecture.
+4. Preserve all working features.
+5. Preserve the existing AniScroll UI, page layouts, styling, animations, black-and-white theme, sidebar, responsive behavior, and navigation.
+6. Do not redesign the application.
+7. Do not remove existing features to simplify implementation.
+8. Do not replace working components with placeholders.
+9. Do not introduce fake anime data, fake episode records, fake streaming links, or fabricated availability.
+10. Do not silently change API response contracts used by existing frontend components, Discord integrations, or external clients.
+11. Maintain backward compatibility wherever possible.
+12. Do not expose API secrets, Firebase Admin credentials, service-role keys, or other private environment variables.
+13. Do not hardcode credentials or introduce new privileged client-side operations.
+14. Do not bypass Hoshika rate limits, Cloudflare protections, or upstream restrictions.
+15. Do not introduce unnecessary paid services.
+16. Avoid unnecessary dependencies.
+17. Do not delete tests simply because they fail.
+18. Do not disable TypeScript checks or hide new lint errors.
+19. Do not change production configuration without understanding its impact.
+20. Do not claim something works unless you have actually tested it.
+
+Before implementation, produce an internal dependency map of the affected files and their relationships. Then proceed with the implementation.
+
+If a required external service is unavailable, implement and test the appropriate fallback using mocked responses. Clearly report what could not be verified against the real service.
+
+# 2. EXISTING PROJECT ARCHITECTURE
+
+Preserve and work with the existing technology stack.
+
+- Next.js App Router
+- React 19
+- TypeScript
+- Tailwind CSS
+- Firebase Authentication
+- Cloud Firestore
+- Firebase Admin SDK
+- Supabase Storage
+- Hoshika API for primary anime metadata
+- AniList GraphQL for fallback metadata and ID mapping
+- MegaPlay for anime series streaming
+- ZokoAnime for anime movie streaming
+- HLS.js video playback
+- Existing AniSkip integration
+- Existing admin dashboard
+- Existing artwork and logo resolution
+- Existing caching and monitoring infrastructure
+
+Important existing files include:
+
+## Hoshika and metadata
+
+- lib/hoshika.ts
+- lib/hoshika-client.ts
+- lib/hoshika-mapper.ts
+- lib/hoshika-pagination.test.ts
+- lib/hoshika-client.test.ts
+- lib/hoshika-rate-limit.test.ts
+- lib/anilist.ts
+- lib/id-mapper.ts
+- lib/hoshika-client.ts
+
+## Episodes
+
+- lib/episode-store.ts
+- lib/anime-detail-episodes.ts
+- lib/episode-pagination.ts
+- hooks/useEpisodeAvailability.ts
+- components/episodes/EpisodeList.tsx
+- components/episodes/EpisodeRangeSelector.tsx
+- components/episodes/EpisodeRow.tsx
+- components/episodes/EpisodeSection.tsx
+- components/episodes/EpisodeProgress.tsx
+
+## Streaming
+
+- app/api/stream/route.ts
+- lib/aniscroll.ts
+- lib/stream-provider.ts
+- lib/stream-provider-core.ts
+- lib/zokoanime-stream.ts
+- components/player/WatchPageClient.tsx
+- components/player/VideoPlayer.tsx
+- components/player/SubtitleOverlay.tsx
+- components/player/SubtitleSettingsModal.tsx
+- components/player/PlayerDownloadPanel.tsx
+
+## Homepage and catalogue
+
+- app/page.tsx
+- app/api/home/route.ts
+- app/api/browse/route.ts
+- app/api/search/route.ts
+- app/api/catalog/route.ts
+- app/api/anime/[id]/route.ts
+- app/api/episodes/[id]/route.ts
+
+## Infrastructure
+
+- lib/cache.ts
+- lib/perf-monitor.ts
+- lib/firebase-admin.ts
+- lib/admin/admin-auth.ts
+- lib/admin/admin-permissions.ts
+- lib/admin/redaction.ts
+- firestore.rules
+- next.config.ts
+- package.json
+- package-lock.json
+- bun.lock
+
+These are starting points, not an exhaustive file list. Inspect any additional affected files before editing.
+
+# 3. FIX THE HOSHIKA RATE-LIMITING SYSTEM
+
+This is one of the highest-priority repairs.
+
+The application has experienced repeated HTTP 429 responses from Hoshika.
+
+Previous production observations included:
+
+- Hoshika detail requests returning HTTP 429.
+- Direct requests from the VPS returning HTTP 429.
+- Repeated background cache refresh failures.
+- Multiple anime detail requests failing during the same period.
+
+The application must not continue hammering Hoshika when rate-limited.
+
+## 3.1 Centralized request management
+
+Use the existing lib/hoshika-client.ts as the centralized Hoshika transport layer.
+
+All Hoshika requests must use this client.
+
+Inspect all Hoshika calls throughout the repository and eliminate direct, uncontrolled fetch calls to Hoshika.
+
+Implement:
+
+- Global request concurrency control.
+- Foreground/background request priorities.
+- In-flight request deduplication.
+- Bounded request queue.
+- Request timeout.
+- Request cancellation where appropriate.
+- Global cooldown after HTTP 429.
+- Request metrics.
+- Controlled retry for genuinely retryable failures.
+
+Do not create multiple independent rate-limit implementations.
+
+## 3.2 Correct 429 behavior
+
+When Hoshika returns HTTP 429:
+
+1. Parse Retry-After when available.
+2. Respect numeric Retry-After values.
+3. Respect HTTP-date Retry-After values.
+4. Apply a bounded fallback cooldown when the header is missing.
+5. Increase fallback cooldown cautiously after repeated rate limits.
+6. Do not immediately retry the failed request.
+7. Suppress background refreshes during cooldown.
+8. Return cached stale data when permitted.
+9. Record the event in monitoring.
+10. Avoid repeated logs for identical failures.
+
+Never interpret a rate-limit response as a 404 or unavailable anime.
+
+## 3.3 Shared cooldown across application instances
+
+The existing cooldown variables are process-local.
+
+Determine whether the current deployment can run multiple application instances.
+
+If multiple instances are supported, implement an optional shared rate-limit state using an existing supported infrastructure or a lightweight shared Redis-compatible service.
+
+Requirements:
+
+- Atomic cooldown updates.
+- Shared cooldown expiration.
+- Safe behavior when shared storage is unavailable.
+- No new mandatory paid infrastructure.
+- Local process-level protection must continue working.
+
+If no shared store is configured, explicitly report that protection is process-local rather than pretending it is distributed.
+
+## 3.4 Prevent unnecessary requests
+
+Inspect homepage rendering, anime detail pages, search, episode fetching, artwork resolution, and background cache refreshes.
+
+Prevent:
+
+- Duplicate requests for the same anime.
+- Repeated detail requests from multiple components.
+- Unnecessary forced refreshes.
+- Repeated metadata lookup when a valid cached result exists.
+- Background refreshes during an active cooldown.
+- Sequential requests that can safely reuse existing results.
+
+Do not reduce data freshness unnecessarily when Hoshika is healthy.
+
+# 4. BUILD A RELIABLE ANIME METADATA FALLBACK
+
+Hoshika remains the primary metadata provider.
+
+AniList must act as a fallback, not an unconditional replacement for Hoshika.
+
+## 4.1 Metadata fallback priority
+
+Use the following priority:
+
+1. Fresh Hoshika cache.
+2. Stale but valid Hoshika cache.
+3. Verified cached AniList mapping.
+4. AniList lookup using a verified AniList ID.
+5. Carefully validated AniList title search.
+6. Clearly reported unavailable state.
+
+The fallback must preserve the Hoshika short ID as the public AniScroll anime identifier.
+
+Never replace a Hoshika ID with an AniList ID in a route that expects a Hoshika ID.
+
+## 4.2 Metadata normalization
+
+Ensure all metadata providers map into one consistent internal anime type.
+
+Support:
+
+- English title.
+- Romaji title.
+- Japanese title.
+- Preferred display title.
+- Synopsis.
+- Cover image.
+- Banner image.
+- Format.
+- Status.
+- Season.
+- Season year.
+- Episode count.
+- Episode duration.
+- Genres.
+- Average score.
+- AniList ID.
+- MAL ID.
+- Hoshika short ID.
+
+Handle null, missing, malformed, and optional fields safely.
+
+Never overwrite good cached metadata with incomplete fallback data.
+
+## 4.3 Metadata freshness
+
+Implement clear cache policies:
+
+- Fresh cache: serve immediately.
+- Stale cache: serve immediately while refreshing only when safe.
+- Active Hoshika cooldown: do not refresh.
+- Temporary AniList failure: preserve the last valid metadata.
+- Definitive 404: handle separately from temporary upstream errors.
+
+Ensure a failed refresh cannot erase previously valid metadata.
+
+# 5. FIX THE HOMEPAGE CATALOGUE
+
+The homepage must not become completely unavailable just because Hoshika is rate-limited.
+
+Inspect app/page.tsx and all supporting catalogue functions.
+
+## 5.1 Homepage fallback behavior
+
+Implement a resilient homepage data-loading system.
+
+Priority:
+
+1. Cached Hoshika homepage data.
+2. Fresh Hoshika homepage data when available.
+3. Stale Hoshika homepage data during temporary failure.
+4. AniList-powered fallback catalogue.
+5. Existing admin-curated homepage content.
+
+Preserve the existing homepage design.
+
+## 5.2 Required homepage sections
+
+Keep existing sections and their admin configuration.
+
+Where supported by actual data, provide:
+
+- Featured anime.
+- Trending anime.
+- Seasonal anime.
+- Popular anime.
+- Recently added anime.
+- Continue Watching.
+- Existing promotional banners.
+- Existing admin-pinned anime.
+
+Do not invent recently added dates or rankings.
+
+If AniList is used as a fallback for a section, make sure the section's meaning remains accurate.
+
+## 5.3 Homepage resilience
+
+A failure in one section must not break the entire homepage.
+
+For example:
+
+- If Trending fails, Seasonal can still render.
+- If Popular fails, Featured can still render.
+- If Hoshika fails, cached and AniList content can still render.
+- If an image fails, the existing artwork fallback system must work.
+
+Use Promise.allSettled or equivalent independent section handling where appropriate.
+
+Avoid excessive sequential upstream requests.
+
+# 6. REPAIR EPISODE LOADING AND PAGINATION
+
+This is another major priority.
+
+Inspect the entire episode data flow, from Hoshika requests to the frontend episode list.
+
+## 6.1 Episode fallback
+
+Implement a reliable fallback for temporary Hoshika failures.
+
+Priority:
+
+1. Fresh episode cache.
+2. Stale valid episode cache.
+3. Existing cached episode batches.
+4. Verified metadata indicating total episode count, where useful for display.
+5. Honest unavailable state when actual episode records cannot be recovered.
+
+AniList episode counts must not be treated as actual episode records.
+
+Never fabricate:
+
+- Episode titles.
+- Episode descriptions.
+- Episode thumbnails.
+- Episode availability.
+- Streaming URLs.
+
+## 6.2 Pagination
+
+Preserve and verify the existing 50-episode pagination system.
+
+Expected behavior:
+
+- Episodes 1–50.
+- Episodes 51–100.
+- Episodes 101–150.
+- Continue for longer series.
+
+Requirements:
+
+- Correct cursor calculation.
+- No duplicate episodes.
+- Correct episode ordering.
+- Correct total count.
+- Correct handling of final partial batches.
+- No infinite pagination loops.
+- No missing episodes between batches.
+- Support direct opening of high episode numbers.
+- Correctly fetch the batch containing the requested episode.
+
+Verify the existing getTargetEpisodeBatchCursor() behavior and its use throughout the application.
+
+## 6.3 Episode caching
+
+Improve the existing lib/episode-store.ts cache.
+
+Requirements:
+
+- Structured cache keys.
+- Anime ID and language separation.
+- Pagination cursor separation.
+- In-flight deduplication.
+- Stale data preservation.
+- Bounded cache size.
+- Correct expiration.
+- Safe session storage hydration.
+- Correct cache invalidation.
+
+A failed network request must never overwrite a successful episode cache with an empty array.
+
+## 6.4 Sub/Dub availability
+
+Maintain independent availability for:
+
+- Sub.
+- Dub.
+
+Requirements:
+
+- Do not show a language as available without evidence.
+- Do not permanently cache transient failures as unavailable.
+- Do not confuse rate-limited with genuinely unavailable.
+- Preserve user audio preferences.
+- Respect the user's preferred language when available.
+- Fall back to the other language only when the preferred language is unavailable.
+- Preserve manual selection.
+
+# 7. REPAIR ANIME ID MAPPING
+
+Inspect:
+
+- lib/id-mapper.ts
+- lib/hoshika.ts
+- lib/anilist.ts
+- app/api/resolve-ids/[id]/route.ts
+- All anime detail and streaming ID resolution flows.
+
+The system must distinguish:
+
+- Hoshika short ID.
+- AniList ID.
+- MAL ID.
+
+These are not interchangeable.
+
+## 7.1 Mapping requirements
+
+Build reliable mapping with:
+
+- Verified cached mappings.
+- Exact normalized title matching.
+- English and Romaji title matching.
+- Format validation.
+- Release year validation.
+- Season validation where available.
+- Movie versus TV validation.
+- Synonym matching where safe.
+- Confidence scoring.
+- Mapping provenance.
+
+## 7.2 Prevent incorrect matches
+
+Never blindly select the first AniList search result.
+
+If multiple candidates are similar:
+
+- Compare title variants.
+- Compare format.
+- Compare release year.
+- Compare season.
+- Compare episode count when useful.
+- Reject ambiguous candidates.
+
+Do not silently assign an incorrect AniList ID.
+
+Preserve previously verified mappings unless there is evidence that they are invalid.
+
+## 7.3 Mapping cache
+
+Implement appropriate cache keys, validation, expiration, and invalidation.
+
+Do not cache an ambiguous or failed mapping as a verified result.
+
+# 8. HARDEN STREAMING PROVIDER RESOLUTION
+
+Preserve the existing streaming API architecture.
+
+Existing streaming API base:
+
+https://api.aniscroll.in
+
+Existing endpoints:
+
+MegaPlay:
+
+/api/watch/megaplay/{anilist_id}/{episode}/{sub|dub}
+
+ZokoAnime:
+
+/api/watch/zokoanime/{anilist_id}/{episode}/{sub|dub}
+
+The website uses its own /api/stream route to coordinate streaming requests.
+
+Do not confuse the website route with the external streaming endpoints.
+
+## 8.1 Provider routing
+
+Preserve these routing rules:
+
+| Anime format | Provider |
+|---|---|
+| TV | MegaPlay |
+| TV_SHORT | MegaPlay |
+| OVA | MegaPlay |
+| ONA | MegaPlay |
+| Episodic SPECIAL | MegaPlay |
+| MOVIE | ZokoAnime |
+| Standalone movie | ZokoAnime |
+| UNKNOWN | Existing safe fallback |
+
+Do not accidentally route a movie to MegaPlay because metadata is missing.
+
+Use verified cached format information before making additional metadata requests.
+
+## 8.2 Stream resolution
+
+Verify:
+
+- Correct Hoshika ID to AniList ID conversion.
+- Correct episode number.
+- Correct Sub/Dub parameter.
+- Correct provider.
+- Correct JSON normalization.
+- Correct handling of invalid payloads.
+- Correct handling of missing HLS links.
+- Correct handling of embed URLs.
+- Correct handling of timeouts.
+- Correct error classification.
+
+Do not return an HTTP success response for an unplayable stream.
+
+## 8.3 Sub/Dub availability
+
+Where appropriate, check both providers' audio versions concurrently.
+
+Requirements:
+
+- Only show versions that return valid playable data.
+- Respect user preference.
+- Use the alternate language only when necessary.
+- Preserve manual audio switching.
+- Avoid redundant stream requests.
+- Cache only valid stream results.
+- Use short negative-cache periods for definitive unavailable results.
+- Never cache a timeout or rate limit as definitive unavailability.
+
+## 8.4 Quality selection
+
+Preserve existing quality-selection behavior.
+
+Verify:
+
+- Prefer 1080p when available.
+- Otherwise select the highest available quality below 1080p.
+- Support the master HLS playlist when discrete quality URLs are absent.
+- Preserve playback position when switching quality.
+- Preserve play/pause state.
+- Correctly handle failed quality URLs.
+- Fall back to the master playlist when appropriate.
+
+Do not break MegaPlay HLS level selection.
+
+## 8.5 Subtitle behavior
+
+Preserve the subtitle customization system.
+
+Verify:
+
+- Subtitle Off really disables every active subtitle source.
+- Subtitle selection persists across quality switches.
+- Subtitle selection persists across episode changes according to existing preference behavior.
+- Custom font size, color, background, outline, and position remain functional.
+- Native HLS subtitles and parsed subtitle overlays do not unexpectedly display simultaneously.
+- Subtitle preferences are stored safely.
+
+# 9. PRESERVE AND VERIFY ANISKIP
+
+Do not remove AniSkip.
+
+Keep AniSkip separate from any skip metadata supplied by streaming providers.
+
+Inspect:
+
+- lib/aniskip.ts
+- components/player/VideoPlayer.tsx
+- AniSkip-related types and API calls.
+
+Verify:
+
+- Correct MAL ID resolution.
+- Correct episode number.
+- Correct intro interval.
+- Correct outro interval.
+- Correct current-time detection.
+- Correct seek behavior.
+- Correct handling of missing AniSkip data.
+- Correct cleanup of event listeners.
+- Correct React effect lifecycle.
+- No duplicate event listeners.
+- No stale closure problems.
+
+Preserve:
+
+- Manual Skip Intro button.
+- Manual Skip Outro button.
+- Existing skip button positioning and styling.
+- Auto Skip Intro setting.
+- Auto Skip Outro setting.
+- Existing autoplay-next behavior.
+
+Do not use provider skip timestamps as a replacement for AniSkip.
+
+Do not introduce AniSkip into the Discord bot architecture.
+
+# 10. ARTWORK AND IMAGE RESILIENCE
+
+Inspect the existing artwork implementation.
+
+Preserve the current artwork source priority:
+
+1. Fanart.tv.
+2. TMDB.
+3. Existing supported fallback sources.
+
+Taizen should only be used for transparent title logos.
+
+Do not introduce AniZip logo sources.
+
+Requirements:
+
+- Handle failed image requests.
+- Handle missing transparent logos.
+- Prefer English title logos when available.
+- Prevent endless image retry loops.
+- Cache successful artwork resolutions.
+- Avoid replacing good artwork with broken fallback URLs.
+- Preserve the existing admin artwork override functionality.
+- Ensure artwork proxy endpoints validate input and protect against unsafe external URLs.
+
+Do not redesign the existing artwork presentation.
+
+# 11. API CONSISTENCY AND ERROR HANDLING
+
+Audit every API route.
+
+Standardize error behavior while maintaining existing response compatibility.
+
+Use clear error categories, including:
+
+- INVALID_REQUEST
+- NOT_FOUND
+- RATE_LIMITED
+- UPSTREAM_UNAVAILABLE
+- UPSTREAM_TIMEOUT
+- INVALID_RESPONSE
+- STREAM_UNAVAILABLE
+- INTERNAL_ERROR
+
+Requirements:
+
+- Correct HTTP status codes.
+- Consistent JSON response shape.
+- Safe error messages.
+- No leaked secrets or internal stack traces.
+- Appropriate Cache-Control headers.
+- Appropriate retry information.
+- Request validation.
+- Input sanitization.
+- Request timeout handling.
+
+Do not expose raw upstream responses to users.
+
+Do not turn temporary upstream errors into false 404 responses.
+
+Do not turn missing anime records into generic 500 errors.
+
+# 12. SECURITY AUDIT
+
+Perform a security review of the existing application.
+
+Inspect:
+
+- Firebase Authentication.
+- Firebase Admin.
+- Firestore rules.
+- Admin authorization.
+- Admin role management.
+- Discord authentication.
+- Bot API authentication.
+- Profile APIs.
+- Artwork upload and delete routes.
+- Cache invalidation routes.
+- Image proxy.
+- Subtitle proxy.
+- Streaming routes.
+- User-generated content.
+
+## 12.1 Authentication
+
+Verify that protected operations require authentication.
+
+Never trust a UID supplied by the client without comparing it to the authenticated identity.
+
+## 12.2 Admin authorization
+
+Verify authorization on the server for every admin API route.
+
+Do not rely on hiding admin UI components.
+
+Check role hierarchy and permissions consistently.
+
+Preserve the existing owner, administrator, editor/moderator and member behavior.
+
+Review the bootstrapped owner UID and email assumptions in firestore.rules. Do not remove or change the owner identity without an explicit migration plan.
+
+## 12.3 Firestore
+
+Preserve the existing default-deny rules.
+
+Verify:
+
+- Users can access only their own private data.
+- Public profile information is appropriately limited.
+- Watchlist writes are validated.
+- Continue-watching data is validated.
+- User roles cannot be self-assigned.
+- Users cannot overwrite protected admin data.
+- Sensitive fields cannot be publicly queried.
+
+The existing zero-AniList-ID Firestore policy must remain intact.
+
+Do not add AniList IDs to Firestore user documents.
+
+## 12.4 External URL security
+
+Review image, subtitle, HLS and artwork proxy endpoints.
+
+Protect against:
+
+- SSRF.
+- Private network access.
+- Localhost access.
+- Internal IP access.
+- Unsupported protocols.
+- Arbitrary host access.
+- Oversized responses.
+- Excessive request timeouts.
+
+Use explicit allowlists where applicable.
+
+Do not block legitimate existing streaming providers without checking the current implementation.
+
+## 12.5 Secrets and logging
+
+Redact:
+
+- API keys.
+- Firebase credentials.
+- Authorization headers.
+- Cookies.
+- Bot secrets.
+- Private user data.
+- Signed URLs where they contain credentials.
+
+Never expose private credentials in browser bundles.
+
+# 13. CACHE ARCHITECTURE IMPROVEMENTS
+
+Inspect lib/cache.ts and all cache users.
+
+Build a consistent caching strategy.
+
+Support:
+
+- Fresh cache.
+- Stale cache.
+- Cache miss.
+- In-flight deduplication.
+- Safe background refresh.
+- Error-aware cache preservation.
+- Bounded cache memory.
+- Explicit invalidation.
+
+Use separate TTLs for:
+
+- Anime metadata.
+- Homepage catalogue.
+- Search results.
+- Episode lists.
+- ID mappings.
+- Artwork.
+- Stream responses.
+- Definitive negative results.
+
+Do not use one universal TTL.
+
+Most importantly:
+
+A temporary upstream failure must never destroy a previously successful cached response.
+
+Never cache HTTP 429 as a normal successful response.
+
+Do not cache temporary network failures as permanent not-found results.
+
+# 14. PERFORMANCE OPTIMIZATION
+
+Optimize without redesigning the UI.
+
+Inspect:
+
+- Homepage server rendering.
+- Anime detail loading.
+- Search.
+- Episode loading.
+- Watch page.
+- Artwork loading.
+- Admin dashboard.
+- API routes.
+
+Improve:
+
+- Parallel requests where safe.
+- Request deduplication.
+- Cache reuse.
+- Unnecessary React renders.
+- Expensive calculations.
+- Image loading.
+- Client/server boundaries.
+- Unnecessary bundle imports.
+- Large component dependencies.
+
+Avoid unnecessary client-side metadata fetching when server-side data is already available.
+
+Do not prefetch every episode of long-running anime.
+
+Load only the required episode batches.
+
+Do not introduce aggressive polling.
+
+Do not reduce the quality of images or video playback to improve performance.
+
+# 15. DEPENDENCY AND LOCKFILE REPAIR
+
+Inspect package.json, package-lock.json and bun.lock.
+
+The project currently declares Node.js 22.x.
+
+Use the declared runtime as the baseline unless the actual dependency compatibility analysis proves a deliberate version change is required.
+
+Previous deployment problems included npm ci failing because the lockfile was missing dependencies and platform-specific optional packages.
+
+Fix the actual root cause.
+
+Requirements:
+
+1. Identify the package manager used by the deployment workflow.
+2. Check package.json and lockfile consistency.
+3. Check all FFmpeg packages used by lib/hls-downloader.ts.
+4. Verify platform-specific optional dependencies for Tailwind, Next.js, Sharp and other native packages.
+5. Regenerate the correct lockfile using a clean, supported environment.
+6. Do not manually invent lockfile entries.
+7. Do not remove required dependencies to make npm ci pass.
+8. Validate a clean installation using the chosen package manager.
+9. Ensure the production VPS can install dependencies reproducibly.
+10. Document the required Node and package-manager versions.
+
+If npm is the production package manager, ensure npm ci succeeds on Linux with the committed package-lock.json.
+
+Do not assume that changing Node versions alone will repair an incomplete lockfile.
+
+# 16. NEXT.JS PRODUCTION STARTUP
+
+Inspect next.config.ts and scripts/start-standalone.mjs.
+
+The application uses:
+
+output: 'standalone'
+
+The package currently has a custom start script:
+
+node scripts/start-standalone.mjs
+
+Verify that:
+
+- The standalone output exists after building.
+- The start script points to the correct standalone server.
+- Static assets are available.
+- Public assets are available.
+- Required environment variables are loaded.
+- PM2 can restart the process.
+- The application binds to the expected host and port.
+- Production startup does not use an incompatible next start command.
+
+Do not change the existing PM2 process name or deployment architecture unnecessarily.
+
+The current PM2 process name is:
+
+aniscroll
+
+# 17. TESTING — MANDATORY
+
+Do not finish after implementing changes.
+
+Inspect existing tests and extend them.
+
+Do not delete working tests.
+
+Create or improve tests for all repaired areas.
+
+## Hoshika tests
+
+Test:
+
+- HTTP 429.
+- Numeric Retry-After.
+- HTTP-date Retry-After.
+- Missing Retry-After.
+- Exponential cooldown.
+- Active cooldown request suppression.
+- Background refresh suppression.
+- In-flight deduplication.
+- Timeout.
+- DNS failure.
+- Invalid JSON.
+- Invalid payload.
+- Successful stale cache fallback.
+
+## Catalogue tests
+
+Test:
+
+- Hoshika success.
+- Hoshika 429 with cached data.
+- Hoshika 429 without cached data.
+- AniList fallback.
+- Partial section failure.
+- Admin-curated content preservation.
+
+## Episode tests
+
+Test:
+
+- First 50 episodes.
+- 51–100.
+- 101–150.
+- Direct episode 75.
+- Direct episode 150.
+- Duplicate batch responses.
+- Missing final batch.
+- Stale cache fallback.
+- Rate-limit handling.
+- Sub/Dub availability.
+- No fabricated episodes.
+
+## ID mapping tests
+
+Test:
+
+- Exact title match.
+- Alternate title match.
+- Similar but different anime titles.
+- Different seasons.
+- Movie versus TV.
+- Ambiguous candidates.
+- Invalid IDs.
+- Verified cached mapping.
+
+## Streaming tests
+
+Test:
+
+- TV uses MegaPlay.
+- Movie uses ZokoAnime.
+- Standalone movie uses ZokoAnime.
+- Unknown format uses safe fallback.
+- Sub available.
+- Dub available.
+- Preferred language unavailable.
+- Both languages unavailable.
+- Invalid HLS payload.
+- Quality fallback.
+- Timeout.
+- Provider failure.
+
+## Player regression tests
+
+Verify:
+
+- Playback starts and stops correctly.
+- Episode navigation.
+- Resume position.
+- Watch history.
+- Continue watching.
+- Audio switching.
+- Quality switching.
+- Subtitle Off.
+- Subtitle customization.
+- AniSkip intro.
+- AniSkip outro.
+- Auto-skip settings.
+- Autoplay next episode.
+
+## Security tests
+
+Test:
+
+- Unauthorized admin access.
+- Unauthorized user data access.
+- User role escalation.
+- Invalid proxy URLs.
+- Private IP rejection.
+- Invalid upload requests.
+- Secret redaction.
+
+Use mocks for external services. Tests must not depend on Hoshika or streaming providers being available.
+
+# 18. CI AND CODE QUALITY
+
+The current Next.js configuration ignores ESLint during production builds.
+
+Do not rely on next build alone to verify code quality.
+
+Create or update CI checks so that they independently run:
+
+1. Dependency installation.
+2. TypeScript validation.
+3. ESLint.
+4. Unit tests.
+5. Production build.
+
+Do not hide new lint or type errors.
+
+If existing unrelated errors prevent validation, identify and report them separately.
+
+Keep the workflow compatible with the actual repository and deployment environment.
+
+# 19. ADMIN DASHBOARD AND MONITORING
+
+Preserve the existing admin dashboard.
+
+Inspect existing monitoring and error-reporting functionality.
+
+Improve monitoring to include:
+
+- Hoshika request count.
+- Hoshika 429 count.
+- Current cooldown state.
+- Cooldown remaining time.
+- Cache hit rate.
+- Cache stale responses.
+- AniList fallback usage.
+- Episode request failures.
+- Streaming provider failures.
+- Average upstream response time.
+- API error distribution.
+
+Add useful diagnostics to existing admin monitoring pages where appropriate.
+
+Do not expose sensitive upstream headers or credentials.
+
+Avoid creating a second monitoring system when an existing one can be extended.
+
+# 20. REQUIRED IMPLEMENTATION PHASES
+
+Perform the work in these phases.
+
+## Phase 1 — Repository inspection
+
+Inspect the repository and identify the actual affected files.
+
+Check existing tests and current behavior.
+
+Do not make assumptions based only on filenames.
+
+## Phase 2 — Hoshika reliability
+
+Repair centralized request management, rate limiting, caching and cooldown handling.
+
+## Phase 3 — Metadata and ID mapping
+
+Repair Hoshika/AniList fallback and ID mapping.
+
+## Phase 4 — Homepage and episode reliability
+
+Repair catalogue fallback, episode retrieval, caching and pagination.
+
+## Phase 5 — Streaming and player
+
+Repair provider resolution, Sub/Dub handling, quality selection, subtitles and AniSkip regressions.
+
+## Phase 6 — Security and infrastructure
+
+Audit API routes, Firebase rules, proxy endpoints, dependency management and standalone startup.
+
+## Phase 7 — Performance and monitoring
+
+Improve the existing cache and monitoring architecture.
+
+## Phase 8 — Testing and deployment readiness
+
+Run all available checks and validate production build behavior.
+
+Do not skip phases silently.
+
+If the available environment prevents a phase from being completed, document the exact limitation.
+
+# 21. STRICT ACCEPTANCE CRITERIA
+
+The task is complete only when the following conditions are met:
+
+### Hoshika
+
+- No uncontrolled request storms.
+- HTTP 429 triggers a shared process-level cooldown.
+- Background refreshes are suppressed during cooldown.
+- Retry-After is respected.
+- Existing cached data remains usable.
+- The application does not repeatedly retry rate-limited requests.
+
+### Catalogue
+
+- Homepage does not completely fail when one catalogue endpoint fails.
+- Cached content is preserved.
+- AniList fallback works when Hoshika is unavailable.
+- Admin-curated content is preserved.
+
+### Anime details
+
+- Correct anime titles and metadata display.
+- Hoshika IDs remain distinct from AniList IDs.
+- Incorrect title matches are rejected.
+- Temporary upstream errors do not become false 404 responses.
+
+### Episodes
+
+- Pagination works beyond 50, 100 and 150 episodes.
+- Direct high-episode navigation works.
+- No duplicates or missing pagination ranges.
+- Cached episodes survive temporary upstream failures.
+- No fabricated episode metadata.
+
+### Streaming
+
+- TV routing remains MegaPlay.
+- Movie routing remains ZokoAnime.
+- Sub/Dub availability remains accurate.
+- Quality switching works.
+- Subtitle preferences persist.
+- AniSkip remains functional.
+- Existing player controls and UI remain intact.
+
+### Security
+
+- Admin authorization is enforced server-side.
+- Firestore default-deny behavior remains intact.
+- No client-side privilege escalation.
+- Proxy endpoints reject unsafe URLs.
+- No sensitive credentials are exposed.
+
+### Deployment
+
+- Lockfile matches package.json.
+- Clean Linux dependency installation succeeds.
+- TypeScript checks pass.
+- ESLint passes.
+- Tests pass.
+- Production build succeeds.
+- Standalone startup works.
+
+# 22. FINAL REPORT
+
+After completing the work, provide a detailed report.
+
+Include:
+
+1. Problems discovered.
+2. Problems fixed.
+3. Files changed.
+4. New files created.
+5. Existing features preserved.
+6. New fallback behavior.
+7. Rate-limit implementation details.
+8. Cache improvements.
+9. Security improvements.
+10. Tests added.
+11. Tests actually executed.
+12. Build result.
+13. Remaining issues.
+14. External services that could not be verified.
+15. Required environment variable changes, if any.
+16. Exact deployment commands for the VPS.
+
+For every test, clearly distinguish:
+
+- PASS — actually executed and passed.
+- FAIL — actually executed and failed.
+- NOT RUN — not executed.
+- BLOCKED — could not run due to an external limitation.
+
+Do not claim that production services work based only on mocked tests.
+
+Do not claim the repository is fully production-ready if any critical acceptance criteria remain unmet.
+
+# FINAL INSTRUCTION
+
+Start by inspecting the actual repository and its current branch.
+
+Then implement the repairs directly, carefully and incrementally.
+
+Do not stop at a plan.
+
+Do not rewrite the entire application.
+
+Do not redesign AniScroll.
+
+Do not remove working features.
+
+Do not replace real data with mock data in production.
+
+The final result must be a more reliable, secure, maintainable and production-ready version of the existing AniScroll website, with its current design and functionality preserved.

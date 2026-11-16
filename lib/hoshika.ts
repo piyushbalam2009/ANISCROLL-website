@@ -37,7 +37,19 @@ import {
   validateHoshikaItemsPayload,
   validateHoshikaSearchPayload,
 } from './hoshika-mapper';
-import { AniListMedia, getAniListById, searchAniListWithFallback } from './anilist';
+import {
+  AniListMedia,
+  getAniListById,
+  getAniListCatalogFallback,
+  getAniListPopular,
+  getAniListSeasonal,
+  getAniListTrending,
+  searchAniListWithFallback,
+} from './anilist';
+import {
+  recordEpisodeFailure,
+  recordFallbackUsage,
+} from './perf-monitor';
 import {
   HoshikaAnimeItem,
   HoshikaEpisodeItem,
@@ -253,6 +265,30 @@ export async function searchHoshikaDetailed(
   });
 
   if (!res.ok) {
+    try {
+      const anilistItems = await searchAniListWithFallback(trimmedQuery, format);
+      const parsedYear = year ? Number(year) : null;
+      const filteredMedia =
+        parsedYear && Number.isFinite(parsedYear)
+          ? anilistItems.filter(
+              (m) =>
+                (m.seasonYear || m.startDate?.year) === parsedYear
+            )
+          : anilistItems;
+      if (filteredMedia.length > 0) {
+        recordFallbackUsage('anilist');
+        const mappedFallback = mapAniListMediaListToHoshikaItems(
+          filteredMedia.slice(0, requestedLimit)
+        );
+        return {
+          ok: true,
+          items: mappedFallback,
+          fromCache: false,
+        };
+      }
+    } catch {
+      // Fall through to original Hoshika error when AniList also fails
+    }
     return { ok: false, items: [], fromCache: false, error: res.error };
   }
 
@@ -376,7 +412,7 @@ export interface ResolveAnimeDetailOutcome {
   error?: HoshikaErrorDetails;
 }
 
-function mapAniListMediaToFallbackAnime(
+export function mapAniListMediaToFallbackAnime(
   shortId: number,
   media: AniListMedia,
   summary?: HoshikaAnimeItem | null
@@ -428,9 +464,30 @@ function mapAniListMediaToFallbackAnime(
             slug: name.toLowerCase().replace(/[\s_]+/g, '-'),
           }))
         : summary?.genres,
+    studios:
+      Array.isArray((media as any).studios?.nodes) &&
+      (media as any).studios.nodes.length > 0
+        ? (media as any).studios.nodes
+            .map((s: any) => (typeof s?.name === 'string' ? s.name.trim() : ''))
+            .filter(Boolean)
+        : summary?.studios,
     anilistId: media.id || summary?.anilistId || null,
     malId: media.idMal || summary?.malId || null,
   };
+}
+
+export function mapAniListMediaListToHoshikaItems(
+  mediaList: AniListMedia[]
+): HoshikaAnimeItem[] {
+  const items: HoshikaAnimeItem[] = [];
+  for (const media of mediaList) {
+    if (!media || typeof media.id !== 'number' || media.id <= 0) continue;
+    const summary = getCachedHoshikaSummary(media.id);
+    const shortId = summary?.shortId || media.id;
+    items.push(mapAniListMediaToFallbackAnime(shortId, media, summary));
+  }
+  cacheHoshikaSummaries(items);
+  return items;
 }
 
 /**
@@ -563,6 +620,7 @@ export async function resolveAnimeDetailById(
         forceRefresh: false,
       });
       if (fallbackAnime) {
+        recordFallbackUsage('anilist');
         return {
           ok: true,
           status: 'found',
@@ -722,14 +780,14 @@ export async function getHoshikaEpisodesDetailed(
   });
   const cacheKey = `hoshika:/anime/${cleanId}/episodes?${epParams.toString()}`;
 
-  return fetchHoshikaCached<HoshikaEpisodesPageResult>({
+  const res = await fetchHoshikaCached<HoshikaEpisodesPageResult>({
     endpoint,
     cacheKey,
     cacheTtlSeconds: 900,
     staleWhileRevalidateSeconds: 1800,
     forceRefresh,
     validator: validateHoshikaEpisodesPayload,
-    shouldCache: (res) => Array.isArray(res.items) && res.items.length > 0,
+    shouldCache: (r) => Array.isArray(r.items) && r.items.length > 0,
     mapper: (raw) => {
       const obj = raw as Record<string, any>;
       const items = mapHoshikaEpisodeList(obj.items);
@@ -744,6 +802,10 @@ export async function getHoshikaEpisodesDetailed(
       return { items, total, nextAfter };
     },
   });
+  if (!res.ok) {
+    recordEpisodeFailure();
+  }
+  return res;
 }
 
 export async function getHoshikaEpisodes(
@@ -915,7 +977,7 @@ export async function getHoshikaHomeDetailed(
   const endpoint = HOSHIKA_ENDPOINTS.home(safeLocale);
   const cacheKey = `hoshika:/home?locale=${safeLocale}`;
 
-  return fetchHoshikaCached<HoshikaHomeData>({
+  const res = await fetchHoshikaCached<HoshikaHomeData>({
     endpoint,
     cacheKey,
     cacheTtlSeconds: 300,
@@ -937,6 +999,45 @@ export async function getHoshikaHomeDetailed(
       };
     },
   });
+
+  if (res.ok) {
+    return res;
+  }
+
+  // Fallback to AniList for Trending + Seasonal when Hoshika /home is rate-limited or unavailable.
+  // Never fabricate recentlyAdded dates or episodes from AniList.
+  try {
+    const [trendingPage, seasonalPage] = await Promise.all([
+      getAniListTrending(1, 20).catch(() => null),
+      getAniListSeasonal({ page: 1, perPage: 20 }).catch(() => null),
+    ]);
+    const trendingItems = trendingPage?.items
+      ? mapAniListMediaListToHoshikaItems(trendingPage.items)
+      : [];
+    const seasonalItems = seasonalPage?.items
+      ? mapAniListMediaListToHoshikaItems(seasonalPage.items)
+      : [];
+
+    if (trendingItems.length > 0 || seasonalItems.length > 0) {
+      recordFallbackUsage('anilist');
+      return {
+        ok: true,
+        fromCache: false,
+        data: {
+          season: seasonalPage
+            ? { season: seasonalPage.season, year: seasonalPage.year }
+            : null,
+          seasonal: seasonalItems,
+          trending: trendingItems,
+          recentlyAdded: [],
+        },
+      };
+    }
+  } catch {
+    // Fall through to original error
+  }
+
+  return res;
 }
 
 export async function getHoshikaHome(
@@ -963,7 +1064,7 @@ export async function getHoshikaBrowseDetailed(
 ): Promise<HoshikaResult<HoshikaAnimeItem[]>> {
   const ttl = sort === 'top' ? 600 : 300;
   const endpoint = HOSHIKA_ENDPOINTS.browse({ sort, type, locale });
-  return fetchHoshikaCached<HoshikaAnimeItem[]>({
+  const res = await fetchHoshikaCached<HoshikaAnimeItem[]>({
     endpoint,
     cacheKey: `hoshika:${endpoint}`,
     cacheTtlSeconds: ttl,
@@ -977,6 +1078,32 @@ export async function getHoshikaBrowseDetailed(
       return items;
     },
   });
+
+  if (res.ok) {
+    return res;
+  }
+
+  // AniList fallback for 'trending' and 'top' ('popular'). Never invent 'recent' episode update timestamps.
+  if (sort === 'trending' || sort === 'top') {
+    try {
+      const fallbackPage =
+        sort === 'trending'
+          ? await getAniListTrending(1, 30)
+          : await getAniListPopular(1, 30);
+      if (fallbackPage.items.length > 0) {
+        recordFallbackUsage('anilist');
+        return {
+          ok: true,
+          fromCache: false,
+          data: mapAniListMediaListToHoshikaItems(fallbackPage.items),
+        };
+      }
+    } catch {
+      // Fall through to original Hoshika error
+    }
+  }
+
+  return res;
 }
 
 export async function getHoshikaBrowse(
@@ -1082,6 +1209,36 @@ export async function getHoshikaCatalog(
 
       const firstResponse = upstreamResponses[0];
       if (!firstResponse || !firstResponse.ok) {
+        try {
+          const fallbackPage = await getAniListCatalogFallback({
+            q: normalized.q,
+            genre: normalized.genre,
+            format: normalized.format,
+            status: normalized.status,
+            year: normalized.year,
+            season: normalized.season,
+            sort: normalized.requestedSort,
+            page: windowInfo.currentPage,
+            perPage: windowInfo.perPage,
+          });
+          if (fallbackPage.items.length > 0) {
+            recordFallbackUsage('anilist');
+            const mappedItems = mapAniListMediaListToHoshikaItems(fallbackPage.items);
+            const filtered = processCatalogItems(mappedItems, {
+              requestedSort: normalized.requestedSort,
+              minScore: normalized.minScore,
+            });
+            return buildPaginatedResponse({
+              results: filtered,
+              currentPage: windowInfo.currentPage,
+              perPage: windowInfo.perPage,
+              totalItems: Math.max(fallbackPage.total, filtered.length),
+              hasNextPageFallback: fallbackPage.hasNextPage,
+            });
+          }
+        } catch {
+          // Fall through to original Hoshika error when AniList also fails
+        }
         if (firstResponse && !firstResponse.ok) {
           throw new HoshikaUpstreamError(firstResponse.error);
         }
@@ -1217,6 +1374,23 @@ export async function getHoshikaBrowsePaginated(
         'en'
       );
       if (!browseRes.ok) {
+        if (category === 'trending' || category === 'popular') {
+          const fallbackPage =
+            category === 'trending'
+              ? await getAniListTrending(currentPage, perPage).catch(() => null)
+              : await getAniListPopular(currentPage, perPage).catch(() => null);
+          if (fallbackPage && fallbackPage.items.length > 0) {
+            recordFallbackUsage('anilist');
+            const mapped = mapAniListMediaListToHoshikaItems(fallbackPage.items);
+            return buildPaginatedResponse({
+              results: mapped.slice(0, perPage),
+              currentPage,
+              perPage,
+              totalItems: Math.max(fallbackPage.total, mapped.length),
+              hasNextPageFallback: fallbackPage.hasNextPage,
+            });
+          }
+        }
         throw new HoshikaUpstreamError(browseRes.error);
       }
       const browseItems = browseRes.data;

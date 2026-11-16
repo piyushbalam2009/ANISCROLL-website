@@ -384,7 +384,11 @@ export function WatchPageClient({
   }, [anime.shortId]);
 
   const effectiveFormat = idMapping?.format || anime.format || null;
-  const expectedProvider = selectStreamingProvider({ format: effectiveFormat });
+  const isStandaloneMovie = Boolean(anime.isStandaloneMovie || anime.standaloneMovie);
+  const expectedProvider = selectStreamingProvider({
+    format: effectiveFormat,
+    isStandaloneMovie,
+  });
   const expectedProviderLabel = getStreamingProviderDisplayName(expectedProvider);
 
   // Fetch Episode-Specific Sub/Dub Availability & Routed Provider Stream (MegaPlay for Series, ZokoAnime for Movies)
@@ -395,7 +399,10 @@ export function WatchPageClient({
     const controller = new AbortController();
     let isMounted = true;
     const resolvedFormat = idMapping?.format || anime.format || null;
-    const routedProvider = selectStreamingProvider({ format: resolvedFormat });
+    const routedProvider = selectStreamingProvider({
+      format: resolvedFormat,
+      isStandaloneMovie,
+    });
     const routedProviderLabel = getStreamingProviderDisplayName(routedProvider);
 
     async function loadEpisodeAvailabilityAndStream() {
@@ -479,8 +486,9 @@ export function WatchPageClient({
         const formatQuery = resolvedFormat
           ? `&format=${encodeURIComponent(resolvedFormat)}`
           : '';
+        const standaloneQuery = isStandaloneMovie ? '&standaloneMovie=true' : '';
         const res = await fetch(
-          `/api/stream?anilistId=${anilistId}&episode=${episodeNumber}&hoshikaId=${anime.shortId}${formatQuery}&type=${effectivePreferred}&preferredType=${effectivePreferred}&provider=${routedProvider}`,
+          `/api/stream?anilistId=${anilistId}&episode=${episodeNumber}&hoshikaId=${anime.shortId}${formatQuery}${standaloneQuery}&type=${effectivePreferred}&preferredType=${effectivePreferred}&provider=${routedProvider}`,
           { signal: controller.signal, cache: 'no-store' }
         );
         const data = (await res.json().catch(() => null)) as Record<string, any> | null;
@@ -624,6 +632,7 @@ export function WatchPageClient({
     idMapping?.format,
     anime.format,
     anime.shortId,
+    isStandaloneMovie,
     episodeNumber,
     retryCounter,
     expectedProviderLabel,
@@ -752,6 +761,7 @@ export function WatchPageClient({
             anilistId={idMapping?.anilistId ?? anime.anilistId ?? null}
             animeTitle={title}
             animeFormat={effectiveFormat}
+            isStandaloneMovie={isStandaloneMovie}
             coverImage={anime.coverImage || undefined}
             bannerImage={anime.bannerImage || undefined}
             episodeNumber={episodeNumber}

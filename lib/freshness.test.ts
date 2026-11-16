@@ -128,6 +128,7 @@ describe('Artwork Cache & Mapper — Signature Invalidation, Versioning & Admin 
       logoUrl: null,
       logoSource: 'typography',
       posterUrl: 'https://cdn.hoshika.app/cover-v1.jpg',
+      characterArtUrl: null,
       source: 'hoshika',
       fetchedAt: Date.now(),
     };
@@ -160,6 +161,7 @@ describe('Artwork Cache & Mapper — Signature Invalidation, Versioning & Admin 
       logoUrl: 'https://cdn.hoshika.app/logo-old.png',
       logoSource: 'custom_upload',
       posterUrl: null,
+      characterArtUrl: null,
       source: 'custom_override',
       fetchedAt: Date.now(),
     };
@@ -263,6 +265,7 @@ describe('Episode Store — Expiration, Metadata Updates & Force Refresh', () =>
       555,
       [
         {
+          id: '555-1',
           number: 1,
           title: 'Episode 1',
           thumbnail: 'https://cdn.hoshika.app/ep1-old.jpg',
@@ -277,6 +280,7 @@ describe('Episode Store — Expiration, Metadata Updates & Force Refresh', () =>
       555,
       [
         {
+          id: '555-1',
           number: 1,
           title: 'Cruelty',
           thumbnail: 'https://cdn.hoshika.app/ep1-new.jpg',
@@ -298,7 +302,7 @@ describe('Episode Store — Expiration, Metadata Updates & Force Refresh', () =>
     try {
       cacheEpisodes(
         777,
-        [{ number: 1, title: 'Pilot', thumbnail: null }],
+        [{ id: '777-1', number: 1, title: 'Pilot', thumbnail: null }],
         { language: 'sub', limit: 50, total: 12, nextAfter: null }
       );
       assert.equal(isRangeCached(777, 1, 50, 'sub'), true);

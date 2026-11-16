@@ -1,0 +1,40 @@
+name: AniScroll CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  verify:
+    name: Typecheck, Lint, Unit Tests & Production Build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies cleanly
+        run: npm ci
+
+      - name: Run TypeScript typecheck
+        run: npx tsc --noEmit
+
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Run unit test suite
+        run: npx --yes tsx --test lib/*.test.ts firestore.rules.test.ts
+
+      - name: Build production standalone bundle
+        run: npm run build
+        env:
+          APP_URL: https://aniscroll.in
+          NEXT_PUBLIC_SITE_URL: https://aniscroll.in

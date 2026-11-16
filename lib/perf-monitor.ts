@@ -85,9 +85,13 @@ export interface TelemetryTimeBucket {
 export interface PerfSummaryStats {
   totalCalls: number;
   cacheHits: number;
+  cacheHitRatePct: number;
   staleHits: number;
   deduplicatedCalls: number;
   externalNetworkCalls: number;
+  anilistFallbackCount: number;
+  episodeFailureCount: number;
+  streamFailureCount: number;
   errorsByCode: Record<string, number>;
   avgExternalDurationMs: number;
   p50ExternalDurationMs: number;
@@ -111,6 +115,23 @@ const MAX_RECENT_ERRORS = 200;
 const recentMetrics: UpstreamCallMetric[] = [];
 const recentErrors: RecordedErrorEvent[] = [];
 let lastRateLimitWarnAtMs = 0;
+let anilistFallbackCounter = 0;
+let episodeFailureCounter = 0;
+let streamFailureCounter = 0;
+
+export function recordFallbackUsage(provider: 'anilist' = 'anilist'): void {
+  if (provider === 'anilist') {
+    anilistFallbackCounter++;
+  }
+}
+
+export function recordEpisodeFailure(): void {
+  episodeFailureCounter++;
+}
+
+export function recordStreamFailure(): void {
+  streamFailureCounter++;
+}
 
 const isDevLoggingEnabled =
   typeof process !== 'undefined' &&
@@ -418,12 +439,19 @@ export function getPerfSummaryStats(windowMs?: number): PerfSummaryStats {
     }
   }
 
+  const cacheHitRatePct =
+    scoped.length > 0 ? Math.round((cacheHits / scoped.length) * 100) : 0;
+
   return {
     totalCalls: scoped.length,
     cacheHits,
+    cacheHitRatePct,
     staleHits,
     deduplicatedCalls,
     externalNetworkCalls,
+    anilistFallbackCount: anilistFallbackCounter,
+    episodeFailureCount: episodeFailureCounter,
+    streamFailureCount: streamFailureCounter,
     errorsByCode,
     avgExternalDurationMs:
       externalNetworkCalls > 0
@@ -603,4 +631,7 @@ export function resetPerfMetrics(): void {
   recentMetrics.length = 0;
   recentErrors.length = 0;
   lastRateLimitWarnAtMs = 0;
+  anilistFallbackCounter = 0;
+  episodeFailureCounter = 0;
+  streamFailureCounter = 0;
 }

@@ -48,13 +48,13 @@ export function isMovieContent(params: {
 }): boolean {
   const normalized = normalizeAnimeFormat(params.format);
   if (normalized === 'MOVIE') return true;
-  if (normalized === 'SPECIAL' && params.isStandaloneMovie === true) return true;
+  if (params.isStandaloneMovie === true) return true;
   return false;
 }
 
 /**
  * Centralized, deterministic streaming provider router:
- * - Anime movies (`MOVIE`, or `SPECIAL` explicitly flagged as standalone movie) -> `zokoanime`
+ * - Anime movies (`MOVIE`, or explicitly flagged `isStandaloneMovie`) -> `zokoanime`
  * - Anime series (`TV`, `TV_SHORT`, `OVA`, `ONA`, `SPECIAL`) -> `megaplay`
  * - Unknown / missing format -> `zokoanime` (safe default so a movie is never accidentally routed to MegaPlay)
  */
@@ -64,11 +64,7 @@ export function selectStreamingProvider(params: {
 }): StreamingProvider {
   const normalized = normalizeAnimeFormat(params.format);
 
-  if (normalized === 'MOVIE') {
-    return 'zokoanime';
-  }
-
-  if (normalized === 'SPECIAL' && params.isStandaloneMovie === true) {
+  if (normalized === 'MOVIE' || params.isStandaloneMovie === true) {
     return 'zokoanime';
   }
 

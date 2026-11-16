@@ -130,7 +130,10 @@ export interface HoshikaCooldownState {
   lastRateLimitReason: string | null;
 }
 
+export type HoshikaCooldownMode = 'redis_rest' | 'process_local';
+
 export interface HoshikaClientStatus {
+  cooldownMode: HoshikaCooldownMode;
   cooldown: HoshikaCooldownState;
   concurrency: {
     activeRequests: number;
@@ -252,6 +255,7 @@ export function resetHoshikaClientState(): void {
 
   lastRateLimitLogAtMs = 0;
   suppressedRateLimitLogs = 0;
+  lastDistributedCooldownSyncAtMs = 0;
 
   activeRequests = 0;
   activeBackgroundRequests = 0;
@@ -262,6 +266,71 @@ export function resetHoshikaClientState(): void {
   }
   inFlightByUrl.clear();
   rateLimitConfig = { ...DEFAULT_RATE_LIMIT_CONFIG };
+}
+
+const DISTRIBUTED_COOLDOWN_KEY = 'aniscroll:hoshika:cooldown_until';
+const DISTRIBUTED_SYNC_INTERVAL_MS = 2000;
+let lastDistributedCooldownSyncAtMs = 0;
+
+function getDistributedRedisConfig(): { url: string; token: string } | null {
+  if (typeof process === 'undefined' || process.env.NODE_ENV === 'test') {
+    return null;
+  }
+  const url = (process.env.UPSTASH_REDIS_REST_URL || '').trim().replace(/\/+$/, '');
+  const token = (process.env.UPSTASH_REDIS_REST_TOKEN || '').trim();
+  if (!url || !token || !url.startsWith('https://')) {
+    return null;
+  }
+  return { url, token };
+}
+
+export function getHoshikaCooldownMode(): HoshikaCooldownMode {
+  return getDistributedRedisConfig() ? 'redis_rest' : 'process_local';
+}
+
+function publishDistributedCooldown(targetCooldownUntilMs: number, ttlMs: number): void {
+  const cfg = getDistributedRedisConfig();
+  if (!cfg) return;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1000);
+  const px = Math.max(1000, Math.round(ttlMs));
+  fetch(
+    `${cfg.url}/set/${encodeURIComponent(DISTRIBUTED_COOLDOWN_KEY)}/${targetCooldownUntilMs}/PX/${px}`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${cfg.token}` },
+      signal: controller.signal,
+      cache: 'no-store',
+    }
+  )
+    .catch(() => undefined)
+    .finally(() => clearTimeout(timer));
+}
+
+function syncDistributedCooldownInBackground(): void {
+  const cfg = getDistributedRedisConfig();
+  if (!cfg) return;
+  const now = Date.now();
+  if (now - lastDistributedCooldownSyncAtMs < DISTRIBUTED_SYNC_INTERVAL_MS) return;
+  lastDistributedCooldownSyncAtMs = now;
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 1000);
+  fetch(`${cfg.url}/get/${encodeURIComponent(DISTRIBUTED_COOLDOWN_KEY)}`, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${cfg.token}` },
+    signal: controller.signal,
+    cache: 'no-store',
+  })
+    .then((res) => (res.ok ? res.json() : null))
+    .then((json: any) => {
+      const remoteUntil = Number(json?.result);
+      if (Number.isFinite(remoteUntil) && remoteUntil > Date.now() && remoteUntil > cooldownUntilMs) {
+        cooldownUntilMs = remoteUntil;
+      }
+    })
+    .catch(() => undefined)
+    .finally(() => clearTimeout(timer));
 }
 
 /**
@@ -341,7 +410,9 @@ export function getHoshikaCooldownState(nowMs: number = Date.now()): HoshikaCool
 }
 
 export function getHoshikaClientStatus(): HoshikaClientStatus {
+  syncDistributedCooldownInBackground();
   return {
+    cooldownMode: getHoshikaCooldownMode(),
     cooldown: getHoshikaCooldownState(),
     concurrency: {
       activeRequests,
@@ -631,6 +702,7 @@ function recordHoshika429(params: {
   }
 
   const effectiveRemainingMs = Math.max(cooldownMs, cooldownUntilMs - now);
+  publishDistributedCooldown(cooldownUntilMs, effectiveRemainingMs);
   const cooldownUntilIso = new Date(cooldownUntilMs).toISOString();
   const reason = params.reason || 'Upstream HTTP 429 rate_limited';
   lastRateLimitReason = reason;
@@ -1251,6 +1323,7 @@ export async function executeHoshikaRequest<T = any>(
   const priority: HoshikaRequestPriority = options.priority || 'foreground';
 
   // 1. Short-circuit immediately during an active global 429 cooldown
+  syncDistributedCooldownInBackground();
   if (isHoshikaCooldownActive()) {
     const remainingMs = getHoshikaCooldownRemainingMs();
     shortCircitedByCooldown++;

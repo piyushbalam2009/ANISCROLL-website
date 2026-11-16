@@ -22,7 +22,10 @@ import {
   type DownloadProgressState,
   type DownloadQualityOption,
 } from '@/lib/hls-downloader';
-import { getStreamingProviderDisplayName } from '@/lib/stream-provider-core';
+import {
+  getStreamingProviderDisplayName,
+  selectStreamingProvider,
+} from '@/lib/stream-provider-core';
 
 interface PlayerDownloadPanelProps {
   isOpen: boolean;
@@ -32,6 +35,7 @@ interface PlayerDownloadPanelProps {
   anilistId?: number | null;
   animeTitle: string;
   animeFormat?: string | null;
+  isStandaloneMovie?: boolean;
   episodeNumber: number;
   activeType: 'sub' | 'dub';
   hasSub: boolean;
@@ -65,6 +69,7 @@ export function PlayerDownloadPanel({
   anilistId,
   animeTitle,
   animeFormat,
+  isStandaloneMovie = false,
   episodeNumber,
   activeType,
   hasSub,
@@ -168,8 +173,9 @@ export function PlayerDownloadPanel({
       const formatQuery = animeFormat
         ? `&format=${encodeURIComponent(animeFormat)}`
         : '';
+      const standaloneQuery = isStandaloneMovie ? '&standaloneMovie=true' : '';
       const res = await fetch(
-        `/api/stream?anilistId=${anilistId}&episode=${episodeNumber}&hoshikaId=${animeId}${formatQuery}&type=${audio}&preferredType=${audio}&checkBoth=false`,
+        `/api/stream?anilistId=${anilistId}&episode=${episodeNumber}&hoshikaId=${animeId}${formatQuery}${standaloneQuery}&type=${audio}&preferredType=${audio}&checkBoth=false`,
         { signal, cache: 'no-store' }
       );
       const data = (await res.json().catch(() => null)) as {
@@ -199,6 +205,7 @@ export function PlayerDownloadPanel({
       dubStream,
       episodeNumber,
       fetchedStreams,
+      isStandaloneMovie,
       subStream,
     ]
   );
@@ -321,9 +328,7 @@ export function PlayerDownloadPanel({
       : effectiveStreamForMeta?.provider === 'zokoanime' ||
         effectiveStreamForMeta?.source === 'zokoanime'
       ? 'zokoanime'
-      : animeFormat?.toUpperCase() === 'MOVIE'
-      ? 'zokoanime'
-      : 'megaplay';
+      : selectStreamingProvider({ format: animeFormat, isStandaloneMovie });
 
   const providerLabel = providerName
     ? getStreamingProviderDisplayName(providerName)
@@ -400,7 +405,7 @@ export function PlayerDownloadPanel({
 
   if (!isOpen) return null;
 
-  const isMovie = animeFormat?.toUpperCase() === 'MOVIE';
+  const isMovie = animeFormat?.toUpperCase() === 'MOVIE' || Boolean(isStandaloneMovie);
 
   return (
     <>

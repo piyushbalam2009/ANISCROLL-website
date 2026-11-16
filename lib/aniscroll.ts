@@ -1,6 +1,7 @@
 import { appCache } from './cache';
 import {
   classifyUpstreamError,
+  recordStreamFailure,
   recordUpstreamMetric,
   UpstreamErrorCode,
 } from './perf-monitor';
@@ -648,6 +649,8 @@ export async function getAniScrollStreamDetailed(
             staleWhileRevalidateSeconds: 0,
           }
         );
+      } else {
+        recordStreamFailure();
       }
 
       return {

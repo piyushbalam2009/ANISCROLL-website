@@ -59,8 +59,13 @@ export const RETRY_BASE_DELAYS_MS = [0, 3000, 6000, 12000, 24000] as const;
 
 const SESSION_CACHE_STORAGE_KEY = 'aniscroll_episode_query_cache_v2';
 
+export const MAX_ANIME_CACHE_ENTRIES = 100;
+export const MAX_QUERY_CACHE_ENTRIES = 300;
+export const MAX_RETRY_EXHAUSTED_ENTRIES = 200;
+
 // 1. Per-anime episode item lookup cache: animeId -> Map<episodeNumber, HoshikaEpisodeItem>
 const clientEpisodeCache: Record<string, Map<number, HoshikaEpisodeItem>> = {};
+const clientEpisodeLru = new Set<string>();
 
 // 2. Query-level cache keyed by structured cache key (e.g. `episodes:265992:sub:50`)
 const episodeQueryCache = new Map<string, CachedEpisodeQueryEntry>();
@@ -90,6 +95,63 @@ const attemptedEnrichments = new Set<string>();
 
 // 8. Client-side 429 cooldown to prevent episode retry storms across components
 let episodeRateLimitedUntilMs = 0;
+
+function touchAnimeCacheLru(animeKey: string): void {
+  clientEpisodeLru.delete(animeKey);
+  clientEpisodeLru.add(animeKey);
+  while (clientEpisodeLru.size > MAX_ANIME_CACHE_ENTRIES) {
+    const oldestKey = clientEpisodeLru.values().next().value;
+    if (!oldestKey) break;
+    clientEpisodeLru.delete(oldestKey);
+    delete clientEpisodeCache[oldestKey];
+    availabilityCache.delete(oldestKey);
+    exhaustedPaginationAnime.delete(`${oldestKey}:sub`);
+    exhaustedPaginationAnime.delete(`${oldestKey}:dub`);
+    for (const qk of Array.from(episodeQueryCache.keys())) {
+      if (qk.startsWith(`episodes:${oldestKey}:`)) {
+        episodeQueryCache.delete(qk);
+        completedBatchKeys.delete(qk);
+      }
+    }
+  }
+}
+
+function setEpisodeQueryCacheBounded(key: string, entry: CachedEpisodeQueryEntry): void {
+  episodeQueryCache.delete(key);
+  episodeQueryCache.set(key, entry);
+  while (episodeQueryCache.size > MAX_QUERY_CACHE_ENTRIES) {
+    const oldestQueryKey = episodeQueryCache.keys().next().value;
+    if (!oldestQueryKey) break;
+    episodeQueryCache.delete(oldestQueryKey);
+    completedBatchKeys.delete(oldestQueryKey);
+  }
+}
+
+function setAvailabilityCacheBounded(
+  animeKey: string,
+  entry: { result: EpisodeAvailabilityResult; expiresAt: number }
+): void {
+  availabilityCache.delete(animeKey);
+  availabilityCache.set(animeKey, entry);
+  while (availabilityCache.size > MAX_ANIME_CACHE_ENTRIES) {
+    const oldestKey = availabilityCache.keys().next().value;
+    if (!oldestKey) break;
+    availabilityCache.delete(oldestKey);
+  }
+}
+
+function setRetryExhaustedBounded(
+  cacheKey: string,
+  entry: { attempts: number; exhaustedAt: number; error: string }
+): void {
+  retryExhaustedState.delete(cacheKey);
+  retryExhaustedState.set(cacheKey, entry);
+  while (retryExhaustedState.size > MAX_RETRY_EXHAUSTED_ENTRIES) {
+    const oldestKey = retryExhaustedState.keys().next().value;
+    if (!oldestKey) break;
+    retryExhaustedState.delete(oldestKey);
+  }
+}
 
 export function getEpisodeClientCooldownRemainingMs(nowMs: number = Date.now()): number {
   return Math.max(0, episodeRateLimitedUntilMs - nowMs);
@@ -395,6 +457,7 @@ export function cacheEpisodes(
       map.set(ep.number, ep);
     }
   }
+  touchAnimeCacheLru(key);
 
   const lang = options?.language || 'sub';
   const limit = options?.limit || 50;
@@ -402,7 +465,7 @@ export function cacheEpisodes(
   const queryKey = buildEpisodeCacheKey({ animeId: key, language: lang, limit, after });
   const now = Date.now();
 
-  episodeQueryCache.set(queryKey, {
+  setEpisodeQueryCacheBounded(queryKey, {
     key: queryKey,
     animeId: key,
     language: lang,
@@ -432,7 +495,7 @@ export function cacheEpisodes(
   }
 
   if (options?.availability) {
-    availabilityCache.set(key, {
+    setAvailabilityCacheBounded(key, {
       result: options.availability,
       expiresAt: now + EPISODE_CACHE_TTL_MS,
     });
@@ -516,7 +579,7 @@ export function setCachedEpisodeAvailability(
     result.sub.status === 'resolved' ||
     result.dub.status === 'resolved'
   ) {
-    availabilityCache.set(key, {
+    setAvailabilityCacheBounded(key, {
       result,
       expiresAt: Date.now() + EPISODE_CACHE_TTL_MS,
     });
@@ -539,6 +602,7 @@ export function getRetryExhaustedInfo(
 export function invalidateAnimeEpisodeCache(animeId: string | number): void {
   const key = String(animeId);
   delete clientEpisodeCache[key];
+  clientEpisodeLru.delete(key);
   availabilityCache.delete(key);
 
   for (const k of Array.from(episodeQueryCache.keys())) {
@@ -568,6 +632,20 @@ export function getInFlightEpisodeRequestCount(): number {
   return inFlightBatchRequests.size;
 }
 
+export function getEpisodeStoreCacheSizes(): {
+  animeCount: number;
+  queryCount: number;
+  availabilityCount: number;
+  retryExhaustedCount: number;
+} {
+  return {
+    animeCount: Object.keys(clientEpisodeCache).length,
+    queryCount: episodeQueryCache.size,
+    availabilityCount: availabilityCache.size,
+    retryExhaustedCount: retryExhaustedState.size,
+  };
+}
+
 /**
  * Reset all in-memory stores (used by unit tests).
  */
@@ -575,6 +653,7 @@ export function resetEpisodeStoreForTests(): void {
   for (const k of Object.keys(clientEpisodeCache)) {
     delete clientEpisodeCache[k];
   }
+  clientEpisodeLru.clear();
   episodeQueryCache.clear();
   availabilityCache.clear();
   completedBatchKeys.clear();
@@ -900,7 +979,7 @@ export async function fetchEpisodeBatchWithMeta(
 
       // Max attempts reached or non-retryable error — do NOT permanently cache empty result as success,
       // but record retry exhaustion so re-renders do not automatically restart the retry loop.
-      retryExhaustedState.set(cacheKey, {
+      setRetryExhaustedBounded(cacheKey, {
         attempts: attempt,
         exhaustedAt: Date.now(),
         error: lastError,

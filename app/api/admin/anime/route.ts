@@ -62,7 +62,10 @@ export async function GET(req: NextRequest) {
     }
 
     const idMap = await resolveAnimeIds(id, anime).catch(() => null);
-    const provider = selectStreamingProvider({ format: anime.format });
+    const provider = selectStreamingProvider({
+      format: anime.format,
+      isStandaloneMovie: Boolean(anime.isStandaloneMovie || anime.standaloneMovie),
+    });
 
     return NextResponse.json({
       ok: true,
@@ -112,7 +115,10 @@ export async function GET(req: NextRequest) {
     const ov = artworkMap.get(item.shortId);
     return {
       ...item,
-      streamProvider: selectStreamingProvider({ format: item.format }),
+      streamProvider: selectStreamingProvider({
+        format: item.format,
+        isStandaloneMovie: Boolean(item.isStandaloneMovie || item.standaloneMovie),
+      }),
       artworkStatus: ov
         ? {
             logoStatus: ov.logoStatus || 'valid',

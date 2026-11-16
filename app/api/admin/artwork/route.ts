@@ -37,18 +37,25 @@ import {
 let isScanningCatalogue = false;
 
 export async function GET(req: NextRequest) {
+  const verified = await verifyAdminRequest(req);
+  if (!verified) {
+    return NextResponse.json(
+      { ok: false, error: 'Unauthorized: Valid administrator token required' },
+      { status: 401 }
+    );
+  }
+  if (!hasAdminPermission(verified.admin, 'manageArtwork')) {
+    return NextResponse.json(
+      { ok: false, error: 'Forbidden: Administrator lacks manageArtwork permission' },
+      { status: 403 }
+    );
+  }
+
   const { searchParams } = new URL(req.url);
   const action = searchParams.get('action');
 
   // 1. Admin AniList ID Lookup & Verification Tool (in-memory only, zero Firebase persistence)
   if (action === 'search_anilist') {
-    const verified = await verifyAdminRequest(req);
-    if (!verified) {
-      return NextResponse.json(
-        { ok: false, error: 'Unauthorized: Valid administrator token required' },
-        { status: 401 }
-      );
-    }
 
     const q = searchParams.get('q')?.trim() || '';
     if (!q) {
@@ -349,6 +356,15 @@ export async function POST(req: NextRequest) {
 
   try {
     if (action === 'invalidate_cache') {
+      if (!hasAdminPermission(verified.admin, 'manageArtwork')) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: 'Forbidden: Administrator lacks manageArtwork permission',
+          },
+          { status: 403 }
+        );
+      }
       const hoshikaId = Number(body?.hoshikaId);
       if (Number.isFinite(hoshikaId) && hoshikaId > 0) {
         invalidateCachedArtwork(hoshikaId);
@@ -549,6 +565,15 @@ export async function POST(req: NextRequest) {
 
     // Session-only preview of an AniList candidate (resolves TVDB/TMDB via ani.zip + Fanart logos in memory)
     if (action === 'preview_anilist_candidate') {
+      if (!hasAdminPermission(verified.admin, 'manageArtwork')) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: 'Forbidden: Administrator lacks manageArtwork permission',
+          },
+          { status: 403 }
+        );
+      }
       const hoshikaId = Number(body?.hoshikaId);
       const candidateAnilistId = Number(body?.anilistId);
       if (
@@ -600,6 +625,15 @@ export async function POST(req: NextRequest) {
     }
 
     if (action === 'scan_catalogue') {
+      if (!hasAdminPermission(verified.admin, 'manageArtwork')) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: 'Forbidden: Administrator lacks manageArtwork permission',
+          },
+          { status: 403 }
+        );
+      }
       if (isScanningCatalogue) {
         return NextResponse.json(
           { ok: false, error: 'A catalogue artwork scan is already in progress' },

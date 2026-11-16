@@ -9,6 +9,7 @@ import {
   CheckCircle2,
   ShieldCheck,
   AlertTriangle,
+  Activity,
 } from 'lucide-react';
 import { getAdminAuthHeaders } from '@/lib/admin/admin-auth';
 import { AdminStatusBadge, StatusTone } from '@/components/admin/ui/AdminStatusBadge';
@@ -28,19 +29,63 @@ interface ServiceHealthProbe {
 
 interface ProviderTelemetryRow {
   provider: string;
-  requests: number;
+  calls?: number;
+  requests?: number;
   errors: number;
   errorRatePct: number;
   cacheHitRatePct: number;
-  p50Ms: number | null;
-  p95Ms: number | null;
-  lastError: string | null;
+  avgDurationMs?: number;
+  p50DurationMs?: number;
+  p95DurationMs?: number;
+  p50Ms?: number | null;
+  p95Ms?: number | null;
+  lastErrorCode?: string | null;
+  lastError?: string | null;
+}
+
+interface PerfSummaryStats {
+  totalCalls: number;
+  cacheHits: number;
+  cacheHitRatePct: number;
+  staleHits: number;
+  deduplicatedCalls: number;
+  externalNetworkCalls: number;
+  anilistFallbackCount: number;
+  episodeFailureCount: number;
+  streamFailureCount: number;
+  errorsByCode: Record<string, number>;
+  avgExternalDurationMs: number;
+  p50ExternalDurationMs: number;
+  p95ExternalDurationMs: number;
+}
+
+interface HoshikaClientStatus {
+  cooldownMode?: 'redis_rest' | 'process_local';
+  cooldown: {
+    active: boolean;
+    cooldownUntil: string | null;
+    remainingMs: number;
+    consecutiveRateLimits: number;
+    lastRateLimitAt: string | null;
+    lastRateLimitReason: string | null;
+  };
+  metrics: {
+    totalRequestsAttempted: number;
+    total429Responses: number;
+    shortCircitedByCooldown: number;
+    dedupedInFlightCount: number;
+    suppressedBackgroundCount: number;
+    rejectedQueueCount: number;
+    lastSuccessfulRequestAt: string | null;
+  };
 }
 
 interface MonitoringResponse {
   ok: boolean;
   checkedAt: string;
   probes: ServiceHealthProbe[];
+  perfSummary?: PerfSummaryStats;
+  hoshikaStatus?: HoshikaClientStatus;
   providerTelemetry: ProviderTelemetryRow[];
   environment: {
     fanartConfigured: boolean;
@@ -142,6 +187,9 @@ export default function AdminMonitoringPage() {
   }));
 
   const operationalCount = probes.filter((p) => p.status === 'operational').length;
+  const hoshika = data?.hoshikaStatus;
+  const perf = data?.perfSummary;
+  const errorEntries = perf?.errorsByCode ? Object.entries(perf.errorsByCode) : [];
 
   return (
     <div className="space-y-6">
@@ -192,6 +240,95 @@ export default function AdminMonitoringPage() {
           {errorMsg}
         </div>
       )}
+
+      {/* Hoshika Cooldown & Rate-Limit Protection Telemetry */}
+      <div className="bg-[#0A0A0A] border border-[#292929] rounded-xl p-5 space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-2 text-sm font-bold text-white">
+            <Activity size={16} />
+            <span>Hoshika Rate-Limit &amp; Cache Resilience</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs font-mono">
+            <span className="text-[#A0A0A0]">Cooldown Mode:</span>
+            <span className="px-2 py-0.5 rounded bg-[#141414] border border-[#292929] text-white">
+              {hoshika?.cooldownMode === 'redis_rest' ? 'DISTRIBUTED (REDIS)' : 'PROCESS-LOCAL'}
+            </span>
+            <AdminStatusBadge
+              tone={hoshika?.cooldown?.active ? 'degraded' : 'operational'}
+              label={
+                hoshika?.cooldown?.active
+                  ? `Cooldown (${Math.ceil((hoshika.cooldown.remainingMs || 0) / 1000)}s)`
+                  : 'Ready'
+              }
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 xl:grid-cols-8 gap-3 text-xs font-mono tabular-nums">
+          <div className="p-3 rounded-lg bg-[#141414] border border-[#292929]">
+            <div className="text-[10px] uppercase text-[#707070]">Hoshika Requests</div>
+            <div className="text-base font-bold text-white mt-1">
+              {hoshika?.metrics?.totalRequestsAttempted ?? 0}
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-[#141414] border border-[#292929]">
+            <div className="text-[10px] uppercase text-[#707070]">Hoshika 429s</div>
+            <div className="text-base font-bold text-white mt-1">
+              {hoshika?.metrics?.total429Responses ?? 0}
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-[#141414] border border-[#292929]">
+            <div className="text-[10px] uppercase text-[#707070]">Cache Hit Rate</div>
+            <div className="text-base font-bold text-white mt-1">
+              {perf ? `${perf.cacheHitRatePct}%` : '—'}
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-[#141414] border border-[#292929]">
+            <div className="text-[10px] uppercase text-[#707070]">Stale Served</div>
+            <div className="text-base font-bold text-white mt-1">
+              {perf?.staleHits ?? 0}
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-[#141414] border border-[#292929]">
+            <div className="text-[10px] uppercase text-[#707070]">AniList Fallbacks</div>
+            <div className="text-base font-bold text-white mt-1">
+              {perf?.anilistFallbackCount ?? 0}
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-[#141414] border border-[#292929]">
+            <div className="text-[10px] uppercase text-[#707070]">Episode Failures</div>
+            <div className="text-base font-bold text-white mt-1">
+              {perf?.episodeFailureCount ?? 0}
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-[#141414] border border-[#292929]">
+            <div className="text-[10px] uppercase text-[#707070]">Stream Failures</div>
+            <div className="text-base font-bold text-white mt-1">
+              {perf?.streamFailureCount ?? 0}
+            </div>
+          </div>
+          <div className="p-3 rounded-lg bg-[#141414] border border-[#292929]">
+            <div className="text-[10px] uppercase text-[#707070]">Avg Upstream</div>
+            <div className="text-base font-bold text-white mt-1">
+              {perf ? `${perf.avgExternalDurationMs}ms` : '—'}
+            </div>
+          </div>
+        </div>
+
+        {errorEntries.length > 0 && (
+          <div className="pt-2 border-t border-[#292929] flex flex-wrap items-center gap-2 text-[11px] font-mono">
+            <span className="text-[#707070] uppercase">Error Distribution:</span>
+            {errorEntries.map(([code, count]) => (
+              <span
+                key={code}
+                className="px-2 py-0.5 rounded bg-[#141414] border border-[#292929] text-[#A0A0A0]"
+              >
+                {code}: <strong className="text-white">{count}</strong>
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
 
       {/* Environment Readiness Flags (Booleans only, zero secrets) */}
       <div className="bg-[#0A0A0A] border border-[#292929] rounded-xl p-5 flex flex-wrap items-center justify-between gap-4">
@@ -305,21 +442,26 @@ export default function AdminMonitoringPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-[#292929] font-mono tabular-nums">
-                {data.providerTelemetry.map((row) => (
-                  <tr key={row.provider}>
-                    <td className="py-2.5 px-3 font-bold text-white uppercase">{row.provider}</td>
-                    <td className="py-2.5 px-3 text-white">{row.requests}</td>
-                    <td className="py-2.5 px-3 text-[#A0A0A0]">{row.errors}</td>
-                    <td className="py-2.5 px-3 text-[#A0A0A0]">{row.errorRatePct}%</td>
-                    <td className="py-2.5 px-3 text-[#A0A0A0]">{row.cacheHitRatePct}%</td>
-                    <td className="py-2.5 px-3 text-white">
-                      {row.p50Ms !== null ? `${row.p50Ms}ms` : '—'}
-                    </td>
-                    <td className="py-2.5 px-3 text-white">
-                      {row.p95Ms !== null ? `${row.p95Ms}ms` : '—'}
-                    </td>
-                  </tr>
-                ))}
+                {data.providerTelemetry.map((row) => {
+                  const reqCount = row.calls ?? row.requests ?? 0;
+                  const p50 = row.p50DurationMs ?? row.p50Ms ?? null;
+                  const p95 = row.p95DurationMs ?? row.p95Ms ?? null;
+                  return (
+                    <tr key={row.provider}>
+                      <td className="py-2.5 px-3 font-bold text-white uppercase">{row.provider}</td>
+                      <td className="py-2.5 px-3 text-white">{reqCount}</td>
+                      <td className="py-2.5 px-3 text-[#A0A0A0]">{row.errors}</td>
+                      <td className="py-2.5 px-3 text-[#A0A0A0]">{row.errorRatePct}%</td>
+                      <td className="py-2.5 px-3 text-[#A0A0A0]">{row.cacheHitRatePct}%</td>
+                      <td className="py-2.5 px-3 text-white">
+                        {p50 !== null ? `${p50}ms` : '—'}
+                      </td>
+                      <td className="py-2.5 px-3 text-white">
+                        {p95 !== null ? `${p95}ms` : '—'}
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
