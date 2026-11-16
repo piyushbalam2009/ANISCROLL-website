@@ -1,21 +1,32 @@
 import React from 'react';
 import type { Metadata } from 'next';
-import { getHoshikaSchedule } from '@/lib/hoshika';
+import { unstable_noStore as noStore } from 'next/cache';
+import { getHoshikaScheduleDetailed } from '@/lib/hoshika';
 import { ScheduleView } from '@/components/schedule/ScheduleView';
+import { AnimeDetailErrorState } from '@/components/anime/AnimeDetailErrorState';
 import { buildBrowseSocialMetadata } from '@/lib/social-metadata';
 import { Calendar } from 'lucide-react';
 
-export const revalidate = 600;
+export const revalidate = 900;
 
 export const metadata: Metadata = buildBrowseSocialMetadata({
   title: 'Anime Airing Schedule',
   description:
-    'Track daily broadcast dates and upcoming anime episode drops in your local timezone on AniScroll.',
+    'Track daily broadcast dates and upcoming episode drops in your local timezone on AniScroll.',
   path: '/schedule',
 });
 
 export default async function SchedulePage() {
-  const items = await getHoshikaSchedule('en');
+  const res = await getHoshikaScheduleDetailed('en');
+  if (!res.ok) {
+    noStore();
+    return (
+      <AnimeDetailErrorState
+        title="Temporarily Unable to Load Schedule"
+        code={res.error.category}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6 pb-16">
@@ -31,7 +42,7 @@ export default async function SchedulePage() {
         </div>
       </div>
 
-      <ScheduleView scheduleItems={items} />
+      <ScheduleView scheduleItems={res.data} />
     </div>
   );
 }

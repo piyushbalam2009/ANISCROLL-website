@@ -1,8 +1,10 @@
 import React from 'react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
-import { getHoshikaGenreTitles, getHoshikaCatalog } from '@/lib/hoshika';
+import { unstable_noStore as noStore } from 'next/cache';
+import { getHoshikaGenreTitlesDetailed, getHoshikaCatalog } from '@/lib/hoshika';
 import { AnimeGrid } from '@/components/anime/AnimeGrid';
+import { AnimeDetailErrorState } from '@/components/anime/AnimeDetailErrorState';
 import { buildBrowseSocialMetadata } from '@/lib/social-metadata';
 import { Layers, ArrowLeft } from 'lucide-react';
 
@@ -39,11 +41,28 @@ export default async function GenreDetailPage({ params }: GenreDetailPageProps) 
     .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
     .join(' ');
 
-  // Fetch titles for this genre from Hoshika
-  let titles = await getHoshikaGenreTitles(decodedGenre);
-  if (!titles || titles.length === 0) {
-    const catalog = await getHoshikaCatalog({ genre: formattedTitle });
-    titles = catalog.items;
+  const genreRes = await getHoshikaGenreTitlesDetailed(decodedGenre, 'en');
+  let titles = genreRes.ok ? genreRes.data : [];
+  let upstreamFailed = !genreRes.ok;
+
+  if (titles.length === 0) {
+    try {
+      const catalog = await getHoshikaCatalog({ genre: formattedTitle });
+      titles = catalog.items;
+      upstreamFailed = false;
+    } catch {
+      // Preserve upstreamFailed when both genre feed and catalog fallback fail
+    }
+  }
+
+  if (upstreamFailed && titles.length === 0) {
+    noStore();
+    return (
+      <AnimeDetailErrorState
+        title={`Temporarily Unable to Load ${formattedTitle} Anime`}
+        code={!genreRes.ok ? genreRes.error.category : 'UPSTREAM_UNAVAILABLE'}
+      />
+    );
   }
 
   return (

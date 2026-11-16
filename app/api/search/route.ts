@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { searchHoshika } from '@/lib/hoshika';
+import { searchHoshikaDetailed } from '@/lib/hoshika';
+import { hoshikaErrorToHttpStatus } from '@/lib/hoshika-client';
 
 export async function GET(req: NextRequest) {
   const { searchParams } = new URL(req.url);
@@ -14,19 +15,44 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const results = await searchHoshika(q, limit, format, year);
+    const res = await searchHoshikaDetailed(q, limit, format, year);
+    if (!res.ok && res.error) {
+      const status = hoshikaErrorToHttpStatus(res.error.category, res.error.status);
+      return NextResponse.json(
+        {
+          ok: false,
+          code: res.error.category,
+          retryable: res.error.retryable,
+          error: res.error.message,
+          results: [],
+        },
+        {
+          status,
+          headers: { 'Cache-Control': 'no-store, max-age=0' },
+        }
+      );
+    }
+
     return NextResponse.json(
-      { ok: true, results },
+      { ok: true, results: res.items },
       {
         headers: {
-          'Cache-Control': 'public, s-maxage=300, stale-while-revalidate=600',
+          'Cache-Control': 'public, s-maxage=360, stale-while-revalidate=720',
         },
       }
     );
   } catch (err: any) {
     return NextResponse.json(
-      { ok: false, error: 'Failed to search anime', results: [] },
-      { status: 500 }
+      {
+        ok: false,
+        code: 'UPSTREAM_UNAVAILABLE',
+        error: err?.message || 'Failed to search anime',
+        results: [],
+      },
+      {
+        status: 502,
+        headers: { 'Cache-Control': 'no-store, max-age=0' },
+      }
     );
   }
 }

@@ -1,7 +1,9 @@
 import React from 'react';
 import type { Metadata } from 'next';
-import { searchHoshika } from '@/lib/hoshika';
+import { unstable_noStore as noStore } from 'next/cache';
+import { searchHoshikaDetailed } from '@/lib/hoshika';
 import { AnimeGrid } from '@/components/anime/AnimeGrid';
+import { AnimeDetailErrorState } from '@/components/anime/AnimeDetailErrorState';
 import { buildBrowseSocialMetadata } from '@/lib/social-metadata';
 import { Search } from 'lucide-react';
 
@@ -30,9 +32,39 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
   const { q = '' } = await searchParams;
   const query = q.trim();
 
-  let results: any[] = [];
   if (query) {
-    results = await searchHoshika(query, 30);
+    const searchRes = await searchHoshikaDetailed(query, 30);
+    if (!searchRes.ok && searchRes.error) {
+      noStore();
+      return (
+        <AnimeDetailErrorState
+          title="Search Temporarily Unavailable"
+          description="AniScroll could not reach the search catalogue right now. Please try again in a moment."
+          code={searchRes.error.category}
+        />
+      );
+    }
+
+    return (
+      <div className="space-y-6 pb-16">
+        <div className="flex items-center gap-2.5 pb-2 border-b border-[#292929]">
+          <Search size={22} className="text-white" />
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight text-white">
+              Search Results
+            </h1>
+            <p className="text-xs text-[#707070]">
+              Showing results for &quot;{query}&quot;
+            </p>
+          </div>
+        </div>
+
+        <AnimeGrid
+          animeList={searchRes.items}
+          emptyMessage={`No titles found matching "${query}". Check spelling or try a Japanese romanized title.`}
+        />
+      </div>
+    );
   }
 
   return (
@@ -44,20 +76,14 @@ export default async function SearchPage({ searchParams }: SearchPageProps) {
             Search Results
           </h1>
           <p className="text-xs text-[#707070]">
-            {query
-              ? `Showing results for "${query}"`
-              : 'Enter a search term to find anime.'}
+            Enter a search term to find anime.
           </p>
         </div>
       </div>
 
       <AnimeGrid
-        animeList={results}
-        emptyMessage={
-          query
-            ? `No titles found matching "${query}". Check spelling or try a Japanese romanized title.`
-            : 'Type a query in the search bar above to begin.'
-        }
+        animeList={[]}
+        emptyMessage="Type a query in the search bar above to begin."
       />
     </div>
   );

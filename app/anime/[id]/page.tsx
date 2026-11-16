@@ -1,8 +1,9 @@
 import React, { cache } from 'react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { unstable_noStore as noStore } from 'next/cache';
 import { notFound } from 'next/navigation';
-import { getHoshikaAnime, getHoshikaEpisodes } from '@/lib/hoshika';
+import { getHoshikaEpisodes, resolveAnimeDetailById } from '@/lib/hoshika';
 import { resolveAnimeArtwork } from '@/lib/artwork-mapper';
 import { getCachedOrWarmServerAudioAvailability } from '@/lib/aniscroll';
 import { loadAnimeDetailData } from '@/lib/anime-detail-episodes';
@@ -13,6 +14,7 @@ import {
   safeJsonLdStringify,
 } from '@/lib/social-metadata';
 import { AnimeDetailsHero } from '@/components/anime/AnimeDetailsHero';
+import { AnimeDetailErrorState } from '@/components/anime/AnimeDetailErrorState';
 import { EpisodeSection } from '@/components/episodes/EpisodeSection';
 import { CharacterList } from '@/components/anime/CharacterList';
 import { ChevronRight } from 'lucide-react';
@@ -21,20 +23,38 @@ interface AnimePageProps {
   params: Promise<{ id: string }>;
 }
 
-export const revalidate = 180;
+export const revalidate = 300;
 
-const getCachedHoshikaAnime = cache((id: string) => getHoshikaAnime(id, 'en'));
+const getCachedAnimeOutcome = cache((id: string) =>
+  resolveAnimeDetailById(id, 'en')
+);
 
 export async function generateMetadata({
   params,
 }: AnimePageProps): Promise<Metadata> {
   const { id } = await params;
-  const anime = await getCachedHoshikaAnime(id).catch(() => null);
-  return buildAnimeSocialMetadata(anime, id);
+  const outcome = await getCachedAnimeOutcome(id).catch(() => null);
+  return buildAnimeSocialMetadata(outcome?.anime || null, id);
 }
 
 export default async function AnimePage({ params }: AnimePageProps) {
   const { id } = await params;
+  const outcome = await getCachedAnimeOutcome(id);
+
+  if (outcome.status === 'invalid_id' || outcome.status === 'not_found') {
+    notFound();
+  }
+
+  if (outcome.status === 'upstream_error' || !outcome.anime) {
+    noStore();
+    return (
+      <AnimeDetailErrorState
+        code={outcome.error?.category || 'UPSTREAM_UNAVAILABLE'}
+      />
+    );
+  }
+
+  const targetShortId = String(outcome.anime.shortId);
   const {
     anime,
     showEpisodesSection,
@@ -42,15 +62,16 @@ export default async function AnimePage({ params }: AnimePageProps) {
     totalEpisodes,
     initialAvailability,
     artwork,
-  } = await loadAnimeDetailData(id, {
-    getAnime: (animeId) => getCachedHoshikaAnime(animeId),
+  } = await loadAnimeDetailData(targetShortId, {
+    getAnime: async () => outcome.anime,
     getEpisodes: (animeId) => getHoshikaEpisodes(animeId, 'en', undefined, 50),
     resolveArtwork: (animeId, item) => resolveAnimeArtwork(animeId, item),
     getCachedAvailability: getCachedOrWarmServerAudioAvailability,
   });
 
   if (!anime) {
-    notFound();
+    noStore();
+    return <AnimeDetailErrorState code="UPSTREAM_UNAVAILABLE" />;
   }
 
   const title =

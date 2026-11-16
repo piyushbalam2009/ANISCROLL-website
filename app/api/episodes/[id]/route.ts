@@ -1,5 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getHoshikaAnime, getHoshikaEpisodes, getAllHoshikaEpisodes } from '@/lib/hoshika';
+import {
+  getHoshikaAnime,
+  getHoshikaEpisodesDetailed,
+  getAllHoshikaEpisodes,
+} from '@/lib/hoshika';
+import {
+  hoshikaErrorToHttpStatus,
+  isHoshikaUpstreamError,
+} from '@/lib/hoshika-client';
 import { appCache } from '@/lib/cache';
 import { resolveAnimeIds } from '@/lib/id-mapper';
 import { getAniListById } from '@/lib/anilist';
@@ -13,9 +21,9 @@ export async function GET(
   const { id } = await params;
   const trimmedId = (id || '').trim();
 
-  if (!trimmedId || !/^[a-zA-Z0-9_-]+$/.test(trimmedId)) {
+  if (!trimmedId || !/^\d+$/.test(trimmedId)) {
     return NextResponse.json(
-      { ok: false, error: 'Invalid Anime ID', items: [], total: 0 },
+      { ok: false, code: 'INVALID_ID', error: 'Invalid Anime ID', items: [], total: 0 },
       {
         status: 400,
         headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
@@ -99,7 +107,7 @@ export async function GET(
           headers: {
             'Cache-Control':
               hasValidEpisodes && !forceRefresh
-                ? 'public, s-maxage=120, stale-while-revalidate=300'
+                ? 'public, s-maxage=300, stale-while-revalidate=900'
                 : 'no-store, no-cache, must-revalidate',
             'X-Cache-Status': cacheStatusHeader,
           },
@@ -107,10 +115,33 @@ export async function GET(
       );
     }
 
-    const [result, anime] = await Promise.all([
-      getHoshikaEpisodes(trimmedId, locale, after, limit, forceRefresh),
+    const [episodesRes, anime] = await Promise.all([
+      getHoshikaEpisodesDetailed(trimmedId, locale, after, limit, forceRefresh),
       includeAnime ? getHoshikaAnime(trimmedId, locale, forceRefresh) : Promise.resolve(null),
     ]);
+
+    if (!episodesRes.ok) {
+      const status = hoshikaErrorToHttpStatus(
+        episodesRes.error.category,
+        episodesRes.error.status
+      );
+      return NextResponse.json(
+        {
+          ok: false,
+          code: episodesRes.error.category,
+          retryable: episodesRes.error.retryable,
+          error: episodesRes.error.message,
+          items: [],
+          total: 0,
+        },
+        {
+          status,
+          headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+        }
+      );
+    }
+
+    const result = episodesRes.data;
 
     let anilistCover: string | null = null;
     let anilistBanner: string | null = null;
@@ -192,17 +223,26 @@ export async function GET(
         headers: {
           'Cache-Control':
             hasValidEpisodes && !forceRefresh
-              ? 'public, s-maxage=120, stale-while-revalidate=300'
+              ? 'public, s-maxage=300, stale-while-revalidate=900'
               : 'no-store, no-cache, must-revalidate',
           'X-Cache-Status': cacheStatusHeader,
         },
       }
     );
   } catch (err: any) {
+    const status = isHoshikaUpstreamError(err)
+      ? hoshikaErrorToHttpStatus(err.category, err.status)
+      : 502;
     return NextResponse.json(
-      { ok: false, error: 'Failed to retrieve anime episodes', items: [], total: 0 },
       {
-        status: 500,
+        ok: false,
+        code: isHoshikaUpstreamError(err) ? err.category : 'UPSTREAM_UNAVAILABLE',
+        error: err?.message || 'Failed to retrieve anime episodes',
+        items: [],
+        total: 0,
+      },
+      {
+        status,
         headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
       }
     );

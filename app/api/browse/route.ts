@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getHoshikaBrowsePaginated } from '@/lib/hoshika';
+import {
+  hoshikaErrorToHttpStatus,
+  isHoshikaUpstreamError,
+} from '@/lib/hoshika-client';
 import { appCache } from '@/lib/cache';
 import { DEFAULT_PER_PAGE, sanitizePageNumber } from '@/lib/explore-catalog';
 
@@ -44,9 +48,13 @@ export async function GET(req: NextRequest) {
     );
   } catch (err: any) {
     console.error(`[API /browse?category=${category}] Error:`, err?.message || err);
+    const httpStatus = isHoshikaUpstreamError(err)
+      ? hoshikaErrorToHttpStatus(err.category, err.status)
+      : 502;
     return NextResponse.json(
       {
         ok: false,
+        code: isHoshikaUpstreamError(err) ? err.category : 'UPSTREAM_UNAVAILABLE',
         category,
         error:
           err?.message ||
@@ -63,7 +71,10 @@ export async function GET(req: NextRequest) {
         hasMore: false,
         hasPreviousPage: page > 1,
       },
-      { status: 500 }
+      {
+        status: httpStatus,
+        headers: { 'Cache-Control': 'no-store, max-age=0' },
+      }
     );
   }
 }

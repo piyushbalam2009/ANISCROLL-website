@@ -11,7 +11,9 @@ import {
   getHoshikaCatalog,
   getHoshikaEpisodes,
   invalidateHoshikaCacheForAnime,
+  resolveAnimeDetailById,
 } from '@/lib/hoshika';
+import { hoshikaErrorToHttpStatus } from '@/lib/hoshika-client';
 import { resolveAnimeIds } from '@/lib/id-mapper';
 import { invalidateCachedArtwork } from '@/lib/artwork/artwork-cache';
 import { selectStreamingProvider } from '@/lib/stream-provider-core';
@@ -33,8 +35,8 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Invalid hoshikaId' }, { status: 400 });
     }
 
-    const [anime, episodesData, artworkOverride] = await Promise.all([
-      getHoshikaAnime(id, 'en', refresh),
+    const [outcome, episodesData, artworkOverride] = await Promise.all([
+      resolveAnimeDetailById(id, 'en', refresh),
       getHoshikaEpisodes(id, 'en', undefined, 25, refresh).catch(() => ({
         items: [],
         total: 0,
@@ -43,6 +45,15 @@ export async function GET(req: NextRequest) {
       fetchFirestoreDocumentRest('animeArtwork', String(id), verified.idToken),
     ]);
 
+    if (outcome.status === 'upstream_error') {
+      const cat = outcome.error?.category || 'UPSTREAM_UNAVAILABLE';
+      return NextResponse.json(
+        { error: outcome.error?.message || 'Hoshika metadata temporarily unavailable', code: cat },
+        { status: hoshikaErrorToHttpStatus(cat, outcome.error?.status) }
+      );
+    }
+
+    const anime = outcome.anime;
     if (!anime) {
       return NextResponse.json(
         { error: 'Anime not found in Hoshika catalogue' },

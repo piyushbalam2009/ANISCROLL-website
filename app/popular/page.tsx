@@ -1,16 +1,17 @@
 import React from 'react';
 import type { Metadata } from 'next';
+import { unstable_noStore as noStore } from 'next/cache';
 import { getHoshikaBrowsePaginated } from '@/lib/hoshika';
 import { PaginatedBrowseSection } from '@/components/anime/PaginatedBrowseSection';
+import { AnimeDetailErrorState } from '@/components/anime/AnimeDetailErrorState';
 import {
   DEFAULT_PER_PAGE,
-  buildPaginatedResponse,
   sanitizePageNumber,
 } from '@/lib/explore-catalog';
 import { buildBrowseSocialMetadata } from '@/lib/social-metadata';
 import { Flame } from 'lucide-react';
 
-export const revalidate = 180;
+export const revalidate = 600;
 
 export const metadata: Metadata = buildBrowseSocialMetadata({
   title: 'All-Time Popular Anime',
@@ -31,18 +32,27 @@ export default async function PopularPage({ searchParams }: PopularPageProps) {
       : resolvedParams.page
   );
 
-  const initialData = await getHoshikaBrowsePaginated(
-    'popular',
-    page,
-    DEFAULT_PER_PAGE
-  ).catch(() =>
-    buildPaginatedResponse({
-      results: [],
-      currentPage: page,
-      perPage: DEFAULT_PER_PAGE,
-      totalItems: 0,
-    })
-  );
+  let initialData: Awaited<ReturnType<typeof getHoshikaBrowsePaginated>> | null = null;
+  let errorCode = 'UPSTREAM_UNAVAILABLE';
+  try {
+    initialData = await getHoshikaBrowsePaginated(
+      'popular',
+      page,
+      DEFAULT_PER_PAGE
+    );
+  } catch (err: any) {
+    if (err?.category) errorCode = String(err.category);
+  }
+
+  if (!initialData) {
+    noStore();
+    return (
+      <AnimeDetailErrorState
+        title="Temporarily Unable to Load Popular Anime"
+        code={errorCode}
+      />
+    );
+  }
 
   return (
     <div className="space-y-6 pb-16">

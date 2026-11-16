@@ -28,13 +28,47 @@ export interface HoshikaCharacter {
 }
 
 export interface HoshikaRelation {
-  id: string;
+  id?: string;
   shortId: number;
+  slug?: string;
   relationType: string;
-  titleRomaji?: string;
-  titleEnglish?: string;
-  coverImage?: string;
-  format?: string;
+  title?: string | null;
+  titleRomaji?: string | null;
+  titleEnglish?: string | null;
+  coverImage?: string | null;
+  format?: string | null;
+}
+
+export interface HoshikaRecommendation {
+  id?: string;
+  shortId: number;
+  slug?: string;
+  title?: string | null;
+  titleRomaji?: string | null;
+  titleEnglish?: string | null;
+  coverImage?: string | null;
+  averageScore?: number | null;
+  format?: string | null;
+}
+
+export interface HoshikaVideo {
+  id: string;
+  title?: string | null;
+  youtubeId?: string | null;
+  image?: string | null;
+}
+
+export interface HoshikaStreamingLink {
+  platform: string;
+  url: string;
+}
+
+export interface HoshikaStats {
+  watching?: number;
+  completed?: number;
+  on_hold?: number;
+  plan_to_watch?: number;
+  [key: string]: number | undefined;
 }
 
 export interface HoshikaAnimeItem {
@@ -66,6 +100,7 @@ export interface HoshikaAnimeItem {
   canonCount?: number | null;
   rating?: string | null;
   demographic?: string | null;
+  favoriteCount?: number | null;
   trailerId?: string | null;
   trailerSite?: string | null;
   startedAiring?: string | null;
@@ -74,6 +109,11 @@ export interface HoshikaAnimeItem {
   studios?: HoshikaStudio[];
   characters?: HoshikaCharacter[];
   relations?: HoshikaRelation[];
+  recommendations?: HoshikaRecommendation[];
+  videos?: HoshikaVideo[];
+  pictures?: string[];
+  streaming?: HoshikaStreamingLink[];
+  stats?: HoshikaStats | null;
   nextEpisodeNumber?: number | null;
   nextEpisodeAiringAt?: string | null;
   anilistId?: number | null;

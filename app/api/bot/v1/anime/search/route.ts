@@ -9,7 +9,8 @@ import {
   botRateLimiter,
   getConfiguredBotSecrets,
 } from '@/lib/discord-server-store';
-import { getHoshikaAnime, searchHoshika } from '@/lib/hoshika';
+import { resolveAnimeDetailById, searchHoshikaDetailed } from '@/lib/hoshika';
+import { hoshikaErrorToHttpStatus } from '@/lib/hoshika-client';
 
 /**
  * Bot-authenticated Hoshika search & metadata lookup endpoint:
@@ -78,9 +79,24 @@ export async function GET(req: NextRequest) {
         { status: 400 }
       );
     }
-    const anime = await getHoshikaAnime(Number(rawShortId), 'en');
-    const extracted = anime
-      ? extractWatchlistMetadataFromHoshikaAnime(anime)
+    const outcome = await resolveAnimeDetailById(Number(rawShortId), 'en');
+    if (outcome.status === 'upstream_error') {
+      const category = outcome.error?.category || 'UPSTREAM_UNAVAILABLE';
+      return NextResponse.json(
+        {
+          ok: false,
+          code: category,
+          error: outcome.error?.message || 'Hoshika metadata temporarily unavailable.',
+        },
+        {
+          status: hoshikaErrorToHttpStatus(category, outcome.error?.status),
+          headers: { 'Cache-Control': 'no-store, max-age=0' },
+        }
+      );
+    }
+
+    const extracted = outcome.anime
+      ? extractWatchlistMetadataFromHoshikaAnime(outcome.anime)
       : null;
     if (!extracted) {
       return NextResponse.json(
@@ -109,8 +125,23 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const results = await searchHoshika(query, limit);
-  const items = results
+  const searchRes = await searchHoshikaDetailed(query, limit);
+  if (!searchRes.ok && searchRes.error) {
+    return NextResponse.json(
+      {
+        ok: false,
+        code: searchRes.error.category,
+        error: searchRes.error.message,
+        items: [],
+      },
+      {
+        status: hoshikaErrorToHttpStatus(searchRes.error.category, searchRes.error.status),
+        headers: { 'Cache-Control': 'no-store, max-age=0' },
+      }
+    );
+  }
+
+  const items = searchRes.items
     .map((item) => extractWatchlistMetadataFromHoshikaAnime(item))
     .filter((x): x is NonNullable<typeof x> => x !== null);
 

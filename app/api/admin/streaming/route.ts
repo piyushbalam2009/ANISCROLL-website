@@ -6,6 +6,7 @@ import { getAniScrollStreamDetailed } from '@/lib/aniscroll';
 import { selectStreamingProvider } from '@/lib/stream-provider-core';
 import { redactSensitiveText, sanitizeDiagnosticUrl } from '@/lib/admin/redaction';
 import { logAdminActionServer, logErrorEventServer } from '@/lib/admin/server-audit';
+import { HOSHIKA_ENDPOINTS, resolveHoshikaApiBase } from '@/lib/hoshika-client';
 
 interface ProviderProbeResult {
   provider: 'aniscroll' | 'hoshika' | 'anilist' | 'aniskip' | 'fanart' | 'megaplay' | 'zokoanime';
@@ -83,6 +84,14 @@ async function probeEndpoint(params: {
 }
 
 async function runStreamingProbes(): Promise<ProviderProbeResult[]> {
+  const hoshikaApiBase = resolveHoshikaApiBase();
+  const hoshikaHomePath = HOSHIKA_ENDPOINTS.home('en');
+  const hoshikaTopBrowsePath = HOSHIKA_ENDPOINTS.browse({
+    type: 'anime',
+    sort: 'top',
+    locale: 'en',
+  });
+
   return Promise.all([
     probeEndpoint({
       provider: 'megaplay',
@@ -104,16 +113,16 @@ async function runStreamingProbes(): Promise<ProviderProbeResult[]> {
       provider: 'hoshika',
       name: 'Hoshika Metadata API',
       description: 'Primary anime catalogue, episode pagination, and synopses',
-      endpointLabel: 'GET https://hoshika.app/api/v1/anime/home',
-      url: 'https://hoshika.app/api/v1/anime/home?locale=en',
+      endpointLabel: `GET ${hoshikaApiBase}/home`,
+      url: `${hoshikaApiBase}${hoshikaHomePath}`,
       init: { method: 'GET', headers: { Accept: 'application/json' } },
     }),
     probeEndpoint({
       provider: 'aniscroll',
       name: 'AniScroll HLS Streaming Engine',
       description: 'HLS manifest resolver, multi-server audio (Sub/Dub), and subtitle tracks',
-      endpointLabel: 'GET /api/aniscroll/resolve (Upstream Stream Gateway)',
-      url: 'https://hoshika.app/api/v1/anime/popular?page=1&locale=en',
+      endpointLabel: `GET ${hoshikaApiBase}/browse?type=anime&sort=top`,
+      url: `${hoshikaApiBase}${hoshikaTopBrowsePath}`,
       init: { method: 'GET', headers: { Accept: 'application/json' } },
     }),
     probeEndpoint({

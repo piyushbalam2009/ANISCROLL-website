@@ -9,6 +9,7 @@ import {
 import { appCache } from '@/lib/cache';
 import { getArtworkCacheStats } from '@/lib/artwork/artwork-cache';
 import { logAdminActionServer, logErrorEventServer } from '@/lib/admin/server-audit';
+import { HOSHIKA_ENDPOINTS, resolveHoshikaApiBase } from '@/lib/hoshika-client';
 
 export interface ServiceHealthProbe {
   id: string;
@@ -84,6 +85,8 @@ async function runHttpProbe(params: {
 }
 
 async function runAllHealthProbes(): Promise<ServiceHealthProbe[]> {
+  const hoshikaApiBase = resolveHoshikaApiBase();
+  const hoshikaHomePath = HOSHIKA_ENDPOINTS.home('en');
   const projectId = (process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || '').trim();
   const firestoreProbeUrl = projectId
     ? `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
@@ -98,8 +101,8 @@ async function runAllHealthProbes(): Promise<ServiceHealthProbe[]> {
       id: 'hoshika',
       name: 'Hoshika Anime Metadata',
       category: 'metadata',
-      endpoint: 'GET https://hoshika.app/api/v1/anime/home',
-      url: 'https://hoshika.app/api/v1/anime/home?locale=en',
+      endpoint: `GET ${hoshikaApiBase}/home`,
+      url: `${hoshikaApiBase}${hoshikaHomePath}`,
       init: { headers: { Accept: 'application/json' } },
     }),
     runHttpProbe({

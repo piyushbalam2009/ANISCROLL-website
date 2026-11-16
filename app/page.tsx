@@ -1,5 +1,6 @@
 import React from 'react';
 import type { Metadata } from 'next';
+import { unstable_noStore as noStore } from 'next/cache';
 import Link from 'next/link';
 import {
   ArrowRight,
@@ -10,7 +11,11 @@ import {
   Compass,
   FolderKanban,
 } from 'lucide-react';
-import { getHoshikaHome, getHoshikaBrowse, getHoshikaAnime } from '@/lib/hoshika';
+import {
+  getHoshikaHomeDetailed,
+  getHoshikaBrowseDetailed,
+  getHoshikaAnime,
+} from '@/lib/hoshika';
 import { resolveAnimeArtwork } from '@/lib/artwork-mapper';
 import { fetchFirestoreDocumentServer } from '@/lib/firebase-admin';
 import {
@@ -21,6 +26,7 @@ import {
 import { HoshikaAnimeItem } from '@/types/anime';
 import { HomeHeroCarousel, HeroSlideItem } from '@/components/anime/HomeHeroCarousel';
 import { AnimeGrid } from '@/components/anime/AnimeGrid';
+import { AnimeDetailErrorState } from '@/components/anime/AnimeDetailErrorState';
 import { ContinueWatchingRow } from '@/components/anime/ContinueWatchingRow';
 import { ResilientImage } from '@/components/ui/ResilientImage';
 import {
@@ -29,8 +35,8 @@ import {
   buildBrowseSocialMetadata,
 } from '@/lib/social-metadata';
 
-// Revalidate home page every 3 minutes
-export const revalidate = 180;
+// Revalidate home page every 5 minutes
+export const revalidate = 300;
 
 export const metadata: Metadata = buildBrowseSocialMetadata({
   title: DEFAULT_SITE_TITLE,
@@ -54,11 +60,31 @@ function featuredToHoshikaItem(item: FeaturedAnimeItem): HoshikaAnimeItem {
 }
 
 export default async function HomePage() {
-  const [homeData, topAnime, rawHomepageDoc] = await Promise.all([
-    getHoshikaHome('en'),
-    getHoshikaBrowse('top', 'anime'),
+  const [homeRes, topRes, rawHomepageDoc] = await Promise.all([
+    getHoshikaHomeDetailed('en'),
+    getHoshikaBrowseDetailed('top', 'anime'),
     fetchFirestoreDocumentServer('animeManagement', 'homepage').catch(() => null),
   ]);
+
+  if (!homeRes.ok && !topRes.ok) {
+    noStore();
+    return (
+      <AnimeDetailErrorState
+        title="AniScroll Catalogue Temporarily Unavailable"
+        description="We could not load the anime catalogue right now due to an upstream connectivity issue. Please try again in a moment."
+        code={homeRes.error.category}
+      />
+    );
+  }
+
+  if (!homeRes.ok || !topRes.ok) {
+    noStore();
+  }
+
+  const homeData = homeRes.ok
+    ? homeRes.data
+    : { season: null, seasonal: [], trending: [], recentlyAdded: [] };
+  const topAnime = topRes.ok ? topRes.data : [];
 
   const homepageConfig: Omit<AnimeManagementFirestoreDoc, 'createdAt' | 'updatedAt'> = {
     ...DEFAULT_ANIME_MANAGEMENT_CONFIG,

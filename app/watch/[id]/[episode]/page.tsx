@@ -1,10 +1,12 @@
 import React, { cache } from 'react';
 import type { Metadata } from 'next';
+import { unstable_noStore as noStore } from 'next/cache';
 import { notFound } from 'next/navigation';
-import { getHoshikaAnime, getEpisodesForWatch } from '@/lib/hoshika';
+import { getEpisodesForWatch, resolveAnimeDetailById } from '@/lib/hoshika';
 import { isMovieContent } from '@/lib/stream-provider-core';
 import { buildWatchSocialMetadata } from '@/lib/social-metadata';
 import { WatchPageClient } from '@/components/player/WatchPageClient';
+import { AnimeDetailErrorState } from '@/components/anime/AnimeDetailErrorState';
 
 interface WatchPageProps {
   params: Promise<{ id: string; episode: string }>;
@@ -12,7 +14,9 @@ interface WatchPageProps {
 
 export const revalidate = 120;
 
-const getCachedAnime = cache((id: string) => getHoshikaAnime(id, 'en'));
+const getCachedAnimeOutcome = cache((id: string) =>
+  resolveAnimeDetailById(id, 'en')
+);
 const getCachedWatchEpisodes = cache((id: string, ep: number) =>
   getEpisodesForWatch(id, ep, 'en')
 );
@@ -25,7 +29,8 @@ export async function generateMetadata({
   const safeEpisodeNumber =
     !isNaN(episodeNumber) && episodeNumber >= 1 ? episodeNumber : 1;
 
-  const anime = await getCachedAnime(id).catch(() => null);
+  const outcome = await getCachedAnimeOutcome(id).catch(() => null);
+  const anime = outcome?.anime || null;
   if (!anime) {
     return buildWatchSocialMetadata({
       anime: null,
@@ -42,7 +47,10 @@ export async function generateMetadata({
   });
 
   const episodeData = !isMovie
-    ? await getCachedWatchEpisodes(id, safeEpisodeNumber).catch(() => ({
+    ? await getCachedWatchEpisodes(
+        String(anime.shortId),
+        safeEpisodeNumber
+      ).catch(() => ({
         items: [],
         total: 0,
       }))
@@ -64,18 +72,29 @@ export default async function WatchPage({ params }: WatchPageProps) {
     notFound();
   }
 
-  const [anime, episodeData] = await Promise.all([
-    getCachedAnime(id),
-    getCachedWatchEpisodes(id, episodeNumber),
-  ]);
-
-  if (!anime) {
+  const outcome = await getCachedAnimeOutcome(id);
+  if (outcome.status === 'invalid_id' || outcome.status === 'not_found') {
     notFound();
   }
 
+  if (outcome.status === 'upstream_error' || !outcome.anime) {
+    noStore();
+    return (
+      <AnimeDetailErrorState
+        title="Temporarily Unable to Load Episode"
+        code={outcome.error?.category || 'UPSTREAM_UNAVAILABLE'}
+      />
+    );
+  }
+
+  const episodeData = await getCachedWatchEpisodes(
+    String(outcome.anime.shortId),
+    episodeNumber
+  );
+
   return (
     <WatchPageClient
-      anime={anime}
+      anime={outcome.anime}
       episodes={episodeData.items}
       episodeNumber={episodeNumber}
     />

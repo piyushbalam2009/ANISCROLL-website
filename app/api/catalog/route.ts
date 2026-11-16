@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getHoshikaCatalog } from '@/lib/hoshika';
+import {
+  hoshikaErrorToHttpStatus,
+  isHoshikaUpstreamError,
+} from '@/lib/hoshika-client';
 import { appCache } from '@/lib/cache';
 import {
   DEFAULT_PER_PAGE,
@@ -35,7 +39,7 @@ export async function GET(req: NextRequest) {
     page,
     perPage,
   };
-  const cacheKey = buildCatalogCacheKey(normalizeCatalogQuery(catalogParams));
+  const cacheKey = `${buildCatalogCacheKey(normalizeCatalogQuery(catalogParams))}:locale=en`;
   const preState = forceRefresh
     ? 'REFRESH'
     : appCache.getEntryState(cacheKey).status.toUpperCase();
@@ -48,16 +52,20 @@ export async function GET(req: NextRequest) {
         headers: {
           'Cache-Control': forceRefresh
             ? 'no-store, max-age=0'
-            : 'public, s-maxage=180, stale-while-revalidate=600',
+            : 'public, s-maxage=300, stale-while-revalidate=600',
           'X-Cache-Status': preState === 'FRESH' ? 'HIT' : preState,
         },
       }
     );
   } catch (err: any) {
     console.error('[API /catalog] Error:', err?.message || err);
+    const httpStatus = isHoshikaUpstreamError(err)
+      ? hoshikaErrorToHttpStatus(err.category, err.status)
+      : 502;
     return NextResponse.json(
       {
         ok: false,
+        code: isHoshikaUpstreamError(err) ? err.category : 'UPSTREAM_UNAVAILABLE',
         error: err?.message || 'Failed to load catalogue from upstream server.',
         results: [],
         items: [],
@@ -71,7 +79,10 @@ export async function GET(req: NextRequest) {
         hasMore: false,
         hasPreviousPage: page > 1,
       },
-      { status: 500 }
+      {
+        status: httpStatus,
+        headers: { 'Cache-Control': 'no-store, max-age=0' },
+      }
     );
   }
 }

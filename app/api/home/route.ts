@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getHoshikaHome } from '@/lib/hoshika';
+import { getHoshikaHomeDetailed } from '@/lib/hoshika';
+import { hoshikaErrorToHttpStatus } from '@/lib/hoshika-client';
 import { appCache } from '@/lib/cache';
 
 export async function GET(req: NextRequest) {
@@ -12,19 +13,38 @@ export async function GET(req: NextRequest) {
     : appCache.getEntryState(`hoshika:/home?locale=${locale}`).status.toUpperCase();
 
   try {
-    const data = await getHoshikaHome(locale, forceRefresh);
+    const res = await getHoshikaHomeDetailed(locale, forceRefresh);
+    if (!res.ok) {
+      const status = hoshikaErrorToHttpStatus(res.error.category, res.error.status);
+      return NextResponse.json(
+        {
+          ok: false,
+          code: res.error.category,
+          retryable: res.error.retryable,
+          error: res.error.message,
+        },
+        {
+          status,
+          headers: { 'Cache-Control': 'no-store, max-age=0' },
+        }
+      );
+    }
+
     return NextResponse.json(
-      { ok: true, ...data },
+      { ok: true, ...res.data },
       {
         headers: {
           'Cache-Control': forceRefresh
             ? 'no-store, max-age=0'
-            : 'public, s-maxage=120, stale-while-revalidate=300',
+            : 'public, s-maxage=300, stale-while-revalidate=600',
           'X-Cache-Status': preState === 'FRESH' ? 'HIT' : preState,
         },
       }
     );
   } catch (err: any) {
-    return NextResponse.json({ ok: false, error: 'Failed to fetch home feed' }, { status: 500 });
+    return NextResponse.json(
+      { ok: false, code: 'UPSTREAM_UNAVAILABLE', error: err?.message || 'Failed to fetch home feed' },
+      { status: 502, headers: { 'Cache-Control': 'no-store, max-age=0' } }
+    );
   }
 }
