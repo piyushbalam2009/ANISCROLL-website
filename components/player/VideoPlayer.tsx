@@ -22,6 +22,7 @@ import {
   ExternalLink,
   Sliders,
   RefreshCw,
+  Download,
 } from 'lucide-react';
 import {
   AniScrollStreamResponse,
@@ -56,6 +57,7 @@ import {
 } from '@/lib/zokoanime-stream';
 import { SubtitleOverlay } from './SubtitleOverlay';
 import { SubtitleSettingsModal } from './SubtitleSettingsModal';
+import { PlayerDownloadPanel } from './PlayerDownloadPanel';
 
 const STREAM_DEBUG_ENABLED =
   process.env.NODE_ENV !== 'production' ||
@@ -91,6 +93,7 @@ interface VideoPlayerProps {
   animeId: number;
   anilistId?: number | null;
   animeTitle: string;
+  animeFormat?: string | null;
   coverImage?: string;
   bannerImage?: string;
   episodeNumber: number;
@@ -101,6 +104,8 @@ interface VideoPlayerProps {
   totalEpisodes?: number;
   malId?: number | null;
   streamData?: AniScrollStreamResponse | null;
+  subStream?: AniScrollStreamResponse | null;
+  dubStream?: AniScrollStreamResponse | null;
   isLoadingStream?: boolean;
   streamError?: string | null;
   activeType: 'sub' | 'dub';
@@ -116,6 +121,7 @@ export function VideoPlayer({
   animeId,
   anilistId,
   animeTitle,
+  animeFormat,
   coverImage,
   bannerImage,
   episodeNumber,
@@ -126,6 +132,8 @@ export function VideoPlayer({
   totalEpisodes = 1,
   malId,
   streamData,
+  subStream,
+  dubStream,
   isLoadingStream = false,
   streamError = null,
   activeType,
@@ -168,6 +176,8 @@ export function VideoPlayer({
   const [showSubtitleMenu, setShowSubtitleMenu] = useState(false);
   const [showSubtitleSettings, setShowSubtitleSettings] = useState(false);
   const [showQualityMenu, setShowQualityMenu] = useState(false);
+  const [showDownloadPanel, setShowDownloadPanel] = useState(false);
+  const [isDownloadingEpisode, setIsDownloadingEpisode] = useState(false);
 
   // Quality state:
   // - ZokoAnime movies provide discrete `qualities[]` URLs
@@ -1431,13 +1441,14 @@ export function VideoPlayer({
           !isScrubbingRef.current &&
           !showSettingsMenu &&
           !showSubtitleMenu &&
-          !showQualityMenu
+          !showQualityMenu &&
+          !showDownloadPanel
         ) {
           setShowControls(false);
         }
       }, timeoutMs);
     },
-    [isPlaying, showQualityMenu, showSettingsMenu, showSubtitleMenu]
+    [isPlaying, showDownloadPanel, showQualityMenu, showSettingsMenu, showSubtitleMenu]
   );
 
   useEffect(() => {
@@ -1450,7 +1461,7 @@ export function VideoPlayer({
 
   // Keep controls visible whenever a player menu opens
   useEffect(() => {
-    if (showSettingsMenu || showSubtitleMenu || showQualityMenu) {
+    if (showSettingsMenu || showSubtitleMenu || showQualityMenu || showDownloadPanel) {
       setShowControls(true);
       if (hideControlsTimerRef.current) {
         clearTimeout(hideControlsTimerRef.current);
@@ -1458,7 +1469,7 @@ export function VideoPlayer({
     } else if (isPlaying) {
       scheduleHideControls();
     }
-  }, [showSettingsMenu, showSubtitleMenu, showQualityMenu, isPlaying, scheduleHideControls]);
+  }, [showSettingsMenu, showSubtitleMenu, showQualityMenu, showDownloadPanel, isPlaying, scheduleHideControls]);
 
   // Synchronize fullscreen state across native browser events, Escape key, and iOS WebKit exits
   useEffect(() => {
@@ -1753,7 +1764,8 @@ export function VideoPlayer({
           lastPointerTypeRef.current !== 'touch' &&
           !showSettingsMenu &&
           !showSubtitleMenu &&
-          !showQualityMenu
+          !showQualityMenu &&
+          !showDownloadPanel
         ) {
           setShowControls(false);
         }
@@ -2254,6 +2266,7 @@ export function VideoPlayer({
                       setShowSubtitleMenu((prev) => !prev);
                       setShowSettingsMenu(false);
                       setShowQualityMenu(false);
+                      setShowDownloadPanel(false);
                     }}
                     className={`p-1.5 min-w-[28px] min-h-[28px] @[560px]:min-w-0 @[560px]:min-h-0 flex items-center justify-center transition-colors cursor-pointer touch-manipulation ${
                       !areSubtitlesOff
@@ -2351,6 +2364,7 @@ export function VideoPlayer({
                         setShowQualityMenu((prev) => !prev);
                         setShowSubtitleMenu(false);
                         setShowSettingsMenu(false);
+                        setShowDownloadPanel(false);
                       }}
                       className="px-1.5 @[560px]:px-2 py-1 min-h-[26px] @[560px]:min-h-0 rounded-md bg-[#141414]/90 border border-[#292929] text-[10px] @[560px]:text-[11px] font-mono text-white hover:border-white/60 transition-colors flex items-center gap-1 cursor-pointer touch-manipulation"
                       title="Video Quality"
@@ -2472,6 +2486,7 @@ export function VideoPlayer({
                       setShowSettingsMenu((prev) => !prev);
                       setShowSubtitleMenu(false);
                       setShowQualityMenu(false);
+                      setShowDownloadPanel(false);
                     }}
                     className="p-1.5 min-w-[28px] min-h-[28px] @[560px]:min-w-0 @[560px]:min-h-0 flex items-center justify-center text-[#A0A0A0] hover:text-white transition-colors cursor-pointer touch-manipulation"
                     title="Quality, Speed & Settings"
@@ -2592,6 +2607,55 @@ export function VideoPlayer({
                       </div>
                     </>
                   )}
+                </div>
+
+                {/* Compact Episode MP4 Download Control & Panel */}
+                <div className="relative">
+                  <button
+                    type="button"
+                    data-testid="player-download-button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setShowDownloadPanel((prev) => !prev);
+                      setShowSubtitleMenu(false);
+                      setShowQualityMenu(false);
+                      setShowSettingsMenu(false);
+                    }}
+                    className={`p-1.5 min-w-[28px] min-h-[28px] @[560px]:min-w-0 @[560px]:min-h-0 flex items-center justify-center transition-colors cursor-pointer touch-manipulation ${
+                      showDownloadPanel || isDownloadingEpisode
+                        ? 'text-white'
+                        : 'text-[#A0A0A0] hover:text-white'
+                    }`}
+                    title="Download Episode (MP4)"
+                    aria-label="Download Episode"
+                    aria-expanded={showDownloadPanel}
+                  >
+                    {isDownloadingEpisode ? (
+                      <Loader2 className="w-4 h-4 @[560px]:w-[18px] @[560px]:h-[18px] animate-spin text-white" />
+                    ) : (
+                      <Download className="w-4 h-4 @[560px]:w-[18px] @[560px]:h-[18px]" />
+                    )}
+                  </button>
+
+                  <PlayerDownloadPanel
+                    isOpen={showDownloadPanel}
+                    isFullscreen={isFullscreen}
+                    onClose={() => setShowDownloadPanel(false)}
+                    animeId={animeId}
+                    anilistId={anilistId}
+                    animeTitle={animeTitle}
+                    animeFormat={animeFormat}
+                    episodeNumber={episodeNumber}
+                    activeType={activeType}
+                    hasSub={hasSub}
+                    hasDub={hasDub}
+                    isLoadingAvailability={isLoadingAvailability}
+                    activeStream={streamData}
+                    subStream={subStream}
+                    dubStream={dubStream}
+                    selectedPlayerQualityLabel={selectedQualityLabel}
+                    onActiveDownloadChange={setIsDownloadingEpisode}
+                  />
                 </div>
 
                 {/* Fullscreen Button */}

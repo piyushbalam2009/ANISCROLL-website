@@ -751,6 +751,7 @@ export function WatchPageClient({
             animeId={anime.shortId}
             anilistId={idMapping?.anilistId ?? anime.anilistId ?? null}
             animeTitle={title}
+            animeFormat={effectiveFormat}
             coverImage={anime.coverImage || undefined}
             bannerImage={anime.bannerImage || undefined}
             episodeNumber={episodeNumber}
@@ -761,6 +762,8 @@ export function WatchPageClient({
             totalEpisodes={totalEpisodes}
             malId={idMapping?.malId ?? streamData?.malId ?? anime.malId ?? null}
             streamData={streamData}
+            subStream={episodeStreams.sub}
+            dubStream={episodeStreams.dub}
             isLoadingStream={isLoadingStream}
             streamError={streamError}
             activeType={activeType}
