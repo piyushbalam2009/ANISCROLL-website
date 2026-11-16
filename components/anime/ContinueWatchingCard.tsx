@@ -43,6 +43,7 @@ export function ContinueWatchingCard({ item, onRemove }: ContinueWatchingCardPro
     >
       <Link
         href={watchHref}
+        prefetch={false}
         aria-label={`Resume ${animeTitle} Episode ${episodeNumber}: ${episodeTitle}`}
         className="flex flex-col flex-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 rounded-xl"
       >

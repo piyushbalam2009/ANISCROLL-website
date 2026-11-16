@@ -43,6 +43,7 @@ export function AnimeDetailActions({ anime }: AnimeDetailActionsProps) {
       {/* Watch Now CTA - Primary Button: White with black text */}
       <Link
         href={`/watch/${anime.shortId}/1`}
+        prefetch={false}
         className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-white text-black font-semibold text-sm hover:bg-neutral-200 transition-colors shadow-lg active:scale-98"
       >
         <Play size={18} fill="currentColor" />

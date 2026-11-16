@@ -144,6 +144,7 @@ export default function HistoryPage() {
                   >
                     <Link
                       href={`/watch/${item.hoshikaId}/${item.episodeNumber}?resume=1&t=${resumeSeconds}${audioParam}`}
+                      prefetch={false}
                       className="flex items-center gap-4 flex-1 min-w-0"
                     >
                       <div className="relative w-28 sm:w-32 aspect-video bg-[#0A0A0A] rounded-lg overflow-hidden shrink-0 border border-[#292929]">

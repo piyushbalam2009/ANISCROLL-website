@@ -4,7 +4,7 @@ import {
   AniListCandidateSummary,
   AniListMatchType,
 } from '@/types/anime';
-import { getHoshikaAnime } from './hoshika';
+import { resolveAnimeDetailById } from './hoshika';
 import {
   searchAniList,
   searchAniListWithFallback,
@@ -717,7 +717,22 @@ export async function resolveAnimeIds(
 
   const resolutionPromise = (async (): Promise<IdMappingResult> => {
     try {
-      const anime = prefetchedAnime || (await getHoshikaAnime(hoshikaId));
+      let anime = prefetchedAnime || null;
+      let upstreamFailure: { category: string; message: string; retryAfterMs?: number } | null = null;
+
+      if (!anime) {
+        const outcome = await resolveAnimeDetailById(hoshikaId, 'en', false);
+        if (outcome.ok && outcome.anime) {
+          anime = outcome.anime;
+        } else if (outcome.status === 'upstream_error' && outcome.error) {
+          upstreamFailure = {
+            category: outcome.error.category,
+            message: outcome.error.message,
+            retryAfterMs: outcome.error.retryAfterMs,
+          };
+        }
+      }
+
       if (!anime) {
         return {
           hoshikaId,
@@ -728,12 +743,16 @@ export async function resolveAnimeIds(
           title: 'Unknown',
           matchedTitle: null,
           matchType: 'none',
-          explanation: 'Anime metadata could not be loaded from Hoshika.',
+          explanation: upstreamFailure
+            ? upstreamFailure.message
+            : 'Anime metadata could not be loaded from Hoshika.',
           confidence: 0,
           status: 'failed',
           mappingStatus: 'failed',
           cached: false,
           candidates: [],
+          errorCategory: upstreamFailure?.category || 'NOT_FOUND',
+          retryAfterMs: upstreamFailure?.retryAfterMs,
         };
       }
 

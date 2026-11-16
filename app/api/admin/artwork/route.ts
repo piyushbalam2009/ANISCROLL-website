@@ -21,6 +21,7 @@ import {
   getHoshikaBrowse,
   getHoshikaCatalog,
   invalidateHoshikaCacheForAnime,
+  isHoshikaCooldownActive,
 } from '@/lib/hoshika';
 import {
   resolveAnimeIds,
@@ -606,6 +607,16 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      if (isHoshikaCooldownActive()) {
+        return NextResponse.json(
+          {
+            ok: false,
+            error: 'Hoshika rate-limit cooldown is active. Please wait before running a catalogue scan.',
+          },
+          { status: 429 }
+        );
+      }
+
       isScanningCatalogue = true;
       try {
         const requestedLimit = Math.min(
@@ -614,17 +625,22 @@ export async function POST(req: NextRequest) {
         );
         const catalogPage = Math.max(1, Number(body?.page) || 1);
 
-        // Collect anime from multiple Hoshika sources (including MOVIE format)
-        const [homeData, trendingList, topList, recentList, catalogData] =
-          await Promise.all([
-            getHoshikaHome().catch(() => null),
-            getHoshikaBrowse('trending').catch(() => []),
-            getHoshikaBrowse('top').catch(() => []),
-            getHoshikaBrowse('recent').catch(() => []),
-            getHoshikaCatalog({ page: catalogPage }).catch(() => ({
+        // Collect anime sequentially so cached results are reused and cooldown triggers abort early
+        const homeData = await getHoshikaHome().catch(() => null);
+        const trendingList = !isHoshikaCooldownActive()
+          ? await getHoshikaBrowse('trending').catch(() => [])
+          : [];
+        const topList = !isHoshikaCooldownActive()
+          ? await getHoshikaBrowse('top').catch(() => [])
+          : [];
+        const recentList = !isHoshikaCooldownActive()
+          ? await getHoshikaBrowse('recent').catch(() => [])
+          : [];
+        const catalogData = !isHoshikaCooldownActive()
+          ? await getHoshikaCatalog({ page: catalogPage }).catch(() => ({
               items: [],
-            })),
-          ]);
+            }))
+          : { items: [] };
 
         const combined: HoshikaAnimeItem[] = [
           ...(homeData?.trending || []),
@@ -667,9 +683,14 @@ export async function POST(req: NextRequest) {
         }> = [];
 
         let upstreamErrors = 0;
-        const BATCH_SIZE = 5;
+        let stoppedEarlyForCooldown = false;
+        const BATCH_SIZE = 3;
 
         for (let i = 0; i < itemsToScan.length; i += BATCH_SIZE) {
+          if (isHoshikaCooldownActive()) {
+            stoppedEarlyForCooldown = true;
+            break;
+          }
           const batch = itemsToScan.slice(i, i + BATCH_SIZE);
           const batchResults = await Promise.all(
             batch.map(async (item) => {
@@ -746,6 +767,7 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({
           ok: true,
           scannedCount: results.length,
+          stoppedEarlyForCooldown,
           missingCount: validResults.filter(
             (r) => !r.selectedLogoUrl || r.logoStatus === 'missing'
           ).length,

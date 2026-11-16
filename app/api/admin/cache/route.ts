@@ -8,6 +8,7 @@ import {
   invalidateCachedArtwork,
 } from '@/lib/artwork/artwork-cache';
 import { invalidateHoshikaCacheForAnime } from '@/lib/hoshika';
+import { getHoshikaClientStatus } from '@/lib/hoshika-client';
 import { logAdminActionServer } from '@/lib/admin/server-audit';
 
 export async function GET(req: NextRequest) {
@@ -29,6 +30,7 @@ export async function GET(req: NextRequest) {
     hitRatePct,
     inFlightCount: appCache.getInFlightCount(),
     artworkCache: getArtworkCacheStats(),
+    hoshikaStatus: getHoshikaClientStatus(),
     diagnostics: appCache.getDiagnostics(60).reverse(),
   });
 }

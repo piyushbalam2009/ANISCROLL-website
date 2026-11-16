@@ -88,6 +88,38 @@ const retryExhaustedState = new Map<
 // 7. Track attempted watch-history metadata enrichments
 const attemptedEnrichments = new Set<string>();
 
+// 8. Client-side 429 cooldown to prevent episode retry storms across components
+let episodeRateLimitedUntilMs = 0;
+
+export function getEpisodeClientCooldownRemainingMs(nowMs: number = Date.now()): number {
+  return Math.max(0, episodeRateLimitedUntilMs - nowMs);
+}
+
+function recordEpisodeClientCooldown(
+  retryAfterHeader: string | null,
+  defaultMs: number = 15_000,
+  nowMs: number = Date.now()
+): number {
+  let waitMs = defaultMs;
+  if (retryAfterHeader) {
+    const trimmed = retryAfterHeader.trim();
+    const seconds = Number(trimmed);
+    if (Number.isFinite(seconds) && seconds > 0) {
+      waitMs = Math.min(Math.max(1000, Math.round(seconds * 1000)), 300_000);
+    } else {
+      const dateMs = Date.parse(trimmed);
+      if (!Number.isNaN(dateMs)) {
+        const diff = dateMs - nowMs;
+        if (diff > 0) {
+          waitMs = Math.min(Math.max(1000, diff), 300_000);
+        }
+      }
+    }
+  }
+  episodeRateLimitedUntilMs = Math.max(episodeRateLimitedUntilMs, nowMs + waitMs);
+  return waitMs;
+}
+
 let sessionCacheHydrated = false;
 
 function hydrateFromSessionStorage(): void {
@@ -221,7 +253,7 @@ export function getRetryDelayMs(
  * Pure helper: determines whether an episode request should be retried.
  * - Never retries when valid episodes were returned (`itemCount > 0`).
  * - Never retries when aborted.
- * - Never retries on 4xx client errors (except 429 Too Many Requests).
+ * - Never retries on 4xx client errors (including 429 Too Many Requests).
  * - Stops after `maxAttempts` (default 5).
  */
 export function shouldRetryEpisodeRequest(params: {
@@ -245,8 +277,8 @@ export function shouldRetryEpisodeRequest(params: {
   if (languageExplicitlyUnavailable) return false;
   if (attempt >= maxAttempts) return false;
 
-  // 4xx (other than 429) indicates invalid anime ID or bad request -> do not retry
-  if (status >= 400 && status < 500 && status !== 429) {
+  // All 4xx (including 429 rate limits and 404 invalid IDs) -> do not hammer/retry
+  if (status >= 400 && status < 500) {
     return false;
   }
 
@@ -255,7 +287,7 @@ export function shouldRetryEpisodeRequest(params: {
     return false;
   }
 
-  // Retry on 429, 5xx, network failure (status 0), or 200 with 0 episodes
+  // Retry on 5xx, network failure (status 0), or 200 with 0 episodes
   return true;
 }
 
@@ -551,6 +583,7 @@ export function resetEpisodeStoreForTests(): void {
   inFlightAvailabilityRequests.clear();
   retryExhaustedState.clear();
   attemptedEnrichments.clear();
+  episodeRateLimitedUntilMs = 0;
 }
 
 function sleepWithAbort(ms: number, signal?: AbortSignal): Promise<void> {
@@ -649,7 +682,22 @@ export async function fetchEpisodeBatchWithMeta(
     };
   }
 
-  // 3. If previous automatic retries already exhausted for this key (and not forceRefresh), do not loop endlessly
+  // 3. If global client episode cooldown is active, skip upstream fetch to avoid 429 storms
+  if (!options.forceRefresh && episodeRateLimitedUntilMs > now) {
+    return {
+      ok: false,
+      items: [],
+      total: 0,
+      nextAfter: null,
+      availability: getCachedEpisodeAvailability(key) || undefined,
+      fromCache: false,
+      attempts: 0,
+      status: 429,
+      error: 'Rate limited by upstream episode server. Please wait a moment.',
+    };
+  }
+
+  // 4. If previous automatic retries already exhausted for this key (and not forceRefresh), do not loop endlessly
   const exhausted = retryExhaustedState.get(cacheKey);
   if (!options.forceRefresh && exhausted && now - exhausted.exhaustedAt < 60_000) {
     return {
@@ -790,6 +838,10 @@ export async function fetchEpisodeBatchWithMeta(
             };
           }
 
+          if (res.status === 429) {
+            recordEpisodeClientCooldown(retryAfterHeader);
+          }
+
           lastError =
             data?.error ||
             (res.status === 429
@@ -908,6 +960,10 @@ export async function fetchAllAnimeEpisodes(
     }
   }
 
+  if (!forceRefresh && episodeRateLimitedUntilMs > Date.now()) {
+    return [];
+  }
+
   const existing = !forceRefresh ? inFlightBatchRequests.get(requestKey) : undefined;
   if (existing) {
     const res = await existing;
@@ -919,6 +975,9 @@ export async function fetchAllAnimeEpisodes(
       const refreshQuery = forceRefresh ? '&refresh=true' : '';
       const res = await fetch(`/api/episodes/${key}?all=true&lang=${language}${refreshQuery}`);
       if (!res.ok) {
+        if (res.status === 429) {
+          recordEpisodeClientCooldown(res.headers?.get?.('Retry-After') || null);
+        }
         return {
           ok: false,
           items: [],
@@ -1123,6 +1182,7 @@ export async function enrichWatchHistoryEntries(
   entries: WatchHistoryEntry[]
 ): Promise<void> {
   if (!entries || entries.length === 0 || typeof window === 'undefined') return;
+  if (episodeRateLimitedUntilMs > Date.now()) return;
 
   const toEnrich = entries.filter((entry) => {
     const key = `${entry.hoshikaId}:${entry.episodeNumber}`;
@@ -1132,8 +1192,15 @@ export async function enrichWatchHistoryEntries(
 
   if (toEnrich.length === 0) return;
 
-  await Promise.all(
-    toEnrich.map(async (entry) => {
+  let nextIdx = 0;
+  const maxWorkers = Math.min(2, toEnrich.length);
+  const runWorker = async () => {
+    while (nextIdx < toEnrich.length) {
+      if (episodeRateLimitedUntilMs > Date.now()) break;
+      const currentIdx = nextIdx++;
+      const entry = toEnrich[currentIdx];
+      if (!entry) break;
+
       const key = `${entry.hoshikaId}:${entry.episodeNumber}`;
       attemptedEnrichments.add(key);
 
@@ -1150,14 +1217,18 @@ export async function enrichWatchHistoryEntries(
           episodeTitle: cachedEp.title,
           episodeThumbnail: cachedEp.thumbnail,
         });
-        return;
+        continue;
       }
 
       try {
         const res = await fetch(
           `/api/episodes/${entry.hoshikaId}?episode=${entry.episodeNumber}&includeAnime=true`
         );
-        if (!res.ok) return;
+        if (res.status === 429) {
+          recordEpisodeClientCooldown(res.headers?.get?.('Retry-After') || null);
+          break;
+        }
+        if (!res.ok) continue;
         const data = await res.json();
         if (Array.isArray(data?.items) && data.items.length > 0) {
           cacheEpisodes(entry.hoshikaId, data.items, {
@@ -1198,6 +1269,8 @@ export async function enrichWatchHistoryEntries(
       } catch (err) {
         console.error('Failed to enrich watch history metadata:', err);
       }
-    })
-  );
+    }
+  };
+
+  await Promise.all(Array.from({ length: maxWorkers }, () => runWorker()));
 }

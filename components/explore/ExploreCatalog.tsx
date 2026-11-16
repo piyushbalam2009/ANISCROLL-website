@@ -115,6 +115,8 @@ export function ExploreCatalog({ initialData, genres }: ExploreCatalogProps) {
   >(new Map());
   const isFirstMountRef = useRef<boolean>(true);
   const lastFetchedQueryKeyRef = useRef<string>('');
+  const lastErroredQueryKeyRef = useRef<string>('');
+  const errorRef = useRef<string | null>(null);
 
   const selectedGenresKey = selectedGenres.join(',');
 
@@ -234,7 +236,10 @@ export function ExploreCatalog({ initialData, genres }: ExploreCatalogProps) {
       const queryKey = apiParams.toString();
       const requestedPage = sanitizePageNumber(apiParams.get('page'));
 
-      if (!forceRefresh && lastFetchedQueryKeyRef.current === queryKey && !error) {
+      if (!forceRefresh && lastFetchedQueryKeyRef.current === queryKey && !errorRef.current) {
+        return;
+      }
+      if (!forceRefresh && lastErroredQueryKeyRef.current === queryKey) {
         return;
       }
 
@@ -245,6 +250,8 @@ export function ExploreCatalog({ initialData, genres }: ExploreCatalogProps) {
       if (!forceRefresh && clientCacheRef.current.has(queryKey)) {
         const cached = clientCacheRef.current.get(queryKey)!;
         lastFetchedQueryKeyRef.current = queryKey;
+        lastErroredQueryKeyRef.current = '';
+        errorRef.current = null;
         setItems(cached.results || cached.items || []);
         setTotal(cached.total);
         setCurrentPage(cached.currentPage);
@@ -260,6 +267,7 @@ export function ExploreCatalog({ initialData, genres }: ExploreCatalogProps) {
       abortControllerRef.current = controller;
 
       setIsLoading(true);
+      errorRef.current = null;
       setError(null);
 
       try {
@@ -320,6 +328,8 @@ export function ExploreCatalog({ initialData, genres }: ExploreCatalogProps) {
 
         clientCacheRef.current.set(queryKey, pageData);
         lastFetchedQueryKeyRef.current = queryKey;
+        lastErroredQueryKeyRef.current = '';
+        errorRef.current = null;
 
         setItems(pageData.results);
         setTotal(pageData.total);
@@ -330,16 +340,18 @@ export function ExploreCatalog({ initialData, genres }: ExploreCatalogProps) {
       } catch (err: any) {
         if (err?.name === 'AbortError') return;
         console.error('[ExploreCatalog] Fetch error:', err);
-        setError(
-          err?.message || 'Unable to load anime catalogue. Please try again.'
-        );
+        const msg =
+          err?.message || 'Unable to load anime catalogue. Please try again.';
+        lastErroredQueryKeyRef.current = queryKey;
+        errorRef.current = msg;
+        setError(msg);
       } finally {
         if (abortControllerRef.current === controller) {
           setIsLoading(false);
         }
       }
     },
-    [selectedSort, error]
+    [selectedSort]
   );
 
   // Trigger fetch & URL sync whenever active filters, sort, or page change

@@ -297,4 +297,31 @@ test('Test H: Error handling — 429 Retry-After, 5xx retries, and 4xx invalid I
   assert.equal(recovered.ok, true);
   assert.equal(recovered.items.length, 1);
   assert.equal(server503Fetches, 2);
+
+  // 5. HTTP 429 does NOT retry aggressively and activates client cooldown
+  resetEpisodeStoreForTests();
+  let rlFetches = 0;
+  const mock429Fetch = (async () => {
+    rlFetches++;
+    return new Response(JSON.stringify({ ok: false, error: 'Rate limited' }), {
+      status: 429,
+      headers: { 'Retry-After': '30' },
+    });
+  }) as unknown as typeof fetch;
+
+  const rlRes1 = await fetchEpisodeBatchWithMeta(999, undefined, 50, {
+    fetchImpl: mock429Fetch,
+    baseDelayScheduleMs: [0, 1, 1, 1, 1],
+  });
+  assert.equal(rlRes1.ok, false);
+  assert.equal(rlRes1.status, 429);
+  assert.equal(rlFetches, 1);
+
+  const rlRes2 = await fetchEpisodeBatchWithMeta(1000, undefined, 50, {
+    fetchImpl: mock429Fetch,
+    baseDelayScheduleMs: [0, 1, 1, 1, 1],
+  });
+  assert.equal(rlRes2.ok, false);
+  assert.equal(rlRes2.status, 429);
+  assert.equal(rlFetches, 1);
 });

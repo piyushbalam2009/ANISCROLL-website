@@ -170,6 +170,7 @@ export function CinematicHeroBanner({
               <Link
                 key={g.slug || g.name}
                 href={`/genres/${g.slug || g.name.toLowerCase()}`}
+                prefetch={false}
                 className="px-3.5 py-1 rounded-full bg-black/55 backdrop-blur-md border border-white/20 text-xs text-white/95 font-medium hover:border-white/50 hover:text-white transition-all shadow-sm"
               >
                 {g.name}
@@ -194,6 +195,7 @@ export function CinematicHeroBanner({
         <div className="flex flex-wrap items-center gap-3 pt-3">
           <Link
             href={`/anime/${anime.shortId}`}
+            prefetch={false}
             className="inline-flex items-center gap-2.5 px-6 sm:px-7 py-3 sm:py-3.5 rounded-full bg-white hover:bg-neutral-200 text-black font-bold text-xs sm:text-sm transition-all shadow-xl shadow-black/50 active:scale-95"
           >
             <Play size={16} fill="currentColor" />
@@ -202,6 +204,7 @@ export function CinematicHeroBanner({
 
           <Link
             href={`/watch/${anime.shortId}/1`}
+            prefetch={false}
             className="inline-flex items-center gap-2 px-5 sm:px-6 py-3 sm:py-3.5 rounded-full bg-black/60 backdrop-blur-md border border-white/25 hover:bg-white/15 text-white font-medium text-xs sm:text-sm transition-all active:scale-95"
           >
             <span>Play Episode 1</span>

@@ -42,6 +42,15 @@ export function PaginatedBrowseSection({
   const pageCacheRef = useRef<
     Map<number, StandardPaginatedResponse<HoshikaAnimeItem>>
   >(new Map([[initialData.currentPage || 1, initialData]]));
+  const pendingTargetPageRef = useRef<number | null>(null);
+  const currentPageRef = useRef<number>(initialData.currentPage || urlPage);
+  const isLoadingRef = useRef<boolean>(false);
+  const lastErroredPageRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    currentPageRef.current = currentPage;
+    isLoadingRef.current = isLoading;
+  }, [currentPage, isLoading]);
 
   // Keep initial server data seeded in cache and sync visible page when server revalidates
   useEffect(() => {
@@ -62,8 +71,13 @@ export function PaginatedBrowseSection({
         abortControllerRef.current.abort();
       }
 
+      if (!forceRefresh && lastErroredPageRef.current === safeTarget) {
+        return;
+      }
+
       if (!forceRefresh && pageCacheRef.current.has(safeTarget)) {
         const cached = pageCacheRef.current.get(safeTarget)!;
+        lastErroredPageRef.current = null;
         setPageData(cached);
         setCurrentPage(safeTarget);
         setError(null);
@@ -74,8 +88,11 @@ export function PaginatedBrowseSection({
       const controller = new AbortController();
       abortControllerRef.current = controller;
 
+      lastErroredPageRef.current = null;
+      isLoadingRef.current = true;
       setIsLoading(true);
       setError(null);
+      currentPageRef.current = safeTarget;
       setCurrentPage(safeTarget);
 
       try {
@@ -130,17 +147,21 @@ export function PaginatedBrowseSection({
         };
 
         pageCacheRef.current.set(safeTarget, normalizedResponse);
+        lastErroredPageRef.current = null;
         setPageData(normalizedResponse);
+        currentPageRef.current = normalizedResponse.currentPage;
         setCurrentPage(normalizedResponse.currentPage);
       } catch (err: any) {
         if (err?.name === 'AbortError') return;
         console.error(`[PaginatedBrowseSection:${category}] Error:`, err);
+        lastErroredPageRef.current = safeTarget;
         setError(
           err?.message ||
             `Unable to load page ${safeTarget}. Please try again.`
         );
       } finally {
         if (abortControllerRef.current === controller) {
+          isLoadingRef.current = false;
           setIsLoading(false);
         }
       }
@@ -148,17 +169,30 @@ export function PaginatedBrowseSection({
     [category]
   );
 
-  // Sync with URL searchParams (handles Back/Forward buttons and direct URL changes)
+  // Sync with URL searchParams (handles Back/Forward buttons and direct URL changes without racing handlePageChange)
   useEffect(() => {
-    if (urlPage !== currentPage || (!pageCacheRef.current.has(urlPage) && !isLoading && !error)) {
+    if (pendingTargetPageRef.current !== null) {
+      if (urlPage === pendingTargetPageRef.current) {
+        pendingTargetPageRef.current = null;
+      }
+      return;
+    }
+
+    if (
+      urlPage !== currentPageRef.current ||
+      (!pageCacheRef.current.has(urlPage) &&
+        !isLoadingRef.current &&
+        lastErroredPageRef.current !== urlPage)
+    ) {
       fetchBrowsePage(urlPage);
     }
-  }, [urlPage, currentPage, isLoading, error, fetchBrowsePage]);
+  }, [urlPage, fetchBrowsePage]);
 
   const handlePageChange = (nextPage: number) => {
     const safeNext = sanitizePageNumber(nextPage);
     if (safeNext === currentPage && !error) return;
 
+    pendingTargetPageRef.current = safeNext;
     const params = new URLSearchParams(searchParams.toString());
     if (safeNext <= 1) {
       params.delete('page');

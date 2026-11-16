@@ -35,6 +35,7 @@ export function EpisodeRow({
   return (
     <Link
       href={`/watch/${animeId}/${episode.number}`}
+      prefetch={false}
       className={`group relative flex items-center justify-between gap-3 p-2.5 sm:p-3 rounded-xl border transition-all duration-150 ${
         isCurrent
           ? 'bg-white/10 border-white text-white shadow-md'

@@ -726,6 +726,7 @@ export function ProfileView({
               <div key={anime.hoshikaId} className="group relative">
                 <Link
                   href={`/anime/${anime.hoshikaId}`}
+                  prefetch={false}
                   className="block rounded-xl overflow-hidden bg-[#141414] border border-[#292929] hover:border-white/60 transition-colors"
                 >
                   <div className="relative aspect-[3/4] bg-[#070707]">
@@ -800,6 +801,7 @@ export function ProfileView({
               <Link
                 key={`${act.hoshikaId}_${act.episodeNumber}`}
                 href={`/anime/${act.hoshikaId}`}
+                prefetch={false}
                 className="p-3 rounded-xl bg-[#141414] border border-[#292929] hover:border-white/50 transition-colors flex items-center gap-3 group"
               >
                 <div className="relative w-12 h-16 rounded-lg overflow-hidden bg-black shrink-0 border border-[#292929]">

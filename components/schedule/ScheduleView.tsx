@@ -110,6 +110,7 @@ export function ScheduleView({ scheduleItems }: ScheduleViewProps) {
               <Link
                 key={item.id || item.shortId}
                 href={`/anime/${item.shortId}`}
+                prefetch={false}
                 className="group flex items-start gap-3 p-3 rounded-xl bg-[#141414] border border-[#292929] hover:border-[#404040] hover:bg-[#1B1B1B] transition-all"
               >
                 {/* Poster */}

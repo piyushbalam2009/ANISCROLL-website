@@ -110,6 +110,7 @@ const MAX_RECENT_METRICS = 1000;
 const MAX_RECENT_ERRORS = 200;
 const recentMetrics: UpstreamCallMetric[] = [];
 const recentErrors: RecordedErrorEvent[] = [];
+let lastRateLimitWarnAtMs = 0;
 
 const isDevLoggingEnabled =
   typeof process !== 'undefined' &&
@@ -323,11 +324,23 @@ export function recordUpstreamMetric(
     !entry.fromCache
   ) {
     if (entry.errorCode) {
-      console.warn(
-        `[AniScroll][Upstream API failure] provider="${entry.provider}" endpoint="${safeEndpoint}" code="${entry.errorCode}" status=${entry.status ?? 'none'} duration=${Math.round(
-          entry.durationMs
-        )}ms`
-      );
+      if (entry.errorCode === 'rate_limit') {
+        const now = Date.now();
+        if (now - lastRateLimitWarnAtMs >= 10_000) {
+          lastRateLimitWarnAtMs = now;
+          console.warn(
+            `[AniScroll][Upstream API failure] provider="${entry.provider}" endpoint="${safeEndpoint}" code="${entry.errorCode}" status=${entry.status ?? 'none'} duration=${Math.round(
+              entry.durationMs
+            )}ms (throttled summary)`
+          );
+        }
+      } else {
+        console.warn(
+          `[AniScroll][Upstream API failure] provider="${entry.provider}" endpoint="${safeEndpoint}" code="${entry.errorCode}" status=${entry.status ?? 'none'} duration=${Math.round(
+            entry.durationMs
+          )}ms`
+        );
+      }
     } else if (isDevLoggingEnabled && entry.durationMs > 1200) {
       console.info(
         `[PerfMonitor][SLOW] ${entry.provider} ${safeEndpoint} - ${Math.round(
@@ -589,4 +602,5 @@ export function getRecentErrorEvents(limit = 50): RecordedErrorEvent[] {
 export function resetPerfMetrics(): void {
   recentMetrics.length = 0;
   recentErrors.length = 0;
+  lastRateLimitWarnAtMs = 0;
 }

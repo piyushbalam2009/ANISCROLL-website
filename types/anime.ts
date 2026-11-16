@@ -181,4 +181,6 @@ export interface IdMappingResult {
   confidence?: number;
   cached?: boolean;
   candidates?: AniListCandidateSummary[];
+  errorCategory?: string;
+  retryAfterMs?: number;
 }

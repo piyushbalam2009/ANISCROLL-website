@@ -2,7 +2,11 @@ import React from 'react';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { unstable_noStore as noStore } from 'next/cache';
-import { getHoshikaGenreTitlesDetailed, getHoshikaCatalog } from '@/lib/hoshika';
+import {
+  getHoshikaGenreTitlesDetailed,
+  getHoshikaCatalog,
+  isHoshikaCooldownActive,
+} from '@/lib/hoshika';
 import { AnimeGrid } from '@/components/anime/AnimeGrid';
 import { AnimeDetailErrorState } from '@/components/anime/AnimeDetailErrorState';
 import { buildBrowseSocialMetadata } from '@/lib/social-metadata';
@@ -45,7 +49,7 @@ export default async function GenreDetailPage({ params }: GenreDetailPageProps) 
   let titles = genreRes.ok ? genreRes.data : [];
   let upstreamFailed = !genreRes.ok;
 
-  if (titles.length === 0) {
+  if (genreRes.ok && titles.length === 0 && !isHoshikaCooldownActive()) {
     try {
       const catalog = await getHoshikaCatalog({ genre: formattedTitle });
       titles = catalog.items;

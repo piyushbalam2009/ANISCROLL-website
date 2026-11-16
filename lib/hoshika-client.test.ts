@@ -5,6 +5,7 @@ import {
   fetchHoshikaCached,
   HOSHIKA_ENDPOINTS,
   hoshikaErrorToHttpStatus,
+  resetHoshikaClientState,
   resetHoshikaTransportState,
   resolveHoshikaOrigin,
 } from './hoshika-client';
@@ -307,6 +308,7 @@ test('Test B3: HTTP 404 returns NOT_FOUND without retrying, whereas HTTP 429 & 5
     assert.equal(hoshikaErrorToHttpStatus(nfRes.error.category), 404);
   }
 
+  resetHoshikaClientState();
   let rlCalls = 0;
   const rlRes = await executeHoshikaRequest({
     endpoint: '/anime/88291?locale=en',
@@ -315,23 +317,34 @@ test('Test B3: HTTP 404 returns NOT_FOUND without retrying, whereas HTTP 429 & 5
       sleepImpl: noOpSleep,
       fetchImpl: (async () => {
         rlCalls++;
-        if (rlCalls === 1) {
-          return makeFetchResponse({
-            status: 429,
-            headers: { 'retry-after': '1', 'content-type': 'application/json' },
-            body: JSON.stringify({ ok: false, error: 'Too many requests' }),
-          });
-        }
         return makeFetchResponse({
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ ok: true, anime: { shortId: 88291, titleEnglish: 'Bleach' } }),
+          status: 429,
+          headers: { 'retry-after': '12', 'content-type': 'application/json' },
+          body: JSON.stringify({ ok: false, error: 'Too many requests' }),
         });
       }) as typeof fetch,
     },
   });
-  assert.equal(rlCalls, 2);
-  assert.equal(rlRes.ok, true);
+  assert.equal(rlCalls, 1);
+  assert.equal(rlRes.ok, false);
+  if (!rlRes.ok) {
+    assert.equal(rlRes.error.category, 'RATE_LIMITED');
+    assert.equal(hoshikaErrorToHttpStatus(rlRes.error.category), 429);
+  }
+  // Subsequent request during cooldown must short-circuit without calling fetchImpl
+  const rlSecond = await executeHoshikaRequest({
+    endpoint: '/anime/21?locale=en',
+    transport: {
+      sleepImpl: noOpSleep,
+      fetchImpl: (async () => {
+        rlCalls++;
+        return makeFetchResponse({ status: 200, body: '{}' });
+      }) as typeof fetch,
+    },
+  });
+  assert.equal(rlCalls, 1);
+  assert.equal(rlSecond.ok, false);
+  resetHoshikaClientState();
 
   let s503Calls = 0;
   const s503Res = await executeHoshikaRequest({

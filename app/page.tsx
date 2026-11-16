@@ -15,6 +15,8 @@ import {
   getHoshikaHomeDetailed,
   getHoshikaBrowseDetailed,
   getHoshikaAnime,
+  getCachedHoshikaSummary,
+  isHoshikaCooldownActive,
 } from '@/lib/hoshika';
 import { resolveAnimeArtwork } from '@/lib/artwork-mapper';
 import { fetchFirestoreDocumentServer } from '@/lib/firebase-admin';
@@ -111,12 +113,32 @@ export default async function HomePage() {
 
   let heroCandidates: HoshikaAnimeItem[] = [];
   if (curatedFeatured.length > 0) {
-    const fetchedFeatured = await Promise.all(
-      curatedFeatured.slice(0, 6).map(async (f) => {
-        const full = await getHoshikaAnime(f.hoshikaId, 'en').catch(() => null);
-        return full || featuredToHoshikaItem(f);
-      })
-    );
+    const existingById = new Map<number, HoshikaAnimeItem>();
+    for (const item of [
+      ...homeData.trending,
+      ...homeData.seasonal,
+      ...homeData.recentlyAdded,
+      ...topAnime,
+    ]) {
+      if (item?.shortId && !existingById.has(item.shortId)) {
+        existingById.set(item.shortId, item);
+      }
+    }
+
+    const fetchedFeatured: HoshikaAnimeItem[] = [];
+    for (const f of curatedFeatured.slice(0, 6)) {
+      const existing = existingById.get(f.hoshikaId) || getCachedHoshikaSummary(f.hoshikaId);
+      if (existing) {
+        fetchedFeatured.push(existing);
+        continue;
+      }
+      if (isHoshikaCooldownActive()) {
+        fetchedFeatured.push(featuredToHoshikaItem(f));
+        continue;
+      }
+      const full = await getHoshikaAnime(f.hoshikaId, 'en').catch(() => null);
+      fetchedFeatured.push(full || featuredToHoshikaItem(f));
+    }
     heroCandidates = fetchedFeatured;
   }
 

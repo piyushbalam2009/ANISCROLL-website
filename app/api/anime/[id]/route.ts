@@ -44,16 +44,23 @@ export async function GET(
     if (outcome.status === 'upstream_error' || !outcome.anime) {
       const category = outcome.error?.category || 'UPSTREAM_UNAVAILABLE';
       const httpStatus = hoshikaErrorToHttpStatus(category, outcome.error?.status);
+      const headers: Record<string, string> = { 'Cache-Control': 'no-store, max-age=0' };
+      if (httpStatus === 429 && outcome.error?.retryAfterMs) {
+        headers['Retry-After'] = String(
+          Math.max(1, Math.ceil(outcome.error.retryAfterMs / 1000))
+        );
+      }
       return NextResponse.json(
         {
           ok: false,
           code: category,
           retryable: Boolean(outcome.error?.retryable),
+          retryAfterMs: outcome.error?.retryAfterMs,
           error: outcome.error?.message || 'Upstream anime metadata service temporarily unavailable',
         },
         {
           status: httpStatus,
-          headers: { 'Cache-Control': 'no-store, max-age=0' },
+          headers,
         }
       );
     }

@@ -217,6 +217,7 @@ export default function WatchlistPage() {
                   >
                     <Link
                       href={`/anime/${item.hoshikaId}`}
+                      prefetch={false}
                       className="relative aspect-[3/4] overflow-hidden bg-[#0A0A0A]"
                     >
                       <ResilientImage
@@ -268,6 +269,7 @@ export default function WatchlistPage() {
                       <div>
                         <Link
                           href={`/anime/${item.hoshikaId}`}
+                          prefetch={false}
                           className="font-medium text-xs text-white line-clamp-1 hover:underline"
                           title={item.title}
                         >

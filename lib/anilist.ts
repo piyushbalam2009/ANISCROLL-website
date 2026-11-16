@@ -34,6 +34,8 @@ export interface AniListMedia {
     large?: string | null;
   };
   bannerImage?: string | null;
+  description?: string | null;
+  genres?: string[];
 }
 
 const VALID_ANILIST_FORMATS = new Set([
@@ -172,6 +174,8 @@ const MEDIA_FIELDS_FRAGMENT = `
     large
   }
   bannerImage
+  description(asHtml: false)
+  genres
 `;
 
 export async function searchAniList(

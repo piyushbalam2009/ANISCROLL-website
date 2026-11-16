@@ -9,7 +9,8 @@ import {
 import { appCache } from '@/lib/cache';
 import { getArtworkCacheStats } from '@/lib/artwork/artwork-cache';
 import { logAdminActionServer, logErrorEventServer } from '@/lib/admin/server-audit';
-import { HOSHIKA_ENDPOINTS, resolveHoshikaApiBase } from '@/lib/hoshika-client';
+import { getHoshikaClientStatus, resolveHoshikaApiBase } from '@/lib/hoshika-client';
+import { probeHoshikaHealth } from '@/lib/hoshika';
 
 export interface ServiceHealthProbe {
   id: string;
@@ -84,9 +85,49 @@ async function runHttpProbe(params: {
   }
 }
 
+async function runHoshikaProbe(hoshikaApiBase: string): Promise<ServiceHealthProbe> {
+  const start = Date.now();
+  const checkedAt = new Date().toISOString();
+  const res = await probeHoshikaHealth();
+  const responseTimeMs = Math.max(1, Date.now() - start);
+
+  if (res.ok) {
+    return {
+      id: 'hoshika',
+      name: 'Hoshika Anime Metadata',
+      category: 'metadata',
+      endpoint: `GET ${hoshikaApiBase}/home`,
+      status: responseTimeMs > 2500 ? 'degraded' : 'operational',
+      responseTimeMs,
+      statusCode: 200,
+      errorMessage: '',
+      checkedAt,
+    };
+  }
+
+  const statusCode = res.error.status || 0;
+  const status: ServiceHealthProbe['status'] =
+    res.error.category === 'RATE_LIMITED'
+      ? 'degraded'
+      : statusCode >= 500 || statusCode === 0
+      ? 'outage'
+      : 'degraded';
+
+  return {
+    id: 'hoshika',
+    name: 'Hoshika Anime Metadata',
+    category: 'metadata',
+    endpoint: `GET ${hoshikaApiBase}/home`,
+    status,
+    responseTimeMs,
+    statusCode,
+    errorMessage: res.error.message,
+    checkedAt,
+  };
+}
+
 async function runAllHealthProbes(): Promise<ServiceHealthProbe[]> {
   const hoshikaApiBase = resolveHoshikaApiBase();
-  const hoshikaHomePath = HOSHIKA_ENDPOINTS.home('en');
   const projectId = (process.env.NEXT_PUBLIC_FIREBASE_PROJECT_ID || '').trim();
   const firestoreProbeUrl = projectId
     ? `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(
@@ -97,14 +138,7 @@ async function runAllHealthProbes(): Promise<ServiceHealthProbe[]> {
   const supabaseUrl = (process.env.NEXT_PUBLIC_SUPABASE_URL || '').trim();
 
   const probes = await Promise.all([
-    runHttpProbe({
-      id: 'hoshika',
-      name: 'Hoshika Anime Metadata',
-      category: 'metadata',
-      endpoint: `GET ${hoshikaApiBase}/home`,
-      url: `${hoshikaApiBase}${hoshikaHomePath}`,
-      init: { headers: { Accept: 'application/json' } },
-    }),
+    runHoshikaProbe(hoshikaApiBase),
     runHttpProbe({
       id: 'anilist',
       name: 'AniList GraphQL API',
@@ -222,6 +256,7 @@ export async function GET(req: NextRequest) {
     telemetrySeries,
     cacheStats,
     artworkCacheStats,
+    hoshikaStatus: getHoshikaClientStatus(),
     environment: {
       fanartConfigured: Boolean(fanartKey && fanartKey !== 'MY_FANART_API_KEY' && fanartKey.length > 5),
       supabaseConfigured: Boolean(process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.SUPABASE_SERVICE_ROLE_KEY),

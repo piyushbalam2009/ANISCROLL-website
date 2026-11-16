@@ -14,10 +14,16 @@ import {
 import {
   executeHoshikaRequest,
   fetchHoshikaCached,
+  getHoshikaCooldownRemainingMs,
+  getHoshikaCooldownState,
   HOSHIKA_ENDPOINTS,
   HoshikaErrorDetails,
+  HoshikaRequestPriority,
   HoshikaResult,
   HoshikaUpstreamError,
+  isHoshikaCooldownActive,
+  isHoshikaUpstreamError,
+  resetHoshikaClientState,
 } from './hoshika-client';
 import {
   mapHoshikaAnimeItem,
@@ -31,10 +37,21 @@ import {
   validateHoshikaItemsPayload,
   validateHoshikaSearchPayload,
 } from './hoshika-mapper';
-import { getAniListById } from './anilist';
-import { HoshikaAnimeItem, HoshikaEpisodeItem, ScheduleItem } from '@/types/anime';
+import { AniListMedia, getAniListById, searchAniListWithFallback } from './anilist';
+import {
+  HoshikaAnimeItem,
+  HoshikaEpisodeItem,
+  IdMappingResult,
+  ScheduleItem,
+} from '@/types/anime';
 
-export { HoshikaUpstreamError, isHoshikaUpstreamError } from './hoshika-client';
+export {
+  HoshikaUpstreamError,
+  isHoshikaUpstreamError,
+  isHoshikaCooldownActive,
+  getHoshikaCooldownState,
+  resetHoshikaClientState,
+} from './hoshika-client';
 
 const FALLBACK_BASE_GENRES = [
   'Action',
@@ -88,6 +105,59 @@ function normalizePositiveShortId(rawId: string | number): string | null {
   return String(num);
 }
 
+function cacheHoshikaSummaries(items: Array<HoshikaAnimeItem | null | undefined>): void {
+  for (const item of items) {
+    if (!item || !item.shortId) continue;
+    const summaryKey = `hoshika:summary:${item.shortId}`;
+    const existing = appCache.getEntryState<HoshikaAnimeItem>(summaryKey).value;
+    // Preserve richer existing fields (e.g. synopsis/anilistId) while updating fresh titles/images
+    const merged: HoshikaAnimeItem = existing
+      ? {
+          ...existing,
+          ...item,
+          synopsis: item.synopsis || existing.synopsis || null,
+          anilistId: item.anilistId || existing.anilistId || null,
+          malId: item.malId || existing.malId || null,
+          bannerImage: item.bannerImage || existing.bannerImage || null,
+          coverImage: item.coverImage || existing.coverImage || null,
+        }
+      : item;
+    appCache.set(summaryKey, merged, {
+      ttlSeconds: 86400,
+      staleWhileRevalidateSeconds: 86400,
+    });
+  }
+}
+
+export function getCachedHoshikaSummary(
+  shortId: string | number
+): HoshikaAnimeItem | null {
+  const cleanId = normalizePositiveShortId(shortId);
+  if (!cleanId) return null;
+  const state = appCache.getEntryState<HoshikaAnimeItem>(`hoshika:summary:${cleanId}`);
+  return state.value || null;
+}
+
+function getHoshikaCacheErrorPolicy() {
+  return {
+    shouldSuppressBackgroundRefresh: () => isHoshikaCooldownActive(),
+    negativeRefreshCooldownMs: 15_000,
+    getRefreshCooldownMs: (err: unknown) => {
+      if (isHoshikaUpstreamError(err) && err.category === 'RATE_LIMITED') {
+        return {
+          cooldownMs: Math.max(
+            15_000,
+            getHoshikaCooldownRemainingMs(),
+            err.retryAfterMs ?? 0
+          ),
+          errorCode: 'RATE_LIMITED',
+        };
+      }
+      return { cooldownMs: 15_000 };
+    },
+  };
+}
+
 /**
  * Low-level backwards-compatible Hoshika fetcher returning `T | null`.
  * Powered by the centralized `fetchHoshikaCached` client with strict validation,
@@ -96,12 +166,14 @@ function normalizePositiveShortId(rawId: string | number): string | null {
 export async function fetchFromHoshika<T>(
   endpoint: string,
   cacheTtlSeconds: number = 300,
-  forceRefresh: boolean = false
+  forceRefresh: boolean = false,
+  priority: HoshikaRequestPriority = 'foreground'
 ): Promise<T | null> {
   const res = await fetchHoshikaCached<T>({
     endpoint,
     cacheTtlSeconds,
     forceRefresh,
+    priority,
     shouldCache: (data) => {
       if (!data) return false;
       const isEmptyEpisodesResponse =
@@ -173,7 +245,11 @@ export async function searchHoshikaDetailed(
     cacheTtlSeconds: 360,
     staleWhileRevalidateSeconds: 720,
     validator: validateHoshikaSearchPayload,
-    mapper: (raw) => mapHoshikaAnimeList((raw as any).anime),
+    mapper: (raw) => {
+      const items = mapHoshikaAnimeList((raw as any).anime);
+      cacheHoshikaSummaries(items);
+      return items;
+    },
   });
 
   if (!res.ok) {
@@ -276,6 +352,7 @@ export async function getHoshikaAnimeDetailed(
           durationMs: 0,
         });
       }
+      cacheHoshikaSummaries([mapped]);
       return mapped;
     },
   });
@@ -295,8 +372,127 @@ export interface ResolveAnimeDetailOutcome {
   status: 'found' | 'not_found' | 'invalid_id' | 'upstream_error';
   anime: HoshikaAnimeItem | null;
   canonicalShortId: number | null;
-  idSource: 'hoshika' | 'anilist_cross_mapped' | null;
+  idSource: 'hoshika' | 'anilist_cross_mapped' | 'anilist_fallback' | null;
   error?: HoshikaErrorDetails;
+}
+
+function mapAniListMediaToFallbackAnime(
+  shortId: number,
+  media: AniListMedia,
+  summary?: HoshikaAnimeItem | null
+): HoshikaAnimeItem {
+  const cleanSynopsis =
+    typeof media.description === 'string' && media.description.trim()
+      ? media.description.replace(/<[^>]+>/g, '').trim()
+      : summary?.synopsis || null;
+
+  return {
+    ...(summary || {}),
+    id: summary?.id || String(shortId),
+    shortId,
+    slug: summary?.slug || String(shortId),
+    titleRomaji: media.title?.romaji || summary?.titleRomaji || null,
+    titleEnglish:
+      media.title?.english ||
+      summary?.titleEnglish ||
+      media.title?.userPreferred ||
+      null,
+    titleJapanese: media.title?.native || summary?.titleJapanese || null,
+    titleLocalized:
+      media.title?.userPreferred ||
+      media.title?.english ||
+      media.title?.romaji ||
+      summary?.titleLocalized ||
+      null,
+    synonyms: Array.isArray(media.synonyms) && media.synonyms.length > 0
+      ? media.synonyms
+      : summary?.synonyms,
+    synopsis: cleanSynopsis,
+    coverImage:
+      media.coverImage?.extraLarge ||
+      media.coverImage?.large ||
+      summary?.coverImage ||
+      null,
+    bannerImage: media.bannerImage || summary?.bannerImage || null,
+    format: media.format || summary?.format || null,
+    status: media.status || summary?.status || null,
+    season: media.season || summary?.season || null,
+    seasonYear: media.seasonYear || media.startDate?.year || summary?.seasonYear || null,
+    episodes: media.episodes ?? summary?.episodes ?? null,
+    episodeDuration: media.duration ?? summary?.episodeDuration ?? null,
+    averageScore: media.averageScore ?? summary?.averageScore ?? null,
+    genres:
+      Array.isArray(media.genres) && media.genres.length > 0
+        ? media.genres.map((name) => ({
+            name,
+            slug: name.toLowerCase().replace(/[\s_]+/g, '-'),
+          }))
+        : summary?.genres,
+    anilistId: media.id || summary?.anilistId || null,
+    malId: media.idMal || summary?.malId || null,
+  };
+}
+
+/**
+ * Builds partial anime metadata from verified cached summary / ID-map / AniList GraphQL
+ * when Hoshika upstream is rate-limited (`429`) or experiencing temporary outage.
+ */
+export async function getAniListFallbackForAnime(params: {
+  shortId: string | number;
+  anilistId?: number | null;
+  forceRefresh?: boolean;
+}): Promise<HoshikaAnimeItem | null> {
+  const cleanId = normalizePositiveShortId(params.shortId);
+  if (!cleanId) return null;
+  const numericShortId = Number(cleanId);
+
+  const summary = getCachedHoshikaSummary(cleanId);
+  const cachedIdMap = appCache.getEntryState<IdMappingResult>(`id-map:v4:${cleanId}`).value;
+  const targetAnilistId =
+    params.anilistId ||
+    summary?.anilistId ||
+    cachedIdMap?.aniListId ||
+    cachedIdMap?.anilistId ||
+    null;
+
+  if (targetAnilistId && targetAnilistId > 0) {
+    try {
+      const media = await getAniListById(targetAnilistId, params.forceRefresh);
+      if (media) {
+        return mapAniListMediaToFallbackAnime(numericShortId, media, summary);
+      }
+    } catch {
+      // fall through to title/summary fallback
+    }
+  }
+
+  const lookupTitle =
+    summary?.titleEnglish ||
+    summary?.titleRomaji ||
+    summary?.titleLocalized ||
+    cachedIdMap?.matchedTitle ||
+    cachedIdMap?.title ||
+    null;
+
+  if (lookupTitle && lookupTitle !== 'Unknown') {
+    try {
+      const candidates = await searchAniListWithFallback(
+        lookupTitle,
+        summary?.format || cachedIdMap?.format || undefined
+      );
+      if (candidates.length > 0) {
+        return mapAniListMediaToFallbackAnime(
+          numericShortId,
+          candidates[0],
+          summary
+        );
+      }
+    } catch {
+      // ignore AniList lookup errors; fall back to summary below if present
+    }
+  }
+
+  return summary;
 }
 
 function normalizeTitleForExactCrossLookup(value?: string | null): string {
@@ -314,8 +510,10 @@ function normalizeTitleForExactCrossLookup(value?: string | null): string {
  * Resolves an anime detail page/API request by ID cleanly:
  * 1. Validates positive integer ID cleanly (never sends garbage to Hoshika 400).
  * 2. Calls Hoshika `/api/v1/anime/{shortId}` as primary authoritative source.
- * 3. On transient upstream error (timeout, 429, 5xx, Cloudflare, DNS, connection, TLS, HTML),
- *    returns `status: 'upstream_error'` immediately — NEVER fakes a 404 or replaces ID with AniList.
+ * 3. On `RATE_LIMITED` / transient upstream error:
+ *    - Never fakes a 404 or guesses unrelated IDs.
+ *    - If verified summary or AniList ID link exists for this `shortId`, serves partial fallback metadata cleanly.
+ *    - Otherwise returns `status: 'upstream_error'` (with `429`/`503` semantics).
  * 4. ONLY when Hoshika explicitly returns `NOT_FOUND` (HTTP 404), attempts a verified
  *    AniList -> Hoshika title cross-lookup in case an external AniList ID URL was shared.
  */
@@ -335,7 +533,7 @@ export async function resolveAnimeDetailById(
       error: {
         category: 'HTTP_ERROR',
         status: 400,
-        endpoint: `/anime/${String(rawId)}`,
+        endpoint: `/api/v1/anime/${String(rawId)}`,
         message: 'Invalid anime ID',
         retryable: false,
         durationMs: 0,
@@ -355,6 +553,27 @@ export async function resolveAnimeDetailById(
   }
 
   if (primary.error.category !== 'NOT_FOUND') {
+    if (
+      primary.error.category === 'RATE_LIMITED' ||
+      primary.error.category === 'UPSTREAM_UNAVAILABLE' ||
+      primary.error.category === 'TIMEOUT'
+    ) {
+      const fallbackAnime = await getAniListFallbackForAnime({
+        shortId: cleanId,
+        forceRefresh: false,
+      });
+      if (fallbackAnime) {
+        return {
+          ok: true,
+          status: 'found',
+          anime: fallbackAnime,
+          canonicalShortId: Number(cleanId),
+          idSource: 'anilist_fallback',
+          error: primary.error,
+        };
+      }
+    }
+
     return {
       ok: false,
       status: 'upstream_error',
@@ -616,6 +835,7 @@ export async function getAllHoshikaEpisodes(
       shouldCache: (res) => Array.isArray(res?.items) && res.items.length > 0,
       serveStaleOnError: true,
       forceRefresh,
+      ...getHoshikaCacheErrorPolicy(),
     }
   );
 }
@@ -704,12 +924,16 @@ export async function getHoshikaHomeDetailed(
     validator: validateHoshikaHomePayload,
     mapper: (raw) => {
       const obj = raw as Record<string, any>;
+      const seasonal = mapHoshikaAnimeList(obj.seasonal);
+      const trending = mapHoshikaAnimeList(obj.trending);
+      const recentlyAdded = mapHoshikaAnimeList(obj.recentlyAdded);
+      cacheHoshikaSummaries([...seasonal, ...trending, ...recentlyAdded]);
       return {
         season:
           obj.season && typeof obj.season === 'object' ? obj.season : null,
-        seasonal: mapHoshikaAnimeList(obj.seasonal),
-        trending: mapHoshikaAnimeList(obj.trending),
-        recentlyAdded: mapHoshikaAnimeList(obj.recentlyAdded),
+        seasonal,
+        trending,
+        recentlyAdded,
       };
     },
   });
@@ -747,7 +971,11 @@ export async function getHoshikaBrowseDetailed(
     forceRefresh,
     validator: validateHoshikaItemsPayload,
     shouldCache: (items) => Array.isArray(items) && items.length > 0,
-    mapper: (raw) => mapHoshikaAnimeList((raw as any).items),
+    mapper: (raw) => {
+      const items = mapHoshikaAnimeList((raw as any).items);
+      cacheHoshikaSummaries(items);
+      return items;
+    },
   });
 }
 
@@ -826,8 +1054,10 @@ export async function getHoshikaCatalog(
           validator: validateHoshikaItemsPayload,
           mapper: (raw) => {
             const obj = raw as Record<string, any>;
+            const items = mapHoshikaAnimeList(obj.items);
+            cacheHoshikaSummaries(items);
             return {
-              items: mapHoshikaAnimeList(obj.items),
+              items,
               total: typeof obj.total === 'number' ? obj.total : undefined,
               hasMore:
                 typeof obj.hasMore === 'boolean' ? obj.hasMore : undefined,
@@ -836,9 +1066,19 @@ export async function getHoshikaCatalog(
         });
       };
 
-      const upstreamResponses = await Promise.all(
-        windowInfo.upstreamPages.map((p) => fetchSingleUpstreamPage(p))
-      );
+      const upstreamResponses: Array<
+        Awaited<ReturnType<typeof fetchSingleUpstreamPage>>
+      > = [];
+      for (const upPage of windowInfo.upstreamPages) {
+        if (isHoshikaCooldownActive() && upstreamResponses.length > 0) {
+          break;
+        }
+        const r = await fetchSingleUpstreamPage(upPage);
+        upstreamResponses.push(r);
+        if (!r.ok && r.error.category === 'RATE_LIMITED') {
+          break;
+        }
+      }
 
       const firstResponse = upstreamResponses[0];
       if (!firstResponse || !firstResponse.ok) {
@@ -935,6 +1175,7 @@ export async function getHoshikaCatalog(
       staleWhileRevalidateSeconds: 1200,
       serveStaleOnError: true,
       forceRefresh,
+      ...getHoshikaCacheErrorPolicy(),
     }
   );
 }
@@ -1094,22 +1335,33 @@ export async function getHoshikaBrowsePaginated(
         ...windowInfo.upstreamPages,
         windowInfo.lastUpstreamPage + 1,
       ];
-      const responses = await Promise.all(
-        pagesToFetch.map((p) =>
-          fetchFromHoshika<{
-            ok: boolean;
-            items?: HoshikaAnimeItem[];
-            total?: number;
-            hasMore?: boolean;
-          }>(
-            p === 1
-              ? `/catalog?${catalogQueryBase}`
-              : `/catalog?${catalogQueryBase}&page=${p}`,
-            ttl,
-            forceRefresh
-          )
-        )
-      );
+      const responses: Array<{
+        ok: boolean;
+        items?: HoshikaAnimeItem[];
+        total?: number;
+        hasMore?: boolean;
+      } | null> = [];
+      for (const p of pagesToFetch) {
+        if (isHoshikaCooldownActive() && responses.length > 0) {
+          break;
+        }
+        const r = await fetchFromHoshika<{
+          ok: boolean;
+          items?: HoshikaAnimeItem[];
+          total?: number;
+          hasMore?: boolean;
+        }>(
+          p === 1
+            ? `/catalog?${catalogQueryBase}`
+            : `/catalog?${catalogQueryBase}&page=${p}`,
+          ttl,
+          forceRefresh
+        );
+        responses.push(r);
+        if (!r || isHoshikaCooldownActive()) {
+          break;
+        }
+      }
 
       const firstResp = responses[0];
       const reportedTotal =
@@ -1130,7 +1382,9 @@ export async function getHoshikaBrowsePaginated(
       const rawCombined: HoshikaAnimeItem[] = [];
       for (const r of responses) {
         if (r && Array.isArray(r.items)) {
-          rawCombined.push(...mapHoshikaAnimeList(r.items));
+          const mappedList = mapHoshikaAnimeList(r.items);
+          cacheHoshikaSummaries(mappedList);
+          rawCombined.push(...mappedList);
         }
       }
 
@@ -1152,6 +1406,7 @@ export async function getHoshikaBrowsePaginated(
       staleWhileRevalidateSeconds: ttl * 2,
       serveStaleOnError: true,
       forceRefresh,
+      ...getHoshikaCacheErrorPolicy(),
     }
   );
 }
@@ -1172,9 +1427,11 @@ export async function getHoshikaScheduleDetailed(
     mapper: (raw) => {
       const items = (raw as any).items;
       if (!Array.isArray(items)) return [];
-      return items
+      const mapped = items
         .map((item) => mapHoshikaScheduleItem(item))
         .filter((x): x is ScheduleItem => x !== null);
+      cacheHoshikaSummaries(mapped);
+      return mapped;
     },
   });
 }
@@ -1233,7 +1490,11 @@ export async function getHoshikaGenreTitlesDetailed(
     staleWhileRevalidateSeconds: 1200,
     forceRefresh,
     validator: validateHoshikaItemsPayload,
-    mapper: (raw) => mapHoshikaAnimeList((raw as any).items),
+    mapper: (raw) => {
+      const mapped = mapHoshikaAnimeList((raw as any).items);
+      cacheHoshikaSummaries(mapped);
+      return mapped;
+    },
   });
 }
 
@@ -1246,9 +1507,30 @@ export async function getHoshikaGenreTitles(
 }
 
 /**
- * Direct uncached health probe helper using the centralized Hoshika client.
+ * Health probe helper using the centralized Hoshika client.
+ * Respects active 429 cooldown instead of hammering Hoshika while rate-limited.
  */
-export async function probeHoshikaHealth() {
+export async function probeHoshikaHealth(): Promise<HoshikaResult<unknown>> {
+  if (isHoshikaCooldownActive()) {
+    const cooldown = getHoshikaCooldownState();
+    return {
+      ok: false,
+      fromCache: false,
+      error: {
+        category: 'RATE_LIMITED',
+        status: 429,
+        endpoint: '/api/v1/home?locale=en',
+        message: `Hoshika cooldown active (${Math.ceil(
+          cooldown.remainingMs / 1000
+        )}s remaining)`,
+        retryable: true,
+        retryAfterMs: cooldown.remainingMs,
+        cooldownUntil: cooldown.cooldownUntil ?? undefined,
+        durationMs: 0,
+      },
+    };
+  }
+
   return executeHoshikaRequest({
     endpoint: HOSHIKA_ENDPOINTS.home('en'),
     maxAttempts: 1,

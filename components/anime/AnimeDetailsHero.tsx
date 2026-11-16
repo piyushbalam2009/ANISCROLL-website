@@ -377,6 +377,7 @@ export function AnimeDetailsHero({
                 <Link
                   key={g.slug || g.name}
                   href={`/genres/${g.slug || g.name.toLowerCase()}`}
+                  prefetch={false}
                   className="px-4 py-1.5 rounded-full bg-black/55 backdrop-blur-md border border-white/20 text-xs text-white/95 font-medium hover:border-white/50 hover:text-white transition-all shadow-sm"
                 >
                   {g.name}
@@ -410,6 +411,7 @@ export function AnimeDetailsHero({
             {/* Primary: Play Episode 1 */}
             <Link
               href={`/watch/${anime.shortId}/1`}
+              prefetch={false}
               className="inline-flex items-center gap-2 px-6 sm:px-7 py-3 sm:py-3.5 rounded-full bg-white text-black font-semibold text-xs sm:text-sm hover:bg-neutral-200 transition-all shadow-xl active:scale-95"
             >
               <Play size={17} fill="currentColor" />

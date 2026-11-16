@@ -6,7 +6,8 @@ import { getAniScrollStreamDetailed } from '@/lib/aniscroll';
 import { selectStreamingProvider } from '@/lib/stream-provider-core';
 import { redactSensitiveText, sanitizeDiagnosticUrl } from '@/lib/admin/redaction';
 import { logAdminActionServer, logErrorEventServer } from '@/lib/admin/server-audit';
-import { HOSHIKA_ENDPOINTS, resolveHoshikaApiBase } from '@/lib/hoshika-client';
+import { getHoshikaClientStatus, resolveHoshikaApiBase } from '@/lib/hoshika-client';
+import { getHoshikaBrowseDetailed, probeHoshikaHealth } from '@/lib/hoshika';
 
 interface ProviderProbeResult {
   provider: 'aniscroll' | 'hoshika' | 'anilist' | 'aniskip' | 'fanart' | 'megaplay' | 'zokoanime';
@@ -83,14 +84,58 @@ async function probeEndpoint(params: {
   }
 }
 
+async function probeHoshikaViaClient(params: {
+  provider: 'hoshika' | 'aniscroll';
+  name: string;
+  description: string;
+  endpointLabel: string;
+  fn: () => Promise<{
+    ok: boolean;
+    error?: { category: string; status?: number | null; message: string };
+  }>;
+}): Promise<ProviderProbeResult> {
+  const start = Date.now();
+  const checkedAt = new Date().toISOString();
+  const res = await params.fn();
+  const responseTimeMs = Math.max(1, Date.now() - start);
+
+  if (res.ok) {
+    return {
+      provider: params.provider,
+      name: params.name,
+      description: params.description,
+      endpoint: params.endpointLabel,
+      status: responseTimeMs > 2500 ? 'degraded' : 'operational',
+      responseTimeMs,
+      statusCode: 200,
+      errorMessage: '',
+      checkedAt,
+    };
+  }
+
+  const statusCode = res.error?.status || 0;
+  const status: ProviderProbeResult['status'] =
+    res.error?.category === 'RATE_LIMITED'
+      ? 'degraded'
+      : statusCode >= 500 || statusCode === 0
+      ? 'outage'
+      : 'degraded';
+
+  return {
+    provider: params.provider,
+    name: params.name,
+    description: params.description,
+    endpoint: params.endpointLabel,
+    status,
+    responseTimeMs,
+    statusCode,
+    errorMessage: res.error?.message ? redactSensitiveText(res.error.message, 256) : 'Upstream error',
+    checkedAt,
+  };
+}
+
 async function runStreamingProbes(): Promise<ProviderProbeResult[]> {
   const hoshikaApiBase = resolveHoshikaApiBase();
-  const hoshikaHomePath = HOSHIKA_ENDPOINTS.home('en');
-  const hoshikaTopBrowsePath = HOSHIKA_ENDPOINTS.browse({
-    type: 'anime',
-    sort: 'top',
-    locale: 'en',
-  });
 
   return Promise.all([
     probeEndpoint({
@@ -109,21 +154,19 @@ async function runStreamingProbes(): Promise<ProviderProbeResult[]> {
       url: 'https://api.aniscroll.in/api/watch/zokoanime/16498/1/sub',
       init: { method: 'GET', headers: { Accept: 'application/json' } },
     }),
-    probeEndpoint({
+    probeHoshikaViaClient({
       provider: 'hoshika',
       name: 'Hoshika Metadata API',
       description: 'Primary anime catalogue, episode pagination, and synopses',
       endpointLabel: `GET ${hoshikaApiBase}/home`,
-      url: `${hoshikaApiBase}${hoshikaHomePath}`,
-      init: { method: 'GET', headers: { Accept: 'application/json' } },
+      fn: () => probeHoshikaHealth(),
     }),
-    probeEndpoint({
+    probeHoshikaViaClient({
       provider: 'aniscroll',
       name: 'AniScroll HLS Streaming Engine',
       description: 'HLS manifest resolver, multi-server audio (Sub/Dub), and subtitle tracks',
       endpointLabel: `GET ${hoshikaApiBase}/browse?type=anime&sort=top`,
-      url: `${hoshikaApiBase}${hoshikaTopBrowsePath}`,
-      init: { method: 'GET', headers: { Accept: 'application/json' } },
+      fn: () => getHoshikaBrowseDetailed('top', 'anime', false, 'en'),
     }),
     probeEndpoint({
       provider: 'anilist',
@@ -194,6 +237,7 @@ export async function GET(req: NextRequest) {
     probes,
     providerTelemetry,
     historyLogs,
+    hoshikaStatus: getHoshikaClientStatus(),
   });
 }
 

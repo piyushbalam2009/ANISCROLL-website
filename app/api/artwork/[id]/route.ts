@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getHoshikaAnime } from '@/lib/hoshika';
+import { resolveAnimeDetailById } from '@/lib/hoshika';
+import { hoshikaErrorToHttpStatus } from '@/lib/hoshika-client';
 import { resolveAnimeArtwork } from '@/lib/artwork-mapper';
 import {
   getCachedArtwork,
@@ -50,11 +51,36 @@ export async function GET(
     let fetchedAnime = null;
 
     if (!title || (!hoshikaBanner && !hoshikaCover) || !anilistId || bypassCache) {
-      const anime = await getHoshikaAnime(hoshikaId, 'en', bypassCache);
+      const outcome = await resolveAnimeDetailById(hoshikaId, 'en', bypassCache);
+      const anime = outcome.anime;
       fetchedAnime = anime;
       const override = getCachedArtworkOverride(hoshikaId);
 
       if (!anime && !override && !queryTitle && !queryBanner && !queryCover) {
+        if (outcome.status === 'upstream_error' && outcome.error) {
+          const httpStatus = hoshikaErrorToHttpStatus(
+            outcome.error.category,
+            outcome.error.status
+          );
+          const headers: Record<string, string> = {
+            'Cache-Control': 'no-store, max-age=0',
+          };
+          if (httpStatus === 429 && outcome.error.retryAfterMs) {
+            headers['Retry-After'] = String(
+              Math.max(1, Math.ceil(outcome.error.retryAfterMs / 1000))
+            );
+          }
+          return NextResponse.json(
+            {
+              ok: false,
+              code: outcome.error.category,
+              error: outcome.error.message,
+              retryAfterMs: outcome.error.retryAfterMs,
+            },
+            { status: httpStatus, headers }
+          );
+        }
+
         return NextResponse.json(
           { ok: false, error: 'Anime not found' },
           { status: 404 }

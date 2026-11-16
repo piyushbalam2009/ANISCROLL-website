@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import {
-  getHoshikaAnime,
+  resolveAnimeDetailById,
   getHoshikaEpisodesDetailed,
   getAllHoshikaEpisodes,
 } from '@/lib/hoshika';
@@ -115,28 +115,40 @@ export async function GET(
       );
     }
 
-    const [episodesRes, anime] = await Promise.all([
+    const [episodesRes, animeOutcome] = await Promise.all([
       getHoshikaEpisodesDetailed(trimmedId, locale, after, limit, forceRefresh),
-      includeAnime ? getHoshikaAnime(trimmedId, locale, forceRefresh) : Promise.resolve(null),
+      includeAnime
+        ? resolveAnimeDetailById(trimmedId, locale, forceRefresh)
+        : Promise.resolve(null),
     ]);
+    const anime = animeOutcome?.anime ?? null;
 
     if (!episodesRes.ok) {
       const status = hoshikaErrorToHttpStatus(
         episodesRes.error.category,
         episodesRes.error.status
       );
+      const headers: Record<string, string> = {
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+      };
+      if (status === 429 && episodesRes.error.retryAfterMs) {
+        headers['Retry-After'] = String(
+          Math.max(1, Math.ceil(episodesRes.error.retryAfterMs / 1000))
+        );
+      }
       return NextResponse.json(
         {
           ok: false,
           code: episodesRes.error.category,
           retryable: episodesRes.error.retryable,
+          retryAfterMs: episodesRes.error.retryAfterMs,
           error: episodesRes.error.message,
           items: [],
           total: 0,
         },
         {
           status,
-          headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+          headers,
         }
       );
     }
@@ -230,20 +242,30 @@ export async function GET(
       }
     );
   } catch (err: any) {
-    const status = isHoshikaUpstreamError(err)
+    const isUpstream = isHoshikaUpstreamError(err);
+    const status = isUpstream
       ? hoshikaErrorToHttpStatus(err.category, err.status)
       : 502;
+    const headers: Record<string, string> = {
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+    };
+    if (isUpstream && status === 429 && err.retryAfterMs) {
+      headers['Retry-After'] = String(
+        Math.max(1, Math.ceil(err.retryAfterMs / 1000))
+      );
+    }
     return NextResponse.json(
       {
         ok: false,
-        code: isHoshikaUpstreamError(err) ? err.category : 'UPSTREAM_UNAVAILABLE',
+        code: isUpstream ? err.category : 'UPSTREAM_UNAVAILABLE',
+        retryAfterMs: isUpstream ? err.retryAfterMs : undefined,
         error: err?.message || 'Failed to retrieve anime episodes',
         items: [],
         total: 0,
       },
       {
         status,
-        headers: { 'Cache-Control': 'no-store, no-cache, must-revalidate' },
+        headers,
       }
     );
   }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveAnimeIds } from '@/lib/id-mapper';
+import { hoshikaErrorToHttpStatus, HoshikaErrorCategory } from '@/lib/hoshika-client';
 
 export async function GET(
   _req: NextRequest,
@@ -18,14 +19,32 @@ export async function GET(
   try {
     const mapping = await resolveAnimeIds(hoshikaId);
     if (mapping.status === 'failed' && mapping.title === 'Unknown') {
+      const errCat = (mapping.errorCategory || 'NOT_FOUND') as HoshikaErrorCategory;
+      const status =
+        errCat === 'NOT_FOUND' ? 404 : hoshikaErrorToHttpStatus(errCat);
+      const headers: Record<string, string> = {
+        'Cache-Control': 'no-store, max-age=0',
+      };
+      if (status === 429 && mapping.retryAfterMs && mapping.retryAfterMs > 0) {
+        headers['Retry-After'] = String(
+          Math.max(1, Math.ceil(mapping.retryAfterMs / 1000))
+        );
+      }
+
       return NextResponse.json(
         {
           ok: false,
-          error: mapping.explanation || 'Anime not found',
+          code: errCat,
+          error:
+            mapping.explanation ||
+            (status === 429
+              ? 'Upstream catalogue rate limited'
+              : 'Anime not found'),
+          retryAfterMs: mapping.retryAfterMs,
           data: mapping,
           ...mapping,
         },
-        { status: 404 }
+        { status, headers }
       );
     }
 

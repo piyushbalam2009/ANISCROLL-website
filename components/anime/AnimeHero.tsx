@@ -114,6 +114,7 @@ export function AnimeHero({ anime }: AnimeHeroProps) {
           {/* Watch Now CTA - Primary Button: White with black text */}
           <Link
             href={`/watch/${anime.shortId}/1`}
+            prefetch={false}
             className="inline-flex items-center gap-2.5 px-6 py-3 rounded-xl bg-white text-black font-semibold text-sm hover:bg-neutral-200 transition-colors shadow-lg active:scale-98"
           >
             <Play size={18} fill="currentColor" />
@@ -123,6 +124,7 @@ export function AnimeHero({ anime }: AnimeHeroProps) {
           {/* Details CTA - Secondary Button: Transparent with white border */}
           <Link
             href={`/anime/${anime.shortId}`}
+            prefetch={false}
             className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-transparent border border-white text-white font-medium text-sm hover:bg-white/10 transition-colors active:scale-98"
           >
             <Info size={17} />
