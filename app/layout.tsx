@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import './globals.css';
 import { AppShell } from '@/components/layout/AppShell';
 import { AuthProvider } from '@/contexts/AuthContext';
@@ -14,6 +14,12 @@ import {
 
 const siteOrigin = resolveCanonicalOrigin();
 const siteOgImage = `${siteOrigin}/api/og/site`;
+
+export const viewport: Viewport = {
+  width: 'device-width',
+  initialScale: 1,
+  viewportFit: 'cover',
+};
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteOrigin),

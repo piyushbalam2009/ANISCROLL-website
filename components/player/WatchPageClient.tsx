@@ -698,49 +698,49 @@ export function WatchPageClient({
   }, [isCheckingAvailability, episodeHasSub, episodeHasDub, totalEpisodes]);
 
   return (
-    <div className="space-y-6 pb-20">
+    <div className="space-y-3 sm:space-y-5 [@media(orientation:landscape)_and_(max-height:500px)]:space-y-2 pb-20 w-full max-w-full overflow-x-hidden">
       {/* Navigation Breadcrumb */}
-      <nav className="flex items-center gap-2 text-xs text-[#707070]">
-        <Link href="/" className="hover:text-white transition-colors">
+      <nav className="flex items-center gap-1.5 sm:gap-2 text-xs text-[#707070] min-w-0">
+        <Link href="/" className="hover:text-white transition-colors shrink-0">
           Home
         </Link>
-        <ChevronRight size={13} />
+        <ChevronRight size={13} className="shrink-0" />
         <Link
           href={`/anime/${anime.shortId}`}
-          className="hover:text-white transition-colors truncate max-w-[200px]"
+          className="hover:text-white transition-colors truncate min-w-0 max-w-[140px] sm:max-w-[200px]"
         >
           {title}
         </Link>
-        <ChevronRight size={13} />
-        <span className="text-white">Episode {episodeNumber}</span>
+        <ChevronRight size={13} className="shrink-0" />
+        <span className="text-white shrink-0">Episode {episodeNumber}</span>
       </nav>
 
       {/* Main Video Section */}
       <div className="space-y-4">
         {isResolvingId ? (
-          <div className="aspect-video w-full rounded-2xl bg-[#0A0A0A] border border-[#292929] flex flex-col items-center justify-center gap-3">
-            <Loader2 size={40} className="animate-spin text-white" />
+          <div className="aspect-video w-full rounded-xl sm:rounded-2xl bg-[#0A0A0A] border border-[#292929] flex flex-col items-center justify-center gap-2 sm:gap-3 p-4">
+            <Loader2 size={32} className="sm:w-10 sm:h-10 animate-spin text-white" />
             <div className="text-center">
-              <p className="text-sm font-semibold text-white">
+              <p className="text-xs sm:text-sm font-semibold text-white">
                 Resolving Anime Streaming ID...
               </p>
-              <p className="text-xs text-[#707070] mt-1">
+              <p className="text-[11px] sm:text-xs text-[#707070] mt-1">
                 Matching Hoshika metadata with AniList and AniSkip...
               </p>
             </div>
           </div>
         ) : idError ? (
-          <div className="aspect-video w-full rounded-2xl bg-[#0A0A0A] border border-[#292929] flex flex-col items-center justify-center p-6 text-center">
-            <AlertCircle size={44} className="text-[#A0A0A0] mb-3" />
-            <h3 className="text-base font-bold text-white mb-1">
+          <div className="aspect-video w-full rounded-xl sm:rounded-2xl bg-[#0A0A0A] border border-[#292929] flex flex-col items-center justify-center p-4 sm:p-6 text-center">
+            <AlertCircle size={32} className="sm:w-11 sm:h-11 text-[#A0A0A0] mb-2 sm:mb-3" />
+            <h3 className="text-sm sm:text-base font-bold text-white mb-1">
               ID Resolution Error
             </h3>
-            <p className="text-xs text-[#A0A0A0] max-w-md mb-4">
+            <p className="text-[11px] sm:text-xs text-[#A0A0A0] max-w-md mb-3 sm:mb-4">
               {idError}
             </p>
             <Link
               href={`/anime/${anime.shortId}`}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white text-black text-xs font-semibold hover:bg-neutral-200 transition-colors"
+              className="inline-flex items-center gap-2 px-4 sm:px-5 py-2 sm:py-2.5 rounded-xl bg-white text-black text-xs font-semibold hover:bg-neutral-200 transition-colors"
             >
               <ArrowLeft size={14} />
               <span>Back to Anime Details</span>

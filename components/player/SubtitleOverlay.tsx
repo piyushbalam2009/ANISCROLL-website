@@ -45,7 +45,9 @@ export function SubtitleOverlay({
       case 'Bottom':
       default:
         // Avoid overlapping player controls when controls are visible
-        return showControls ? 'bottom-20 md:bottom-24' : 'bottom-6 md:bottom-10';
+        return showControls
+          ? 'bottom-14 @[560px]:bottom-20 @[768px]:bottom-24'
+          : 'bottom-4 @[560px]:bottom-6 @[768px]:bottom-10';
     }
   };
 
@@ -53,19 +55,19 @@ export function SubtitleOverlay({
   const getHorizontalAlignmentClasses = () => {
     switch (preferences.alignment) {
       case 'Left':
-        return 'justify-start text-left pl-6 md:pl-14';
+        return 'justify-start text-left pl-4 @[560px]:pl-6 @[768px]:pl-14';
       case 'Right':
-        return 'justify-end text-right pr-6 md:pr-14';
+        return 'justify-end text-right pr-4 @[560px]:pr-6 @[768px]:pr-14';
       case 'Center':
       default:
-        return 'justify-center text-center px-4 md:px-8';
+        return 'justify-center text-center px-3 @[560px]:px-4 @[768px]:px-8';
     }
   };
 
   // Dynamic scale factor for fullscreen and mobile responsiveness
   const getScale = () => {
     if (typeof window === 'undefined') return 1;
-    if (isFullscreen) return 1.2;
+    if (isFullscreen) return window.innerWidth < 640 ? 0.95 : 1.2;
     if (window.innerWidth < 640) return 0.85;
     return 1;
   };
@@ -75,6 +77,11 @@ export function SubtitleOverlay({
 
   return (
     <div
+      style={
+        isFullscreen && preferences.position === 'Bottom'
+          ? { paddingBottom: 'env(safe-area-inset-bottom)' }
+          : undefined
+      }
       className={`absolute inset-x-0 z-30 pointer-events-none flex flex-col items-center transition-all duration-200 ease-out ${getVerticalPositionClasses()}`}
     >
       <div className={`w-full flex ${getHorizontalAlignmentClasses()}`}>
