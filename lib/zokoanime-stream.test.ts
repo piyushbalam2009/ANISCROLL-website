@@ -9,6 +9,8 @@ import {
   resolveSubtitleTrackForPreference,
   resolveEffectiveAudioPreference,
   selectEpisodeAudioVersion,
+  selectHlsAudioTrackIndex,
+  sanitizeStreamUrlForDiagnostic,
 } from './zokoanime-stream';
 
 test('Sub/Dub Availability: validates real ZokoAnime responses and rejects error or empty payloads', () => {
@@ -388,4 +390,74 @@ test('Default Audio Mode Priority: resolves effective preference and enforces al
     null
   );
 });
+
+test('selectHlsAudioTrackIndex: selects English dub or Japanese sub track on multi-audio master playlists and skips single-audio streams', () => {
+  // Single-audio stream (0 or 1 track): returns -1 so muxed single-audio streams stay untouched
+  assert.equal(selectHlsAudioTrackIndex([], 'dub'), -1);
+  assert.equal(
+    selectHlsAudioTrackIndex([{ name: 'Japanese', lang: 'ja', default: true }], 'dub'),
+    -1
+  );
+
+  // Overgeared Ep 8 multi-audio manifest pattern (14 audio tracks, Japanese DEFAULT=YES at index 0, English DEFAULT=NO at index 1)
+  const overgearedMasterTracks = [
+    { name: 'Japanese', lang: 'ja', default: true, autoselect: true, url: 'https://cdn.example/audio/ja/index.m3u8' },
+    { name: 'English', lang: 'en', default: false, autoselect: false, url: 'https://cdn.example/audio/en/index.m3u8' },
+    { name: 'Spanish (Latin America)', lang: 'es', default: false, autoselect: false },
+    { name: 'Portuguese (Brazil)', lang: 'pt', default: false, autoselect: false },
+    { name: 'French', lang: 'fr', default: false, autoselect: false },
+    { name: 'German', lang: 'de', default: false, autoselect: false },
+    { name: 'Italian', lang: 'it', default: false, autoselect: false },
+    { name: 'Arabic', lang: 'ar', default: false, autoselect: false },
+    { name: 'Hindi', lang: 'hi', default: false, autoselect: false },
+    { name: 'Tamil', lang: 'ta', default: false, autoselect: false },
+    { name: 'Telugu', lang: 'te', default: false, autoselect: false },
+    { name: 'Russian', lang: 'ru', default: false, autoselect: false },
+    { name: 'Indonesian', lang: 'id', default: false, autoselect: false },
+    { name: 'Vietnamese', lang: 'vi', default: false, autoselect: false },
+  ];
+
+  assert.equal(selectHlsAudioTrackIndex(overgearedMasterTracks, 'dub'), 1);
+  assert.equal(selectHlsAudioTrackIndex(overgearedMasterTracks, 'sub'), 0);
+
+  // Avoids descriptive/commentary English tracks when selecting Dub
+  const descriptiveTracks = [
+    { name: 'Japanese', lang: 'ja', default: true, autoselect: true },
+    { name: 'English (Audio Description)', lang: 'en', default: false, autoselect: false },
+    { name: 'English', lang: 'en-US', default: false, autoselect: true },
+  ];
+  assert.equal(selectHlsAudioTrackIndex(descriptiveTracks, 'dub'), 2);
+  assert.equal(selectHlsAudioTrackIndex(descriptiveTracks, 'sub'), 0);
+
+  // Missing lang attribute, falls back cleanly to name or URL matching
+  const nameOnlyTracks = [
+    { name: 'Original Audio', lang: '', default: true },
+    { name: 'English Dub', lang: '', default: false },
+  ];
+  assert.equal(selectHlsAudioTrackIndex(nameOnlyTracks, 'dub'), 1);
+  assert.equal(selectHlsAudioTrackIndex(nameOnlyTracks, 'sub'), 0);
+
+  // Playlist defaulting to English still selects Japanese when mode === 'sub'
+  const englishDefaultTracks = [
+    { name: 'English', lang: 'en', default: true, autoselect: true },
+    { name: 'Japanese', lang: 'ja', default: false, autoselect: false },
+  ];
+  assert.equal(selectHlsAudioTrackIndex(englishDefaultTracks, 'sub'), 1);
+  assert.equal(selectHlsAudioTrackIndex(englishDefaultTracks, 'dub'), 0);
+});
+
+test('sanitizeStreamUrlForDiagnostic: strips sensitive query params and summarizes nested proxy targets', () => {
+  assert.equal(sanitizeStreamUrlForDiagnostic(null), null);
+  assert.equal(
+    sanitizeStreamUrlForDiagnostic(
+      'https://api.aniscroll.in/api/proxy/hls?url=https%3A%2F%2Fcdn.example.com%2Fmaster.m3u8%3Ftoken%3Dsecret123&sig=abc'
+    ),
+    'https://api.aniscroll.in/api/proxy/hls?target=https://cdn.example.com/master.m3u8'
+  );
+  assert.equal(
+    sanitizeStreamUrlForDiagnostic('https://example.com/stream.m3u8?token=xyz'),
+    'https://example.com/stream.m3u8'
+  );
+});
+
 

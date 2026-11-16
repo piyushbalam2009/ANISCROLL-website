@@ -210,3 +210,140 @@ test('GET /api/stream enforces Default Audio Mode priority across all 4 Sub/Dub 
     appCache.clear();
   }
 });
+
+test('GET /api/stream handles shared multi-audio URLs and explicit type=dub without Sub/Dub cross-contamination', async () => {
+  const origFetch = globalThis.fetch;
+
+  try {
+    appCache.clear();
+    const sharedMasterProxyUrl =
+      'https://api.aniscroll.in/api/proxy/hls?url=https://example.com/shared/master.m3u8';
+
+    // Upstream returns same master HLS URL for both /sub and /dub (multi-audio HLS manifest)
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.endsWith('/megaplay/212888/8/sub')) {
+        return new Response(
+          JSON.stringify({
+            source: 'megaplay',
+            anilistId: 212888,
+            malId: 64340,
+            episode: 8,
+            type: 'sub',
+            playbackMode: 'hls',
+            hlsProxyUrl: sharedMasterProxyUrl,
+            subtitles: [],
+            qualities: [],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.endsWith('/megaplay/212888/8/dub')) {
+        return new Response(
+          JSON.stringify({
+            source: 'megaplay',
+            anilistId: 212888,
+            malId: 64340,
+            episode: 8,
+            type: 'dub',
+            playbackMode: 'hls',
+            hlsProxyUrl: sharedMasterProxyUrl,
+            subtitles: [],
+            qualities: [],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response(JSON.stringify({ error: 'Not found' }), {
+        status: 404,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }) as typeof fetch;
+
+    // 1. Sub requested first (warms sub cache)
+    const subReq = await getStreamRoute(
+      new NextRequest(
+        'http://localhost:3000/api/stream?anilistId=212888&episode=8&format=ONA&type=sub&preferredType=sub'
+      )
+    );
+    assert.equal(subReq.status, 200);
+    const subJson = await subReq.json();
+    assert.equal(subJson.selectedType, 'sub');
+    assert.equal(subJson.stream?.type, 'sub');
+
+    // 2. Dub requested next with explicit type=dub&preferredType=dub must select Dub
+    const dubReq = await getStreamRoute(
+      new NextRequest(
+        'http://localhost:3000/api/stream?anilistId=212888&episode=8&format=ONA&type=dub&preferredType=dub'
+      )
+    );
+    assert.equal(dubReq.status, 200);
+    const dubJson = await dubReq.json();
+    assert.equal(dubJson.subAvailable, true);
+    assert.equal(dubJson.dubAvailable, true);
+    assert.equal(dubJson.selectedType, 'dub');
+    assert.equal(dubJson.stream?.type, 'dub');
+    assert.equal(dubJson.subStream?.type, 'sub');
+    assert.equal(dubJson.dubStream?.type, 'dub');
+
+    // 3. Explicit type=dub overrides conflicting preferredType=sub if present
+    const explicitDubReq = await getStreamRoute(
+      new NextRequest(
+        'http://localhost:3000/api/stream?anilistId=212888&episode=8&format=ONA&type=dub&preferredType=sub'
+      )
+    );
+    assert.equal(explicitDubReq.status, 200);
+    const explicitDubJson = await explicitDubReq.json();
+    assert.equal(explicitDubJson.selectedType, 'dub');
+    assert.equal(explicitDubJson.stream?.type, 'dub');
+
+    // 4. Rejects upstream /dub endpoint that mistakenly returns type: 'sub'
+    appCache.clear();
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url.endsWith('/megaplay/212999/8/sub')) {
+        return new Response(
+          JSON.stringify(
+            buildValidProviderStream({
+              provider: 'megaplay',
+              anilistId: 212999,
+              episode: 8,
+              type: 'sub',
+            })
+          ),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      if (url.endsWith('/megaplay/212999/8/dub')) {
+        return new Response(
+          JSON.stringify(
+            buildValidProviderStream({
+              provider: 'megaplay',
+              anilistId: 212999,
+              episode: 8,
+              type: 'sub', // Corrupted upstream type!
+            })
+          ),
+          { status: 200, headers: { 'Content-Type': 'application/json' } }
+        );
+      }
+      return new Response(JSON.stringify({ error: 'Not found' }), { status: 404 });
+    }) as typeof fetch;
+
+    const contaminatedReq = await getStreamRoute(
+      new NextRequest(
+        'http://localhost:3000/api/stream?anilistId=212999&episode=8&format=TV&type=dub&preferredType=dub'
+      )
+    );
+    assert.equal(contaminatedReq.status, 200);
+    const contaminatedJson = await contaminatedReq.json();
+    assert.equal(contaminatedJson.dubAvailable, false);
+    assert.equal(contaminatedJson.dubStream, null);
+    assert.equal(contaminatedJson.selectedType, 'sub');
+    assert.equal(contaminatedJson.stream?.type, 'sub');
+  } finally {
+    globalThis.fetch = origFetch;
+    appCache.clear();
+  }
+});
+

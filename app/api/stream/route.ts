@@ -4,11 +4,18 @@ import {
   DetailedStreamOutcome,
   getAniScrollStreamDetailed,
 } from '@/lib/aniscroll';
-import { selectEpisodeAudioVersion } from '@/lib/zokoanime-stream';
+import {
+  sanitizeStreamUrlForDiagnostic,
+  selectEpisodeAudioVersion,
+} from '@/lib/zokoanime-stream';
 import {
   getStreamingProviderDisplayName,
   resolveStreamingProviderForAnime,
 } from '@/lib/stream-provider';
+
+const STREAM_DEBUG_ENABLED =
+  process.env.NODE_ENV !== 'production' ||
+  process.env.ANISCROLL_STREAM_DEBUG === 'true';
 
 function pickAggregateFailureOutcome(
   subOutcome: DetailedStreamOutcome,
@@ -138,23 +145,54 @@ export async function GET(req: NextRequest) {
         }
       );
 
+      const subAvailable = Boolean(
+        availability.subAvailable && availability.subStream?.type === 'sub'
+      );
+      const dubAvailable = Boolean(
+        availability.dubAvailable && availability.dubStream?.type === 'dub'
+      );
+      const subStream = subAvailable ? availability.subStream : null;
+      const dubStream = dubAvailable ? availability.dubStream : null;
+
       const effectiveType =
         requestedType &&
-        ((requestedType === 'sub' && availability.subAvailable) ||
-          (requestedType === 'dub' && availability.dubAvailable))
+        ((requestedType === 'sub' && subAvailable) ||
+          (requestedType === 'dub' && dubAvailable))
           ? requestedType
           : selectEpisodeAudioVersion({
-              subAvailable: availability.subAvailable,
-              dubAvailable: availability.dubAvailable,
+              subAvailable,
+              dubAvailable,
               userSelectedVersion: preferredType,
             });
 
-      const activeStream =
+      const candidateStream =
         effectiveType === 'dub'
-          ? availability.dubStream
+          ? dubStream
           : effectiveType === 'sub'
-          ? availability.subStream
+          ? subStream
           : null;
+      const activeStream =
+        candidateStream && effectiveType && candidateStream.type === effectiveType
+          ? candidateStream
+          : null;
+
+      if (STREAM_DEBUG_ENABLED) {
+        console.debug('[AniScroll][api/stream]', {
+          anilistId,
+          episode,
+          provider,
+          requestedType,
+          preferredType,
+          subAvailable,
+          dubAvailable,
+          selectedType: effectiveType,
+          subCacheHit: Boolean(availability.subOutcome.fromCache),
+          dubCacheHit: Boolean(availability.dubOutcome.fromCache),
+          returnedStreamType: activeStream?.type ?? null,
+          playbackMode: activeStream?.playbackMode ?? null,
+          sanitizedUrl: sanitizeStreamUrlForDiagnostic(activeStream?.hlsProxyUrl),
+        });
+      }
 
       if (!activeStream || !effectiveType) {
         const failure = pickAggregateFailureOutcome(
@@ -198,12 +236,12 @@ export async function GET(req: NextRequest) {
           ok: true,
           provider,
           format: resolvedFormat,
-          subAvailable: availability.subAvailable,
-          dubAvailable: availability.dubAvailable,
+          subAvailable,
+          dubAvailable,
           selectedType: effectiveType,
           stream: activeStream,
-          subStream: availability.subStream,
-          dubStream: availability.dubStream,
+          subStream,
+          dubStream,
           subErrorCode: availability.subOutcome.errorCode,
           dubErrorCode: availability.dubOutcome.errorCode,
         },

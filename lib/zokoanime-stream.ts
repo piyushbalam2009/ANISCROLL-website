@@ -561,3 +561,126 @@ export function selectEpisodeAudioVersion(params: {
 
   return subAvailable ? 'sub' : dubAvailable ? 'dub' : null;
 }
+
+export interface HlsAudioTrackLike {
+  id?: number;
+  name?: string | null;
+  label?: string | null;
+  lang?: string | null;
+  language?: string | null;
+  default?: boolean;
+  autoselect?: boolean;
+  forced?: boolean;
+  groupId?: string | null;
+  url?: string | null;
+}
+
+function isDescriptiveAudioTrack(name: string, lang: string): boolean {
+  return /\b(?:descriptive|description|commentary|audio\s*description|ad)\b/i.test(name) || lang === 'commentary';
+}
+
+/**
+ * Selects the matching audio track index from a multi-audio HLS playlist
+ * (`hls.audioTracks` or native `AudioTrackList`) for the requested audio version ('sub' | 'dub').
+ *
+ * Returns `-1` when the stream has `<= 1` audio track (single-audio playlist) or no match is needed.
+ */
+export function selectHlsAudioTrackIndex(
+  tracks: ReadonlyArray<HlsAudioTrackLike> | null | undefined,
+  audioMode: AudioMode
+): number {
+  if (!Array.isArray(tracks) || tracks.length <= 1) {
+    return -1;
+  }
+
+  const normalized = tracks.map((track, idx) => {
+    const lang = (track.lang ?? track.language ?? '').trim().toLowerCase();
+    const name = (track.name ?? track.label ?? '').trim().toLowerCase();
+    const url = (track.url ?? '').trim().toLowerCase();
+    return {
+      idx,
+      track,
+      lang,
+      name,
+      url,
+      isDescriptive: isDescriptiveAudioTrack(name, lang),
+    };
+  });
+
+  if (audioMode === 'dub') {
+    const isEnglishLang = (lang: string) => /^(?:en|eng)(?:[-_]|$)/i.test(lang);
+    const isEnglishName = (name: string) => /\b(?:english|eng|dub|dubbed)\b/i.test(name);
+    const isEnglishUrl = (url: string) => /\/audio\/en(?:\/|$)|[._-]eng?(?:[._/-]|$)/i.test(url);
+
+    // Priority 1: Non-descriptive English track matching lang code (prefer autoselect/default)
+    const langMatches = normalized.filter((t) => !t.isDescriptive && isEnglishLang(t.lang));
+    if (langMatches.length > 0) {
+      const preferred = langMatches.find((t) => t.track.autoselect || t.track.default) || langMatches[0];
+      return preferred.idx;
+    }
+
+    // Priority 2: Non-descriptive track matching English/Dub name
+    const nameMatches = normalized.filter((t) => !t.isDescriptive && isEnglishName(t.name));
+    if (nameMatches.length > 0) {
+      const preferred = nameMatches.find((t) => t.track.autoselect || t.track.default) || nameMatches[0];
+      return preferred.idx;
+    }
+
+    // Priority 3: Track URL explicitly pointing to /audio/en
+    const urlMatches = normalized.filter((t) => !t.isDescriptive && isEnglishUrl(t.url));
+    if (urlMatches.length > 0) {
+      return urlMatches[0].idx;
+    }
+
+    // Priority 4: Any English track as last resort
+    const anyEn = normalized.find(
+      (t) => isEnglishLang(t.lang) || isEnglishName(t.name) || isEnglishUrl(t.url)
+    );
+    return anyEn ? anyEn.idx : -1;
+  }
+
+  // audioMode === 'sub'
+  const isJapaneseLang = (lang: string) => /^(?:ja|jp|jpn)(?:[-_]|$)/i.test(lang);
+  const isJapaneseName = (name: string) => /\b(?:japanese|jpn|nihongo|original|sub|subbed)\b/i.test(name);
+  const isJapaneseUrl = (url: string) => /\/audio\/ja(?:\/|$)|[._-]jpn?(?:[._/-]|$)/i.test(url);
+
+  const jaLangMatch = normalized.find((t) => !t.isDescriptive && isJapaneseLang(t.lang));
+  if (jaLangMatch) return jaLangMatch.idx;
+
+  const jaNameMatch = normalized.find((t) => !t.isDescriptive && isJapaneseName(t.name));
+  if (jaNameMatch) return jaNameMatch.idx;
+
+  const jaUrlMatch = normalized.find((t) => !t.isDescriptive && isJapaneseUrl(t.url));
+  if (jaUrlMatch) return jaUrlMatch.idx;
+
+  // Fallback for SUB: default track if it isn't explicitly English
+  const nonEnglishDefault = normalized.find(
+    (t) => t.track.default && !/^(?:en|eng)(?:[-_]|$)/i.test(t.lang)
+  );
+  return nonEnglishDefault ? nonEnglishDefault.idx : -1;
+}
+
+/**
+ * Redacts query parameters/tokens from stream URLs for safe diagnostic logging.
+ */
+export function sanitizeStreamUrlForDiagnostic(url?: string | null): string | null {
+  if (!url || typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    const innerUrlParam = parsed.searchParams.get('url');
+    if (innerUrlParam) {
+      try {
+        const inner = new URL(innerUrlParam);
+        return `${parsed.origin}${parsed.pathname}?target=${inner.origin}${inner.pathname}`;
+      } catch {
+        return `${parsed.origin}${parsed.pathname}?target=redacted`;
+      }
+    }
+    return `${parsed.origin}${parsed.pathname}`;
+  } catch {
+    return trimmed.split('?')[0] || null;
+  }
+}
+

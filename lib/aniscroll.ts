@@ -41,6 +41,7 @@ export interface DetailedStreamOutcome {
   httpStatus: 200 | 400 | 404 | 429 | 502 | 504;
   retryAfterSeconds?: number;
   message: string | null;
+  fromCache?: boolean;
 }
 
 export interface DetailedEpisodeStreamAvailability extends EpisodeStreamAvailability {
@@ -508,7 +509,12 @@ export async function getAniScrollStreamDetailed(
   const providerLabel = getStreamingProviderDisplayName(provider);
 
   const cached = appCache.get<AniScrollStreamResponse>(cacheKey);
-  if (cached) {
+  if (
+    cached &&
+    cached.type === normalizedType &&
+    Number(cached.anilistId) === Number(anilistId) &&
+    Number(cached.episode) === Number(episode)
+  ) {
     recordUpstreamMetric({
       provider,
       endpoint: metricEndpoint,
@@ -531,7 +537,11 @@ export async function getAniScrollStreamDetailed(
       upstreamStatus: 200,
       httpStatus: 200,
       message: null,
+      fromCache: true,
     };
+  }
+  if (cached) {
+    appCache.delete(cacheKey);
   }
 
   const recentMiss = appCache.get<{ reason?: string } | boolean>(missCacheKey);
@@ -556,6 +566,7 @@ export async function getAniScrollStreamDetailed(
         typeof recentMiss === 'object' && recentMiss?.reason
           ? recentMiss.reason
           : `${providerLabel} ${normalizedType.toUpperCase()} stream is unavailable for Episode ${episode}.`,
+      fromCache: true,
     };
   }
 
@@ -743,15 +754,23 @@ export async function checkEpisodeStreamAvailabilityDetailed(
           getAniScrollStreamDetailed(anilistId, episode, 'sub', {
             provider,
             format: resolvedFormat,
+            hoshikaId: options?.hoshikaId,
           }),
           getAniScrollStreamDetailed(anilistId, episode, 'dub', {
             provider,
             format: resolvedFormat,
+            hoshikaId: options?.hoshikaId,
           }),
         ]);
 
-        const subStream = subOutcome.stream;
-        const dubStream = dubOutcome.stream;
+        const subStream =
+          subOutcome.stream && subOutcome.stream.type === 'sub'
+            ? subOutcome.stream
+            : null;
+        const dubStream =
+          dubOutcome.stream && dubOutcome.stream.type === 'dub'
+            ? dubOutcome.stream
+            : null;
         const subAvailable = Boolean(subStream);
         const dubAvailable = Boolean(dubStream);
 

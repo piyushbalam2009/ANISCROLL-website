@@ -47,6 +47,8 @@ import {
   normalizeAndSortQualities,
   normalizeHlsMasterLevels,
   normalizeSubtitleTracks,
+  sanitizeStreamUrlForDiagnostic,
+  selectHlsAudioTrackIndex,
   selectInitialHlsLevelIndex,
   selectInitialQuality,
   selectNextFallbackQuality,
@@ -54,6 +56,10 @@ import {
 } from '@/lib/zokoanime-stream';
 import { SubtitleOverlay } from './SubtitleOverlay';
 import { SubtitleSettingsModal } from './SubtitleSettingsModal';
+
+const STREAM_DEBUG_ENABLED =
+  process.env.NODE_ENV !== 'production' ||
+  process.env.NEXT_PUBLIC_DEBUG_STREAM === 'true';
 
 const SUBTITLE_PREF_STORAGE_KEY = 'aniscroll_active_subtitle_pref_v1';
 
@@ -194,6 +200,25 @@ export function VideoPlayer({
   const selectedHlsLevelRef = useRef<number>(selectedHlsLevel);
   const hlsMasterLevelsRef = useRef<HlsManifestQualityLevel[]>(hlsMasterLevels);
   const providerDisplayNameRef = useRef<string>(providerDisplayName);
+  const activeTypeRef = useRef<'sub' | 'dub'>(activeType);
+  const streamDebugMetaRef = useRef<{
+    type: string | null;
+    provider: string | null;
+  }>({
+    type: streamData?.type ?? null,
+    provider: streamData?.provider ?? streamData?.source ?? null,
+  });
+
+  useEffect(() => {
+    activeTypeRef.current = activeType;
+  }, [activeType]);
+
+  useEffect(() => {
+    streamDebugMetaRef.current = {
+      type: streamData?.type ?? null,
+      provider: streamData?.provider ?? streamData?.source ?? null,
+    };
+  }, [streamData?.type, streamData?.provider, streamData?.source]);
 
   useEffect(() => {
     isMasterPlaylistModeRef.current = isMasterPlaylistMode;
@@ -898,6 +923,82 @@ export function VideoPlayer({
     disableAllNativeAndHlsSubtitlesRef.current = disableAllNativeAndHlsSubtitles;
   });
 
+  const syncAudioTrackForMode = useCallback((mode: 'sub' | 'dub') => {
+    const hls = hlsRef.current;
+    if (hls) {
+      const targetPreference = mode === 'dub' ? { lang: 'en' } : { lang: 'ja' };
+      try {
+        if (hls.config) {
+          hls.config.audioPreference = targetPreference;
+        }
+      } catch {
+        // Ignore read-only config
+      }
+
+      const hlsTracks = Array.isArray(hls.audioTracks) ? hls.audioTracks : [];
+      if (hlsTracks.length > 1) {
+        const targetIdx = selectHlsAudioTrackIndex(hlsTracks, mode);
+        if (STREAM_DEBUG_ENABLED) {
+          console.debug('[AniScroll][VideoPlayer] sync HLS audio track', {
+            mode,
+            currentAudioTrack: hls.audioTrack,
+            targetIdx,
+            availableTracks: hlsTracks.map((t, idx) => ({
+              idx,
+              name: t.name,
+              lang: t.lang,
+              default: t.default,
+            })),
+          });
+        }
+        if (targetIdx >= 0 && hls.audioTrack !== targetIdx) {
+          try {
+            hls.audioTrack = targetIdx;
+          } catch {
+            // Fallback to setAudioOption if direct index fails
+            const trackObj = hlsTracks[targetIdx];
+            if (trackObj && typeof hls.setAudioOption === 'function') {
+              hls.setAudioOption(trackObj);
+            }
+          }
+        }
+      }
+    }
+
+    const videoEl = videoRef.current as
+      | (HTMLVideoElement & {
+          audioTracks?: ArrayLike<{
+            label?: string;
+            language?: string;
+            enabled: boolean;
+          }>;
+        })
+      | null;
+    if (videoEl?.audioTracks && videoEl.audioTracks.length > 1) {
+      const nativeTracks = Array.from(videoEl.audioTracks);
+      const targetIdx = selectHlsAudioTrackIndex(nativeTracks, mode);
+      if (targetIdx >= 0) {
+        nativeTracks.forEach((track, idx) => {
+          try {
+            track.enabled = idx === targetIdx;
+          } catch {
+            // Ignore read-only native track error
+          }
+        });
+      }
+    }
+  }, []);
+
+  const syncAudioTrackForModeRef = useRef(syncAudioTrackForMode);
+  useEffect(() => {
+    syncAudioTrackForModeRef.current = syncAudioTrackForMode;
+  });
+
+  // React immediately when activeType or streamData updates (essential when Sub & Dub share a multi-audio master.m3u8 URL)
+  useEffect(() => {
+    syncAudioTrackForMode(activeType);
+  }, [activeType, activeHlsUrl, streamData, syncAudioTrackForMode]);
+
   // Dedicated playbackSpeed effect so speed adjustments do not reload HLS
   useEffect(() => {
     const video = videoRef.current;
@@ -939,11 +1040,13 @@ export function VideoPlayer({
     let levelFallbackToAutoAttempted = false;
 
     if (Hls.isSupported()) {
+      const initialAudioMode = activeTypeRef.current;
       const hls = new Hls({
         enableWorker: true,
         lowLatencyMode: true,
         backBufferLength: 90,
         renderTextTracksNatively: false,
+        audioPreference: initialAudioMode === 'dub' ? { lang: 'en' } : { lang: 'ja' },
       });
 
       hlsRef.current = hls;
@@ -951,13 +1054,27 @@ export function VideoPlayer({
       hls.subtitleDisplay = false;
       hls.subtitleTrack = -1;
 
+      if (STREAM_DEBUG_ENABLED) {
+        console.debug('[AniScroll][VideoPlayer] attach HLS source', {
+          activeType: initialAudioMode,
+          streamType: streamDebugMetaRef.current.type,
+          provider: streamDebugMetaRef.current.provider,
+          sanitizedUrl: sanitizeStreamUrlForDiagnostic(activeHlsUrl),
+        });
+      }
+
       hls.loadSource(activeHlsUrl);
       hls.attachMedia(video);
+
+      const handleAudioTracksUpdated = () => {
+        syncAudioTrackForModeRef.current(activeTypeRef.current);
+      };
 
       const handleManifestParsed = () => {
         hls.subtitleDisplay = false;
         hls.subtitleTrack = -1;
         disableAllNativeAndHlsSubtitlesRef.current();
+        syncAudioTrackForModeRef.current(activeTypeRef.current);
 
         // When playing a master playlist directly (MegaPlay), detect actual resolutions from HLS.js levels
         if (isMasterPlaylistModeRef.current) {
@@ -1062,12 +1179,14 @@ export function VideoPlayer({
         attemptNextQualityFallbackRef.current(activeHlsUrl);
       };
 
+      hls.on(Hls.Events.AUDIO_TRACKS_UPDATED, handleAudioTracksUpdated);
       hls.on(Hls.Events.MANIFEST_PARSED, handleManifestParsed);
       hls.on(Hls.Events.LEVEL_SWITCHED, handleLevelSwitched);
       hls.on(Hls.Events.SUBTITLE_TRACKS_UPDATED, handleSubtitleTracksUpdated);
       hls.on(Hls.Events.ERROR, handleHlsError);
 
       return () => {
+        hls.off(Hls.Events.AUDIO_TRACKS_UPDATED, handleAudioTracksUpdated);
         hls.off(Hls.Events.MANIFEST_PARSED, handleManifestParsed);
         hls.off(Hls.Events.LEVEL_SWITCHED, handleLevelSwitched);
         hls.off(Hls.Events.SUBTITLE_TRACKS_UPDATED, handleSubtitleTracksUpdated);
@@ -1450,6 +1569,7 @@ export function VideoPlayer({
       {/* Special Iframe-Only Playback Path */}
       {isEmbedMode && streamData?.embedUrl && !effectiveError ? (
         <iframe
+          key={`${streamData.embedUrl}-${activeType}`}
           src={streamData.embedUrl}
           title={`${animeTitle} Episode ${episodeNumber}`}
           className="w-full h-full border-0"
@@ -1480,6 +1600,7 @@ export function VideoPlayer({
                 setDuration(videoRef.current.duration);
               }
               disableAllNativeAndHlsSubtitles();
+              syncAudioTrackForModeRef.current(activeTypeRef.current);
               restorePlaybackPositionOnVideo(videoRef.current);
             }
           }}
