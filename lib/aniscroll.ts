@@ -252,15 +252,27 @@ async function fetchProviderWatchEndpoint(
   const startTime = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const endpoint = `/${provider}/${anilistId}/${episode}/${type}`;
+  const endpoint = `/api/watch/${provider}/mal-${anilistId}/${episode}/${type}`;
   const url = buildProviderWatchUrl(provider, anilistId, episode, type);
   const providerLabel = getStreamingProviderDisplayName(provider);
+  const apiKey = process.env.ANIVAULT_API_KEY?.trim();
 
   try {
+    if (!apiKey) {
+      return {
+        ok: false, stream: null, provider, format: null,
+        definitiveUnavailable: false, errorCode: 'network_error',
+        upstreamStatus: null, httpStatus: 502,
+        message: 'ANIVAULT_API_KEY is not configured on the AniScroll server.',
+        retryable: false,
+      };
+    }
+
     const res = await fetch(url, {
       headers: {
         Accept: 'application/json',
         'User-Agent': 'AniScroll-Player/1.0',
+        'x-anivault-api-key': apiKey,
       },
       signal: controller.signal,
       cache: 'no-store',
@@ -269,58 +281,26 @@ async function fetchProviderWatchEndpoint(
     const durationMs = Date.now() - startTime;
     const contentType = (res.headers.get('content-type') || '').toLowerCase();
     const retryAfterHeader = res.headers.get('retry-after');
-
     let parsedJson: Record<string, unknown> | null = null;
     let jsonParseFailed = false;
 
     if (contentType.includes('application/json')) {
-      try {
-        parsedJson = (await res.json()) as Record<string, unknown>;
-      } catch {
-        jsonParseFailed = true;
-      }
+      try { parsedJson = (await res.json()) as Record<string, unknown>; }
+      catch { jsonParseFailed = true; }
     } else if (res.ok) {
-      // Upstream returned 200 OK without JSON content-type
-      recordUpstreamMetric({
-        provider,
-        endpoint,
-        durationMs,
-        status: res.status,
-        fromCache: false,
-        errorCode: 'invalid_json',
-      });
+      recordUpstreamMetric({ provider, endpoint, durationMs, status: res.status, fromCache: false, errorCode: 'invalid_json' });
       return {
-        ok: false,
-        stream: null,
-        provider,
-        format: null,
-        definitiveUnavailable: false,
-        errorCode: 'invalid_json',
-        upstreamStatus: res.status,
-        httpStatus: 502,
-        message: `${providerLabel} returned non-JSON response (${contentType || 'unknown'}).`,
-        retryable: true,
+        ok: false, stream: null, provider, format: null, definitiveUnavailable: false,
+        errorCode: 'invalid_json', upstreamStatus: res.status, httpStatus: 502,
+        message: `${providerLabel} returned non-JSON response (${contentType || 'unknown'}).`, retryable: true,
       };
     }
 
     if (jsonParseFailed) {
-      recordUpstreamMetric({
-        provider,
-        endpoint,
-        durationMs,
-        status: res.status,
-        fromCache: false,
-        errorCode: 'invalid_json',
-      });
+      recordUpstreamMetric({ provider, endpoint, durationMs, status: res.status, fromCache: false, errorCode: 'invalid_json' });
       return {
-        ok: false,
-        stream: null,
-        provider,
-        format: null,
-        definitiveUnavailable: false,
-        errorCode: 'invalid_json',
-        upstreamStatus: res.status,
-        httpStatus: 502,
+        ok: false, stream: null, provider, format: null, definitiveUnavailable: false,
+        errorCode: 'invalid_json', upstreamStatus: res.status, httpStatus: 502,
         message: `${providerLabel} returned malformed JSON (HTTP ${res.status}).`,
         retryable: res.status >= 500,
       };
@@ -328,129 +308,88 @@ async function fetchProviderWatchEndpoint(
 
     if (!res.ok) {
       const classified = classifyProviderResponseFailure({
-        provider,
-        status: res.status,
-        contentType,
-        payload: parsedJson,
-        retryAfterHeader,
-        episode,
-        type,
+        provider, status: res.status, contentType, payload: parsedJson,
+        retryAfterHeader, episode, type,
       });
-
-      recordUpstreamMetric({
-        provider,
-        endpoint,
-        durationMs,
-        status: res.status,
-        fromCache: false,
-        errorCode: classified.errorCode,
-      });
-
+      recordUpstreamMetric({ provider, endpoint, durationMs, status: res.status, fromCache: false, errorCode: classified.errorCode });
       return {
-        ok: false,
-        stream: null,
-        provider,
-        format: null,
+        ok: false, stream: null, provider, format: null,
         definitiveUnavailable: classified.definitiveUnavailable,
-        errorCode: classified.errorCode,
-        upstreamStatus: res.status,
-        httpStatus: classified.httpStatus,
-        retryAfterSeconds: classified.retryAfterSeconds,
-        message: classified.message,
-        retryable: classified.retryable,
+        errorCode: classified.errorCode, upstreamStatus: res.status,
+        httpStatus: classified.httpStatus, retryAfterSeconds: classified.retryAfterSeconds,
+        message: classified.message, retryable: classified.retryable,
       };
     }
 
-    const validated = validateProviderStreamResponse(
-      parsedJson,
+    // AniVault watch responses are source-specific and may carry proxied HLS,
+    // subtitle, iframe, audio-track and quality fields. Normalize identifiers
+    // to AniScroll's established stream response shape without rewriting proxy URLs.
+    const payload = parsedJson as any;
+    const streamPayload = payload?.stream && typeof payload.stream === 'object' ? payload.stream : payload;
+    const hlsProxyUrl = typeof streamPayload?.hlsProxyUrl === 'string'
+      ? streamPayload.hlsProxyUrl
+      : typeof streamPayload?.m3u8 === 'string' && streamPayload.m3u8.includes('/api/proxy/hls')
+        ? streamPayload.m3u8
+        : undefined;
+    const validated = streamPayload && (
+      !!hlsProxyUrl ||
+      (typeof streamPayload.embedUrl === 'string' && streamPayload.embedUrl.length > 0)
+    ) ? ({
+      ...streamPayload,
+      source: String(streamPayload.source || provider),
       provider,
       anilistId,
-      episode,
-      type
-    );
+      malId: anilistId,
+      episode: Number(streamPayload.episode ?? episode),
+      type: streamPayload.type === 'dub' ? 'dub' : type,
+      hlsProxyUrl,
+      m3u8: typeof streamPayload.m3u8 === 'string' ? streamPayload.m3u8 : hlsProxyUrl,
+      subtitles: Array.isArray(streamPayload.subtitles)
+        ? streamPayload.subtitles.map((track: any) => ({
+            ...track,
+            url: String(track.url || track.src || ''),
+            src: String(track.src || track.url || ''),
+            lang: String(track.lang || track.label || 'Unknown'),
+            default: Boolean(track.default),
+          })).filter((track: any) => track.url)
+        : [],
+      qualities: Array.isArray(streamPayload.qualities) ? streamPayload.qualities : [],
+      playbackMode: streamPayload.playbackMode || (hlsProxyUrl ? 'hls' : 'iframe'),
+      server: streamPayload.server || streamPayload.serverName || provider,
+      serverName: streamPayload.serverName || streamPayload.server || provider,
+    }) as AniScrollStreamResponse : null;
 
     if (validated) {
-      recordUpstreamMetric({
-        provider,
-        endpoint,
-        durationMs,
-        status: res.status,
-        fromCache: false,
-      });
+      recordUpstreamMetric({ provider, endpoint, durationMs, status: res.status, fromCache: false });
       return {
-        ok: true,
-        stream: validated,
-        provider,
-        format: null,
-        definitiveUnavailable: false,
-        errorCode: null,
-        upstreamStatus: res.status,
-        httpStatus: 200,
-        message: null,
-        retryable: false,
+        ok: true, stream: validated, provider, format: null,
+        definitiveUnavailable: false, errorCode: null, upstreamStatus: res.status,
+        httpStatus: 200, message: null, retryable: false,
       };
     }
 
     const classified = classifyProviderResponseFailure({
-      provider,
-      status: res.status,
-      contentType,
-      payload: parsedJson,
-      retryAfterHeader,
-      episode,
-      type,
+      provider, status: res.status, contentType, payload: parsedJson,
+      retryAfterHeader, episode, type,
     });
-
-    recordUpstreamMetric({
-      provider,
-      endpoint,
-      durationMs,
-      status: res.status,
-      fromCache: false,
-      errorCode: classified.errorCode,
-    });
-
+    recordUpstreamMetric({ provider, endpoint, durationMs, status: res.status, fromCache: false, errorCode: classified.errorCode });
     return {
-      ok: false,
-      stream: null,
-      provider,
-      format: null,
+      ok: false, stream: null, provider, format: null,
       definitiveUnavailable: classified.definitiveUnavailable,
-      errorCode: classified.errorCode,
-      upstreamStatus: res.status,
-      httpStatus: classified.httpStatus,
-      message: classified.message,
-      retryable: false,
+      errorCode: classified.errorCode, upstreamStatus: res.status,
+      httpStatus: classified.httpStatus, message: classified.message, retryable: false,
     };
   } catch (error) {
     const durationMs = Date.now() - startTime;
-    const err = classifyUpstreamError({
-      provider,
-      endpoint,
-      error,
-      durationMs,
-    });
-    recordUpstreamMetric({
-      provider,
-      endpoint,
-      durationMs,
-      status: null,
-      fromCache: false,
-      errorCode: err.code,
-    });
+    const err = classifyUpstreamError({ provider, endpoint, error, durationMs });
+    recordUpstreamMetric({ provider, endpoint, durationMs, status: null, fromCache: false, errorCode: err.code });
     return {
-      ok: false,
-      stream: null,
-      provider,
-      format: null,
-      definitiveUnavailable: false,
-      errorCode: err.code,
-      upstreamStatus: null,
-      httpStatus: mapErrorCodeToHttpStatus(err.code),
-      message:
-        err.code === 'timeout'
-          ? `${providerLabel} timed out while resolving Episode ${episode} (${type.toUpperCase()}).`
-          : `${providerLabel} connection error while resolving Episode ${episode} (${type.toUpperCase()}).`,
+      ok: false, stream: null, provider, format: null,
+      definitiveUnavailable: false, errorCode: err.code,
+      upstreamStatus: null, httpStatus: mapErrorCodeToHttpStatus(err.code),
+      message: err.code === 'timeout'
+        ? `${providerLabel} timed out while resolving Episode ${episode} (${type.toUpperCase()}).`
+        : `${providerLabel} connection error while resolving Episode ${episode} (${type.toUpperCase()}).`,
       retryable: err.retryable,
     };
   } finally {
@@ -818,8 +757,8 @@ export async function checkEpisodeStreamAvailabilityDetailed(
 
 /**
  * Dynamically checks both Sub and Dub endpoints in parallel on the selected provider:
- * - Series (`TV`, `TV_SHORT`, `OVA`, `ONA`, `SPECIAL`) -> `https://api.aniscroll.in/api/watch/megaplay/{anilist_id}/{episode}/{sub|dub}`
- * - Movies (`MOVIE`, standalone movie `SPECIAL`, or unknown fallback) -> `https://api.aniscroll.in/api/watch/zokoanime/{anilist_id}/{episode}/{sub|dub}`
+ * - Series (`TV`, `TV_SHORT`, `OVA`, `ONA`, `SPECIAL`) -> `https://ANIVAULT_API_ORIGIN/api/watch/megaplay/mal-{mal_id}/{episode}/{sub|dub}`
+ * - Movies (`MOVIE`, standalone movie `SPECIAL`, or unknown fallback) -> `https://ANIVAULT_API_ORIGIN/api/watch/zokoanime/mal-{mal_id}/{episode}/{sub|dub}`
  */
 export async function checkEpisodeStreamAvailability(
   anilistId: number,
