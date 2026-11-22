@@ -252,18 +252,11 @@ async function fetchProviderWatchEndpoint(
   const startTime = Date.now();
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), timeoutMs);
-  const endpoint = `/api/watch/${provider}/mal-${anilistId}/${episode}/${type}`;
   const mapping = await resolveAnimeIds(String(anilistId)).catch(() => null);
   const malId = Number(mapping?.malId);
-  if (!Number.isSafeInteger(malId) || malId <= 0) {
-    clearTimeout(timeout);
-    return {
-      ok: false, stream: null, provider, format: null, definitiveUnavailable: true,
-      errorCode: 'bad_request', upstreamStatus: null, httpStatus: 400,
-      message: 'A valid MAL ID is required by the AniVault streaming API.', retryable: false,
-    };
-  }
-  const url = buildProviderWatchUrl(provider, malId, episode, type);
+  const endpoint = `/api/watch/${provider}/mal-${Number.isSafeInteger(malId) ? malId : 'missing'}/${episode}/${type}`;
+  const providerLabel = getStreamingProviderDisplayName(provider);
+  const apiKey = process.env.ANIVAULT_API_KEY?.trim();
   const providerLabel = getStreamingProviderDisplayName(provider);
   const apiKey = process.env.ANIVAULT_API_KEY?.trim();
 
