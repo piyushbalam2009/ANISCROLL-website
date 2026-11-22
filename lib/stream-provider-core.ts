@@ -1,6 +1,6 @@
 import { AnimeContentFormat, StreamingProvider } from '@/types/streaming';
 
-export const ANISCROLL_API_ORIGIN = 'https://api.aniscroll.in';
+export const ANISCROLL_API_ORIGIN = (process.env.ANIVAULT_API_ORIGIN || 'https://anivault-scraper-five.vercel.app').replace(/\/+$/, '');
 
 const SERIES_FORMATS = new Set<AnimeContentFormat>([
   'TV',
@@ -83,18 +83,18 @@ export function getStreamingProviderDisplayName(
 }
 
 /**
- * Builds the upstream AniScroll provider watch endpoint:
- * - MegaPlay:  https://api.aniscroll.in/api/watch/megaplay/{anilist_id}/{episode}/{sub|dub}
- * - ZokoAnime: https://api.aniscroll.in/api/watch/zokoanime/{anilist_id}/{episode}/{sub|dub}
+ * Builds the upstream AniVault private API watch endpoint. IDs passed to this
+ * API are MAL IDs (encoded as `mal-{id}`), not AniList IDs. The server-side
+ * client attaches ANIVAULT_API_KEY; this helper only builds the URL.
  */
 export function buildProviderWatchUrl(
   provider: StreamingProvider,
-  anilistId: number,
+  malId: number,
   episode: number,
   type: 'sub' | 'dub'
 ): string {
   const normalizedType = type === 'dub' ? 'dub' : 'sub';
-  const safeAnilistId = Math.floor(Number(anilistId));
+  const safeMalId = Math.floor(Number(malId));
   const safeEpisode = Math.floor(Number(episode));
-  return `${ANISCROLL_API_ORIGIN}/api/watch/${provider}/${safeAnilistId}/${safeEpisode}/${normalizedType}`;
+  return `${ANISCROLL_API_ORIGIN}/api/watch/${provider}/mal-${safeMalId}/${safeEpisode}/${normalizedType}`;
 }
